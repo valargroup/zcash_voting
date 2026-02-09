@@ -655,7 +655,12 @@ mod tests {
         spec::rho_binding_hash,
     };
     use ff::Field;
-    use halo2_proofs::{dev::MockProver, plonk::Circuit as Halo2Circuit};
+    use halo2_proofs::{
+        dev::MockProver,
+        plonk::{self as halo2_plonk, Circuit as Halo2Circuit, SingleVerifier},
+        poly::commitment::Params,
+        transcript::{Blake2bRead, Blake2bWrite},
+    };
     use rand::rngs::OsRng;
 
     /// Return value from [`make_test_note`] bundling all test artefacts.
@@ -1273,5 +1278,79 @@ mod tests {
         let public_inputs = instance.to_halo2_instance();
         let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
+    }
+
+    // ================================================================
+    // Real prove/verify cycle (not MockProver).
+    // Exercises the IPA polynomial commitment scheme, the Blake2b
+    // transcript, and constraint-degree checks that MockProver skips.
+    // ================================================================
+
+    #[test]
+    fn real_prove_verify_roundtrip() {
+        let t = make_test_note();
+
+        // Key generation from the empty (without-witnesses) circuit.
+        let params = Params::<vesta::Affine>::new(K);
+        let circuit_default = Circuit::default();
+        let vk = halo2_plonk::keygen_vk(&params, &circuit_default).unwrap();
+        let pk = halo2_plonk::keygen_pk(&params, vk.clone(), &circuit_default).unwrap();
+
+        let instance = make_instance(&t);
+        let pi = instance.to_halo2_instance();
+
+        // Create proof.
+        let mut transcript = Blake2bWrite::<_, vesta::Affine, _>::init(vec![]);
+        halo2_plonk::create_proof(
+            &params,
+            &pk,
+            &[t.circuit],
+            &[&[&pi]],
+            &mut OsRng,
+            &mut transcript,
+        )
+        .unwrap();
+        let proof_bytes = transcript.finalize();
+
+        // Verify proof.
+        let strategy = SingleVerifier::new(&params);
+        let mut transcript = Blake2bRead::init(&proof_bytes[..]);
+        assert!(
+            halo2_plonk::verify_proof(&params, &vk, strategy, &[&[&pi]], &mut transcript).is_ok()
+        );
+    }
+
+    #[test]
+    fn real_prove_verify_wrong_instance_fails() {
+        let t1 = make_test_note();
+        let t2 = make_test_note();
+
+        let params = Params::<vesta::Affine>::new(K);
+        let circuit_default = Circuit::default();
+        let vk = halo2_plonk::keygen_vk(&params, &circuit_default).unwrap();
+        let pk = halo2_plonk::keygen_pk(&params, vk.clone(), &circuit_default).unwrap();
+
+        // Prove with t1's circuit and public inputs.
+        let pi1 = make_instance(&t1).to_halo2_instance();
+        let mut transcript = Blake2bWrite::<_, vesta::Affine, _>::init(vec![]);
+        halo2_plonk::create_proof(
+            &params,
+            &pk,
+            &[t1.circuit],
+            &[&[&pi1]],
+            &mut OsRng,
+            &mut transcript,
+        )
+        .unwrap();
+        let proof_bytes = transcript.finalize();
+
+        // Attempt to verify the proof against t2's public inputs.
+        let pi2 = make_instance(&t2).to_halo2_instance();
+        let strategy = SingleVerifier::new(&params);
+        let mut transcript = Blake2bRead::init(&proof_bytes[..]);
+        assert!(
+            halo2_plonk::verify_proof(&params, &vk, strategy, &[&[&pi2]], &mut transcript)
+                .is_err()
+        );
     }
 }
