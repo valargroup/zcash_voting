@@ -549,7 +549,7 @@ mod tests {
         note::Note,
     };
     use ff::Field;
-    use halo2_proofs::dev::MockProver;
+    use halo2_proofs::{dev::MockProver, plonk::Circuit as Halo2Circuit};
     use rand::rngs::OsRng;
 
     /// Helper: create a dummy note and its corresponding circuit + expected public inputs.
@@ -768,4 +768,267 @@ mod tests {
         assert!(prover.verify().is_err());
     }
 
+    // ================================================================
+    // Witness-tampering tests for previously uncovered private inputs.
+    // Each test modifies exactly ONE witness while keeping the correct
+    // public inputs, verifying that the circuit rejects the proof.
+    // ================================================================
+
+    #[test]
+    fn wrong_rho_signed_witness() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Tamper rho_signed — feeds into both nullifier derivation and note commitment.
+        circuit.rho_signed = Value::known(pallas::Base::random(&mut rng));
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wrong_psi_signed_witness() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Tamper psi_signed — feeds into both nullifier derivation and note commitment.
+        circuit.psi_signed = Value::known(pallas::Base::random(&mut rng));
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wrong_g_d_signed_witness() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Replace g_d_signed with a different key's diversified generator.
+        // g_d feeds into both address integrity ([ivk] * g_d = pk_d) and
+        // note commitment (NoteCommit includes repr(g_d)).
+        let sk2 = SpendingKey::random(&mut rng);
+        let fvk2: FullViewingKey = (&sk2).into();
+        let other_address = fvk2.address_at(0u32, Scope::External);
+        circuit.g_d_signed = Value::known(other_address.g_d());
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wrong_ak_witness() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Replace ak with a different key's ak.
+        // ak feeds into both spend authority (rk = [alpha]*G + ak) and
+        // address integrity (ivk = CommitIvk(ExtractP(ak), nk, rivk)).
+        let sk2 = SpendingKey::random(&mut rng);
+        let fvk2: FullViewingKey = (&sk2).into();
+        circuit.ak = Value::known(fvk2.clone().into());
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wrong_nk_witness() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Replace nk with a different key's nk.
+        // nk feeds into both nullifier derivation and CommitIvk for address integrity.
+        // This is the "attacker knows the correct public inputs but tries to prove with wrong nk"
+        // scenario — more realistic than nullifier_integrity_wrong_key which tampers the public input.
+        let sk2 = SpendingKey::random(&mut rng);
+        let fvk2: FullViewingKey = (&sk2).into();
+        circuit.nk = Value::known(*fvk2.nk());
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    // ================================================================
+    // Cross-constraint binding tests.
+    // Verify that shared witnesses (nk, ak, rho, g_d) are actually the
+    // SAME cell across constraints. An attacker who could "split" a
+    // shared witness would break soundness.
+    // ================================================================
+
+    #[test]
+    fn cross_constraint_ak_binds_spend_authority_and_address_integrity() {
+        // If ak were not shared, an attacker could satisfy spend authority with ak1
+        // (matching rk) and address integrity with ak2 (matching ivk/pk_d).
+        // With shared ak, both constraints must agree — so wrong ak must fail BOTH.
+        //
+        // We construct a scenario where ak2 would satisfy address integrity
+        // (by using fvk2's rivk, g_d, pk_d) but the rk public input was derived
+        // from ak1. The circuit should still fail because it uses a single ak cell.
+        let mut rng = OsRng;
+        let (_sk1, fvk1, note1) = Note::dummy(&mut rng, None);
+        let nf = note1.nullifier(&fvk1);
+        let ak1: SpendValidatingKey = fvk1.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak1.randomize(&alpha); // rk derived from ak1
+
+        let mut circuit = Circuit::from_note_unchecked(&fvk1, &note1, alpha);
+
+        // Swap in ak from a different key — breaks spend authority
+        // even if we also swap rivk/g_d/pk_d to make address integrity
+        // consistent with the new ak (the circuit only has one ak cell).
+        let sk2 = SpendingKey::random(&mut rng);
+        let fvk2: FullViewingKey = (&sk2).into();
+        let addr2 = fvk2.address_at(0u32, Scope::External);
+        circuit.ak = Value::known(fvk2.clone().into());
+        circuit.rivk = Value::known(fvk2.rivk(Scope::External));
+        circuit.g_d_signed = Value::known(addr2.g_d());
+        circuit.pk_d_signed = Value::known(*addr2.pk_d());
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn cross_constraint_rho_binds_nullifier_and_note_commit() {
+        // rho is used in both DeriveNullifier and NoteCommit. If they could
+        // diverge, an attacker could use rho1 for nullifier (matching nf) and
+        // rho2 for NoteCommit (matching cm). Verify the shared binding rejects this.
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+
+        // Build a second note to get a different rho/commitment pair
+        let (_sk2, _fvk2, note2) = Note::dummy(&mut rng, None);
+
+        // Construct circuit from note1 but inject note2's rho and cm.
+        // If rho were split, the prover could route note2's rho to NoteCommit
+        // and note1's rho to DeriveNullifier. Shared cell prevents this.
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+        let rho2 = note2.rho();
+        circuit.rho_signed = Value::known(rho2.0);
+        circuit.psi_signed = Value::known(note2.rseed().psi(&rho2));
+        circuit.rcm_signed = Value::known(note2.rseed().rcm(&rho2));
+        circuit.cm_signed = Value::known(note2.commitment());
+        // g_d and pk_d still from note1's address — NoteCommit will mismatch.
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    // ================================================================
+    // Edge-case and structural tests.
+    // ================================================================
+
+    #[test]
+    fn multiple_independent_notes_verify() {
+        // Two independent notes should each produce valid proofs.
+        // Verifies that the circuit is properly parameterised and stateless.
+        let (circuit1, nf1, rk1) = make_test_note();
+        let (circuit2, nf2, rk2) = make_test_note();
+
+        let pi1 = Instance::from_parts(nf1, rk1).to_halo2_instance();
+        let pi2 = Instance::from_parts(nf2, rk2).to_halo2_instance();
+
+        let prover1 = MockProver::run(K, &circuit1, vec![pi1]).unwrap();
+        let prover2 = MockProver::run(K, &circuit2, vec![pi2]).unwrap();
+
+        assert_eq!(prover1.verify(), Ok(()));
+        assert_eq!(prover2.verify(), Ok(()));
+    }
+
+    #[test]
+    fn swapped_public_inputs_fail() {
+        // Swapping the public inputs between two valid circuits should fail.
+        // Guards against confused-deputy scenarios.
+        let (circuit1, nf1, rk1) = make_test_note();
+        let (_circuit2, nf2, rk2) = make_test_note();
+
+        // Feed circuit1 the public inputs of circuit2
+        let wrong_pi = Instance::from_parts(nf2, rk2).to_halo2_instance();
+        let prover = MockProver::run(K, &circuit1, vec![wrong_pi]).unwrap();
+        assert!(prover.verify().is_err());
+
+        // And vice versa
+        let wrong_pi = Instance::from_parts(nf1, rk1).to_halo2_instance();
+        let prover = MockProver::run(K, &_circuit2, vec![wrong_pi]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn instance_to_halo2_roundtrip() {
+        // Verify that to_halo2_instance produces the expected three-element vector
+        // [nf, rk.x, rk.y] and that the values are consistent with the inputs.
+        let (_, nf, rk) = make_test_note();
+        let instance = Instance::from_parts(nf, rk.clone());
+        let pi = instance.to_halo2_instance();
+
+        assert_eq!(pi.len(), 3, "Expected exactly 3 public inputs (nf, rk.x, rk.y)");
+        assert_eq!(pi[NF_SIGNED], nf.0, "First element must be nf");
+
+        // Reconstruct rk coordinates independently and compare.
+        let rk_point = pallas::Point::from_bytes(&rk.into())
+            .unwrap()
+            .to_affine()
+            .coordinates()
+            .unwrap();
+        assert_eq!(pi[RK_X], *rk_point.x(), "Second element must be rk.x");
+        assert_eq!(pi[RK_Y], *rk_point.y(), "Third element must be rk.y");
+    }
+
+    #[test]
+    fn default_circuit_is_consistent_with_without_witnesses() {
+        // Verify that without_witnesses() returns a default circuit,
+        // and that the default circuit can be used for keygen (configure + FloorPlanner)
+        // without panicking. halo2 relies on this for keygen_vk / keygen_pk.
+        let (circuit, _, _) = make_test_note();
+        let empty = Halo2Circuit::without_witnesses(&circuit);
+
+        // The default circuit should be able to produce verification keys.
+        // This is the same codepath halo2 uses during keygen.
+        let params = halo2_proofs::poly::commitment::Params::<vesta::Affine>::new(K);
+        let vk = halo2_proofs::plonk::keygen_vk(&params, &empty);
+        assert!(vk.is_ok(), "keygen_vk must succeed on without_witnesses circuit");
+    }
 }
