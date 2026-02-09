@@ -1,11 +1,15 @@
 //! The Delegation circuit implementation.
 //!
-//! Proves nullifier integrity and spend authority for a single note:
+//! Proves nullifier integrity, spend authority, and diversified address integrity
+//! for a single note:
 //! - Given private witness data `(nk, rho_old, psi_old, cm_old)`, derives
 //!   `nf_old` in-circuit and constrains it to match the public input.
 //! - Given private witness data `(ak, alpha)`, derives `rk = [alpha] * SpendAuthG + ak`
 //!   and constrains it to match the public input. This links the ZKP to the
 //!   keystone signature verified out-of-circuit.
+//! - Given private witness data `(ak, nk, rivk, g_d_signed, pk_d_signed)`, derives
+//!   `ivk = CommitIvk_rivk(ExtractP(ak), nk)` and constrains `pk_d_signed = [ivk] * g_d_signed`.
+//!   This proves the note's address belongs to the same key material.
 //!
 //! Follows the 1-circuit-per-note pattern from the vote module. For multiple
 //! notes, the builder layer creates multiple independent proofs.
@@ -18,23 +22,30 @@ use halo2_proofs::{
 use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
 
 use crate::{
-    circuit::gadget::{
-        add_chip::{AddChip, AddConfig},
-        assign_free_advice, derive_nullifier,
+    circuit::{
+        commit_ivk::{CommitIvkChip, CommitIvkConfig},
+        gadget::{
+            add_chip::{AddChip, AddConfig},
+            assign_free_advice, commit_ivk, derive_nullifier,
+        },
     },
     constants::{OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains},
-    keys::{FullViewingKey, SpendValidatingKey},
+    keys::{
+        CommitIvkRandomness, DiversifiedTransmissionKey, FullViewingKey, NullifierDerivingKey,
+        Scope, SpendValidatingKey,
+    },
     note::{
         commitment::NoteCommitment,
         nullifier::Nullifier,
         Note,
     },
     primitives::redpallas::{SpendAuth, VerificationKey},
+    spec::NonIdentityPallasPoint,
 };
 use halo2_gadgets::{
     ecc::{
         chip::{EccChip, EccConfig},
-        FixedPoint, NonIdentityPoint, Point, ScalarFixed,
+        FixedPoint, NonIdentityPoint, Point, ScalarFixed, ScalarVar,
     },
     poseidon::{primitives as poseidon, Pow5Chip as PoseidonChip, Pow5Config as PoseidonConfig},
     sinsemilla::chip::{SinsemillaChip, SinsemillaConfig},
@@ -77,9 +88,11 @@ pub struct Config {
     ecc_config: EccConfig<OrchardFixedBases>,
     // Poseidon chip config. Used in the DeriveNullifier.
     poseidon_config: PoseidonConfig<pallas::Base, 3, 2>,
-    // Sinsemilla config — only used for loading the lookup table that
-    // LookupRangeCheckConfig (and thus EccChip) depends on.
+    // Sinsemilla config — used for loading the lookup table that
+    // LookupRangeCheckConfig (and thus EccChip) depends on, and for CommitIvk.
     sinsemilla_config: SinsemillaConfig<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases>,
+    // Configuration to handle decomposition and canonicity checking for CommitIvk.
+    commit_ivk_config: CommitIvkConfig,
 }
 
 impl Config {
@@ -98,35 +111,54 @@ impl Config {
     fn poseidon_chip(&self) -> PoseidonChip<pallas::Base, 3, 2> {
         PoseidonChip::construct(self.poseidon_config.clone())
     }
+
+    fn commit_ivk_chip(&self) -> CommitIvkChip {
+        CommitIvkChip::construct(self.commit_ivk_config.clone())
+    }
+
+    fn sinsemilla_chip(
+        &self,
+    ) -> SinsemillaChip<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases> {
+        SinsemillaChip::construct(self.sinsemilla_config.clone())
+    }
 }
 
 /// The Delegation circuit.
 ///
-/// Proves nullifier integrity for a single note and spend authority:
+/// Proves nullifier integrity, spend authority, and diversified address integrity:
 /// - The prover knows `(nk, rho, psi, cm)` such that `nf_old = DeriveNullifier(nk, rho, psi, cm)`.
 /// - The prover knows `(ak, alpha)` such that `rk = [alpha] * SpendAuthG + ak`.
+/// - The prover knows `(ak, nk, rivk, g_d_signed, pk_d_signed)` such that
+///   `pk_d_signed = [CommitIvk_rivk(ExtractP(ak), nk)] * g_d_signed`.
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
-    nk: Value<pallas::Base>,
+    nk: Value<NullifierDerivingKey>,
     rho_old: Value<pallas::Base>,
     psi_old: Value<pallas::Base>,
     cm_old: Value<NoteCommitment>,
     ak: Value<SpendValidatingKey>,
     alpha: Value<pallas::Scalar>,
+    rivk: Value<CommitIvkRandomness>,
+    g_d_signed: Value<NonIdentityPallasPoint>,
+    pk_d_signed: Value<DiversifiedTransmissionKey>,
 }
 
 impl Circuit {
     /// Constructs a `Circuit` from a note, its full viewing key, and the spend auth randomizer.
     pub fn from_note_unchecked(fvk: &FullViewingKey, note: &Note, alpha: pallas::Scalar) -> Self {
+        let sender_address = note.recipient();
         let rho_old = note.rho();
         let psi_old = note.rseed().psi(&rho_old);
         Circuit {
-            nk: Value::known(fvk.nk().inner()),
+            nk: Value::known(*fvk.nk()),
             rho_old: Value::known(rho_old.0),
             psi_old: Value::known(psi_old),
             cm_old: Value::known(note.commitment()),
             ak: Value::known(fvk.clone().into()),
             alpha: Value::known(alpha),
+            rivk: Value::known(fvk.rivk(Scope::External)),
+            g_d_signed: Value::known(sender_address.g_d()),
+            pk_d_signed: Value::known(*sender_address.pk_d()),
         }
     }
 }
@@ -208,8 +240,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             rc_b,
         );
 
-        // Sinsemilla config — we only need this to load the lookup table
-        // that the range check (and thus ECC operations) depend on.
+        // Sinsemilla config — used for loading the lookup table that the range check
+        // (and thus ECC operations) depend on, and for CommitIvk.
         let sinsemilla_config = SinsemillaChip::configure(
             meta,
             advices[..5].try_into().unwrap(),
@@ -219,6 +251,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             range_check,
         );
 
+        // Configuration to handle decomposition and canonicity checking for CommitIvk.
+        let commit_ivk_config = CommitIvkChip::configure(meta, advices);
+
         Config {
             primary,
             advices,
@@ -226,6 +261,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             ecc_config,
             poseidon_config,
             sinsemilla_config,
+            commit_ivk_config,
         }
     }
 
@@ -242,11 +278,32 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // It is needed to derive cm_old ECC point from NoteCommitment.
         let ecc_chip = config.ecc_chip();
 
+        // Witness ak_P (spend validating key) as a non-identity curve point.
+        // Shared between spend authority and CommitIvk.
+        // If ak_P were allowed to be the identity point (zero of the curve group), it would be a degenerate
+        // key with no cryptographic strength - any signature would trivially verify against it.
+        // By constraining, we ensure that the delegated spend authority is backed by a real meaningful
+        // public key.
+        let ak_P: Value<pallas::Point> = self.ak.as_ref().map(|ak| ak.into());
+        let ak_P = NonIdentityPoint::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "witness ak_P"),
+            ak_P.map(|ak_P| ak_P.to_affine()),
+        )?;
+
+        // Witness g_d_signed (diversified generator from the note's address).
+        // Shared between diversified address integrity check and (future) note commitment.
+        let g_d_signed = NonIdentityPoint::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "witness g_d_signed"),
+            self.g_d_signed.as_ref().map(|gd| gd.to_affine()),
+        )?;
+
         // Witness nk (nullifier deriving key).
         let nk = assign_free_advice(
             layouter.namespace(|| "witness nk"),
             config.advices[0],
-            self.nk,
+            self.nk.map(|nk| nk.inner()),
         )?;
 
         // Witness rho_old.
@@ -266,7 +323,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         )?;
 
         // Witness psi_old.
-        // Pseudorandom field element ederived from the note's random
+        // Pseudorandom field element derived from the note's random
         // seed rseed and its nullifier domain separator rho.
         // It adds randomness to the nullifier so that even if two notes share the same
         // rho and nk, they produce different nullifiers.
@@ -302,7 +359,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             rho_old,
             &psi_old,
             &cm_old,
-            nk,
+            nk.clone(), // clone so nk remains available for commit_ivk
         )?;
 
         // Constrain nf_old to equal the public input.
@@ -315,18 +372,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // The out-of-circuit verifier checks that the keystone signature is valid under rk,
         // so this links the ZKP to the signature without revealing ak.
         {
-            // Witness ak_P (spend validating key) as a non-identity curve point.
-            // If ak_P were allowed to be the identity point (zero of the curve group), it would be a degenerate
-            // key with no cryptographic strength - any signature would trivially verify against it.
-            // By constraining, we ensure that the delegated spend authority is backed by a real meaningful
-            // public key.
-            let ak_P: Value<pallas::Point> = self.ak.as_ref().map(|ak| ak.into());
-            let ak_P = NonIdentityPoint::new(
-                ecc_chip.clone(),
-                layouter.namespace(|| "witness ak_P"),
-                ak_P.map(|ak_P| ak_P.to_affine()),
-            )?;
-
             // Witness alpha (spend auth randomizer) as a full-width fixed scalar.
             let alpha = ScalarFixed::new(
                 ecc_chip.clone(),
@@ -339,7 +384,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 // SpendAuthG is a fixed generator point on the Pallas elliptic curve, used
                 // specifically for spend authorization in the Orchard protocol.
                 let spend_auth_g = OrchardFixedBasesFull::SpendAuthG;
-                let spend_auth_g = FixedPoint::from_inner(ecc_chip, spend_auth_g);
+                let spend_auth_g = FixedPoint::from_inner(ecc_chip.clone(), spend_auth_g);
                 spend_auth_g.mul(layouter.namespace(|| "[alpha] SpendAuthG"), alpha)?
             };
 
@@ -349,6 +394,56 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             // Constrain rk to equal the public inputs (x and y coordinates).
             layouter.constrain_instance(rk.inner().x().cell(), config.primary, RK_X)?;
             layouter.constrain_instance(rk.inner().y().cell(), config.primary, RK_Y)?;
+        }
+
+        // Diversified address integrity.
+        // ivk = ⊥ or pk_d_signed = [ivk] * g_d_signed
+        // where ivk = CommitIvk_rivk(ExtractP(ak_P), nk)
+        //
+        // The ⊥ case is handled internally by CommitDomain::short_commit:
+        // incomplete addition allows ⊥ to occur, and synthesis detects
+        // these edge cases and aborts proof creation.
+        {
+            let ivk = {
+                // ExtractP(ak_P) -- extract the x-coordinate from the curve point
+                let ak = ak_P.extract_p().inner().clone();
+                let rivk = ScalarFixed::new(
+                    ecc_chip.clone(),
+                    layouter.namespace(|| "rivk"),
+                    self.rivk.map(|rivk| rivk.inner()),
+                )?;
+
+                // Commit ak and nk with rivk randomness, creating an ivk.
+                commit_ivk(
+                    config.sinsemilla_chip(),
+                    ecc_chip.clone(),
+                    config.commit_ivk_chip(),
+                    layouter.namespace(|| "CommitIvk"),
+                    ak,
+                    nk,
+                    rivk,
+                )?
+            };
+
+            // Convert ivk (an x-coordinate) to a variable-base scalar for EC multiplication.
+            let ivk = ScalarVar::from_base(
+                ecc_chip.clone(),
+                layouter.namespace(|| "ivk"),
+                ivk.inner(),
+            )?;
+
+            // [ivk] g_d_signed - derive the expected pk_d
+            let (derived_pk_d_signed, _ivk) =
+                g_d_signed.mul(layouter.namespace(|| "[ivk] g_d_signed"), ivk)?;
+
+            // Witness pk_d_signed and constrain it to equal the derived value.
+            let pk_d_signed = NonIdentityPoint::new(
+                ecc_chip.clone(),
+                layouter.namespace(|| "witness pk_d_signed"),
+                self.pk_d_signed.map(|pk_d_signed| pk_d_signed.inner().to_affine()),
+            )?;
+            derived_pk_d_signed
+                .constrain_equal(layouter.namespace(|| "pk_d_signed equality"), &pk_d_signed)?;
         }
 
         Ok(())
@@ -386,7 +481,7 @@ impl Instance {
 mod tests {
     use super::*;
     use crate::{
-        keys::{FullViewingKey, SpendValidatingKey, SpendingKey},
+        keys::{FullViewingKey, Scope, SpendValidatingKey, SpendingKey},
         note::Note,
     };
     use ff::Field;
@@ -501,6 +596,60 @@ mod tests {
         .unwrap();
 
         // The proof should fail: the derived rk won't match the public input.
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn address_integrity_happy_path() {
+        let (circuit, nf, rk) = make_test_note();
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert_eq!(prover.verify(), Ok(()));
+    }
+
+    #[test]
+    fn address_integrity_wrong_rivk() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Replace rivk with a different key's rivk
+        let sk2 = SpendingKey::random(&mut rng);
+        let fvk2: FullViewingKey = (&sk2).into();
+        circuit.rivk = Value::known(fvk2.rivk(Scope::External));
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn address_integrity_wrong_pk_d() {
+        let mut rng = OsRng;
+        let (_sk, fvk, note) = Note::dummy(&mut rng, None);
+        let nf = note.nullifier(&fvk);
+        let ak: SpendValidatingKey = fvk.clone().into();
+        let alpha = pallas::Scalar::random(&mut rng);
+        let rk = ak.randomize(&alpha);
+        let mut circuit = Circuit::from_note_unchecked(&fvk, &note, alpha);
+
+        // Replace pk_d with a different key's pk_d
+        let sk2 = SpendingKey::random(&mut rng);
+        let fvk2: FullViewingKey = (&sk2).into();
+        let other_address = fvk2.address_at(0u32, Scope::External);
+        circuit.pk_d_signed = Value::known(*other_address.pk_d());
+
+        let instance = Instance::from_parts(nf, rk);
+        let public_inputs = instance.to_halo2_instance();
+        let prover = MockProver::run(K, &circuit, vec![public_inputs]).unwrap();
         assert!(prover.verify().is_err());
     }
 }

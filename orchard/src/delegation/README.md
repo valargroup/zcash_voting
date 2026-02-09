@@ -2,17 +2,18 @@
 
 ## Inputs
 
-- Nullifier Integrity
-   * **nf_old** (public): a unique, deterministic identifier derived from a note's secret components that publicly marks the note as spent.
-   * **nk** (private): - nullifier key
-   * **ρ** "rho" (private): The nullifier of the note that was spent to create this note
-   * **ψ** ("psi") (private): A pseudorandom field element derived from the note's random seed `rseed` and its nullifier domain separator rho
-   * **cm** (private): The note commitment, witnessed as an ECC point
-- Spend Authority
-   * **rk** (public): the randomized public key for spend authorization. Derived per-transaction, publicly exposed, unlinkable, pairsed with `rsk` - the private key
-   * **ak** (private): spend authorization validating key (the long-lived public key for spend authorization)
-   * **alpha** (public): is a fresh random scalar used to rerandomize the spend authorization key for each transaction. 
-
+- Public
+   * **nf_old**: a unique, deterministic identifier derived from a note's secret components that publicly marks the note as spent.
+   * **ρ** "rho": The nullifier of the note that was spent to create this note
+   * **rk**: the randomized public key for spend authorization. Derived per-transaction, publicly exposed, unlinkable, pairsed with `rsk` - the private key
+   * **alpha**: is a fresh random scalar used to rerandomize the spend authorization key for each transaction.
+- Private
+   * **ψ** ("psi"): A pseudorandom field element derived from the note's random seed `rseed` and its nullifier domain separator rho
+   * **cm**: The note commitment, witnessed as an ECC point
+   * **nk**: - nullifier key
+   * **ak**: spend authorization validating key (the long-lived public key for spend authorization)
+   * **rivk**: is the randomness (blinding factor) for the CommitIvk Sinsemilla commitment. The name stands for randomness for incoming viewing key.
+   * **g_d_signed**: the diversified generator from the note recipient's address
 
 ## Nullifier Integrity
 
@@ -77,6 +78,41 @@ Where:
 
 Spend Authority: i.e. `rk = ak + [alpha] * G` — the public `rk` is a valid rerandomization of `ak`. Links to the Keystone signature verified out-of-circuit.
 
+## Diversified Address Integrity
+
+Purpose: proves the signed note's address belongs to the same key material `(ak, nk)`. This is where `ivk` is established — it will be reused for every real note ownership check.
+
+Without address integrity, the nullifier integrity proves:
+- "I know (nk, rho, psi, cm) that produce this nullifier"
+- "I know ak such that rk = ak + [alpha] * G".
+
+But there is nothing that ties ak to nk. They are witnessed independently. A malicious prover could:
+- Supply their own `ak` (i.e passes spend authority, can sign under `rk`)
+- Supply someone else's `nk` (i.e. valid nullifier for someone else's note)
+
+```
+ivk = ⊥  or  pk_d_signed = [ivk] * g_d_signed
+where ivk = CommitIvk_rivk(ExtractP(ak_P), nk)
+```
+
+What address integrity fixes:
+- `CommitIvk(ExtractP(ak), nk)` forces `ak` and `nk` to come from the same key tree
+- `pk_d_signed = [ivk] * g_d_signed` proves the note's destination address was derived from this specific ivk. This will be asserted on as part of validating note commitment integrity.
+
+The `ivk = ⊥` case is handled internally by `CommitDomain::short_commit`: incomplete addition allows the identity to occur, and synthesis detects this edge case and aborts proof creation. No explicit conditional is needed in the circuit.
+
+Where:
+- **ak_P** — the spend validating key (shared with spend authority). `ExtractP(ak_P)` extracts its x-coordinate.
+- **nk** — the nullifier deriving key (shared with nullifier integrity).
+- **rivk** — the CommitIvk randomness, extracted from the full viewing key via `fvk.rivk(Scope::External)`. Note that it is derived once at key creation time and is static.
+- **g_d_signed** — the diversified generator from the note recipient's address.
+- **pk_d_signed** — the diversified transmission key from the note recipient's address.
+
+**Constructions:**
+- `CommitIvkChip` — handles decomposition and canonicity checking for the CommitIvk Sinsemilla commitment.
+- `SinsemillaChip` — the same instance used for lookup tables is reused for CommitIvk.
+
 ## TODO
 
-- Better understand underlying Poseidong and AddChip constructions. Specifically, how they select columns.
+- Better understand underlying Poseidon and AddChip constructions. Specifically, how they select columns.
+- Understand Sinsemilla construction and why it well-suited for Pallas.
