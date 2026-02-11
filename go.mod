@@ -7,6 +7,7 @@ require (
 	cosmossdk.io/client/v2 v2.0.0-beta.11
 	cosmossdk.io/core v0.11.3
 	cosmossdk.io/depinject v1.2.1
+	cosmossdk.io/errors v1.0.2
 	cosmossdk.io/log v1.6.1
 	cosmossdk.io/store v1.1.2
 	github.com/cometbft/cometbft v0.38.20
@@ -14,11 +15,12 @@ require (
 	github.com/cosmos/cosmos-sdk v0.53.5
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/viper v1.21.0
+	google.golang.org/grpc v1.75.0
+	google.golang.org/protobuf v1.36.10
 )
 
 require (
 	cosmossdk.io/collections v1.3.1 // indirect
-	cosmossdk.io/errors v1.0.2 // indirect
 	cosmossdk.io/math v1.5.3 // indirect
 	cosmossdk.io/schema v1.1.0 // indirect
 	cosmossdk.io/x/tx v0.14.0 // indirect
@@ -158,8 +160,6 @@ require (
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250818200422-3122310a409c // indirect
-	google.golang.org/grpc v1.75.0 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 	nhooyr.io/websocket v1.8.6 // indirect

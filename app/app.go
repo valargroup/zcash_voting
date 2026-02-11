@@ -26,6 +26,8 @@ import (
 	consensuskeeper "github.com/cosmos/cosmos-sdk/x/consensus/keeper"
 	distrkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+
+	votekeeper "github.com/z-cale/zally/x/vote/keeper"
 )
 
 // DefaultNodeHome is the default home directory for the zallyd daemon.
@@ -53,6 +55,9 @@ type ZallyApp struct {
 	StakingKeeper         *stakingkeeper.Keeper
 	DistrKeeper           distrkeeper.Keeper
 	ConsensusParamsKeeper consensuskeeper.Keeper
+
+	// Vote module keeper.
+	VoteKeeper votekeeper.Keeper
 }
 
 func init() {
@@ -97,6 +102,7 @@ func NewZallyApp(
 		&app.StakingKeeper,
 		&app.DistrKeeper,
 		&app.ConsensusParamsKeeper,
+		&app.VoteKeeper,
 	); err != nil {
 		panic(err)
 	}

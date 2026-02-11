@@ -7,10 +7,10 @@ todos:
     status: done
   - id: proto-types
     content: "Phase 2: Define protobuf types (tx.proto, query.proto, types.proto, module.proto) and generate Go code"
-    status: pending
+    status: done
   - id: vote-module
     content: "Phase 2: Implement x/vote module skeleton (module.go, keeper, msg_server, query_server, genesis) with KV store layout"
-    status: pending
+    status: done
   - id: validation-pipeline
     content: "Phase 3: Build validation pipeline (validate.go) + mock crypto interfaces (RedPallas, ZKP) + nullifier uniqueness check"
     status: pending

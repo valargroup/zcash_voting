@@ -29,6 +29,11 @@ import (
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 	_ "github.com/cosmos/cosmos-sdk/x/staking" // import for side-effects
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+
+	// Vote module: import for depinject side-effects (registers module provider).
+	_ "github.com/z-cale/zally/x/vote"
+	votemodulelv1 "github.com/z-cale/zally/x/vote/module/v1"
+	votetypes "github.com/z-cale/zally/x/vote/types"
 )
 
 func init() {
@@ -77,6 +82,7 @@ var (
 				},
 				EndBlockers: []string{
 					stakingtypes.ModuleName,
+					votetypes.ModuleName, // vote: commitment tree root computation
 				},
 				OverrideStoreKeys: []*runtimev1alpha1.StoreKeyConfig{
 					{
@@ -89,12 +95,14 @@ var (
 				},
 				// genutil must occur after staking (pools initialized from genesis accounts)
 				// and after auth (access auth params).
+				// vote module added last -- has no genesis dependencies.
 				InitGenesis: []string{
 					authtypes.ModuleName,
 					banktypes.ModuleName,
 					distrtypes.ModuleName,
 					stakingtypes.ModuleName,
 					genutiltypes.ModuleName,
+					votetypes.ModuleName,
 				},
 				ExportGenesis: []string{
 					consensustypes.ModuleName,
@@ -103,6 +111,7 @@ var (
 					distrtypes.ModuleName,
 					stakingtypes.ModuleName,
 					genutiltypes.ModuleName,
+					votetypes.ModuleName,
 				},
 			}),
 		},
@@ -137,6 +146,10 @@ var (
 		{
 			Name:   genutiltypes.ModuleName,
 			Config: appconfig.WrapAny(&genutilmodulev1.Module{}),
+		},
+		{
+			Name:   votetypes.ModuleName,
+			Config: appconfig.WrapAny(&votemodulelv1.Module{}),
 		},
 		{
 			// Skip the built-in ante handler -- we wire our own in app.go.
