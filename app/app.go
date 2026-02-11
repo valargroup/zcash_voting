@@ -147,7 +147,7 @@ func (app *ZallyApp) setAnteHandler(txConfig client.TxConfig) {
 			SigGasConsumer:  ante.DefaultSigVerificationGasConsumer,
 		},
 		VoteKeeper:  app.VoteKeeper,
-		SigVerifier: redpallas.NewMockVerifier(),
+		SigVerifier: redpallas.NewVerifier(),
 		ZKPVerifier: halo2.NewVerifier(),
 	})
 	if err != nil {

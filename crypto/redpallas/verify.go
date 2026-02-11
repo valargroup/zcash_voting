@@ -1,9 +1,8 @@
 // Package redpallas provides an interface for RedPallas signature verification.
 //
 // RedPallas is the signature scheme used in Zcash Orchard for spend authorization.
-// The current implementation is a mock that always succeeds; it will later be
-// replaced by a CGo binding to the Rust reddsa crate or a pure-Go Pallas curve
-// implementation.
+// When built with the "redpallas" build tag, NewVerifier() returns a real verifier
+// backed by the Rust reddsa crate via CGo. Without the tag, it returns a MockVerifier.
 package redpallas
 
 // Verifier defines the interface for RedPallas signature verification.
@@ -17,7 +16,7 @@ type Verifier interface {
 }
 
 // MockVerifier is a mock implementation that always returns nil (success).
-// Used during development until a real RedPallas verifier is integrated.
+// Used during development and testing when the Rust library is not available.
 type MockVerifier struct{}
 
 // Verify always returns nil. The real implementation will verify the RedPallas
@@ -27,6 +26,8 @@ func (MockVerifier) Verify(rk, sighash, sig []byte) error {
 }
 
 // NewMockVerifier returns a new mock RedPallas verifier.
+// Prefer NewVerifier() which returns the real verifier when the "redpallas"
+// build tag is set, and MockVerifier otherwise.
 func NewMockVerifier() Verifier {
 	return MockVerifier{}
 }

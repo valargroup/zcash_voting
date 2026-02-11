@@ -1,7 +1,7 @@
 BINARY = zallyd
 HOME_DIR = $(HOME)/.zallyd
 
-.PHONY: install init start clean build fmt lint test test-unit test-integration circuits fixtures test-halo2 test-halo2-ante
+.PHONY: install init start clean build fmt lint test test-unit test-integration test-api circuits fixtures test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi
 
 ## install: Build and install the zallyd binary to $GOPATH/bin
 install:
@@ -43,8 +43,12 @@ test-integration:
 ## test: Run all tests (Go only, no Rust dependency)
 test: test-unit test-integration
 
+## test-api: TypeScript API tests against a running chain (requires: make start)
+test-api:
+	cd tests/api && npm test
+
 # ---------------------------------------------------------------------------
-# Halo2 / Rust circuit targets
+# Rust circuit / FFI targets
 # ---------------------------------------------------------------------------
 
 ## circuits: Build the Rust static library (requires cargo)
@@ -55,7 +59,7 @@ circuits:
 circuits-test:
 	cargo test --release --manifest-path circuits/Cargo.toml
 
-## fixtures: Regenerate proof fixture files in crypto/zkp/testdata/ (requires circuits build)
+## fixtures: Regenerate all fixture files (Halo2 + RedPallas) (requires circuits build)
 fixtures: circuits
 	cargo test --release --manifest-path circuits/Cargo.toml -- generate_fixtures --ignored --nocapture
 
@@ -66,3 +70,15 @@ test-halo2: circuits
 ## test-halo2-ante: Run ante handler tests with real Halo2 verification
 test-halo2-ante: circuits
 	go test -tags halo2 -count=1 -v ./x/vote/ante/... -run TestHalo2
+
+## test-redpallas: Run Go tests with real RedPallas signature verification via CGo (requires circuits)
+test-redpallas: circuits
+	go test -tags redpallas -count=1 -v ./crypto/redpallas/... ./x/vote/ante/...
+
+## test-redpallas-ante: Run ante handler tests with real RedPallas verification
+test-redpallas-ante: circuits
+	go test -tags redpallas -count=1 -v ./x/vote/ante/... -run TestRedPallas
+
+## test-all-ffi: Run all FFI-backed tests (Halo2 + RedPallas) (requires circuits)
+test-all-ffi: circuits
+	go test -tags "halo2 redpallas" -count=1 -v ./crypto/zkp/halo2/... ./crypto/redpallas/... ./x/vote/ante/...
