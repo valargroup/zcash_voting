@@ -18,3 +18,4 @@ reddsa = { version = "0.5", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rand = "0.8"
 reddsa = { version = "0.5", features = ["std"] }
+blake2b_simd = "1"

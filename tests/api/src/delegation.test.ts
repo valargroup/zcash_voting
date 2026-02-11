@@ -1,8 +1,18 @@
 /**
  * API tests for delegation submission (MsgRegisterDelegation / ZKP #1).
  *
- * Prerequisites: chain running locally (make init && make start).
- * The chain must be built without -tags halo2 so mock verifiers are active.
+ * Prerequisites:
+ *   1. Build Rust circuits: make circuits
+ *   2. Regenerate fixtures: make fixtures
+ *   3. Build chain with real RedPallas + Halo2 verification: make install-ffi
+ *   4. Start chain: make init-ffi && make start
+ *
+ * The delegation payloads use:
+ *   - Real RedPallas signatures (pre-computed fixtures) verified by the Rust FFI verifier
+ *   - Real Halo2 toy proof (pre-computed fixture) verified by the Halo2 FFI verifier
+ *
+ * The toy circuit convention: gov_comm carries the Halo2 public input (c=252),
+ * keeping rk free for RedPallas signature verification.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -33,7 +43,7 @@ describe("Delegation", () => {
       await sleep(BLOCK_WAIT_MS);
     });
 
-    it("should submit a delegation with mock proof and get code 0", async () => {
+    it("should submit a delegation with real RedPallas signature and get code 0", async () => {
       const delegationBody = makeDelegationPayload(roundId);
       const { status, json } = await postJSON(
         "/zally/v1/submit-delegation",
@@ -41,7 +51,7 @@ describe("Delegation", () => {
       );
 
       expect(status).toBe(200);
-      expect(json.code).toBe(0);
+      expect(json.code, `delegation rejected: ${json.log}`).toBe(0);
       expect(json.tx_hash).toBeTruthy();
     });
   });
@@ -86,13 +96,13 @@ describe("Delegation", () => {
         "/zally/v1/submit-delegation",
         delegation1,
       );
-      expect(res1.json.code).toBe(0);
+      expect(res1.json.code, `first delegation rejected: ${res1.json.log}`).toBe(0);
 
       // Wait for the first tx to be committed so nullifiers are recorded
       await sleep(BLOCK_WAIT_MS);
 
       // Second delegation reuses the SAME gov_nullifiers from the first one.
-      // Change cmx_new and gov_comm so it's not byte-identical.
+      // cmx_new is still unique; gov_comm is the same (Halo2 public input).
       const delegation2 = makeDelegationPayload(roundId);
       delegation2.gov_nullifiers = delegation1.gov_nullifiers; // reuse spent nullifiers
 

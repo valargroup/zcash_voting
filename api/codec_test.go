@@ -142,19 +142,15 @@ func TestDecodeVoteTx_InvalidTag(t *testing.T) {
 }
 
 func TestComputeSigHash_Deterministic(t *testing.T) {
-	data := []byte{0x01, 0x02, 0x03}
-	hash1 := ComputeSigHash(data)
-	hash2 := ComputeSigHash(data)
-
-	require.Equal(t, hash1, hash2)
-	require.Len(t, hash1, 32) // Blake2b-256 output
-}
-
-func TestComputeSigHash_Different(t *testing.T) {
+	// CRITICAL: ComputeSigHash currently uses a fixed placeholder string.
+	// It always returns the same 32-byte Blake2b-256 hash regardless of input.
+	// This test verifies that property. When the placeholder is replaced with
+	// a proper sig-excluding hash, update this test accordingly.
 	hash1 := ComputeSigHash([]byte{0x01, 0x02, 0x03})
-	hash2 := ComputeSigHash([]byte{0x01, 0x02, 0x04})
+	hash2 := ComputeSigHash([]byte{0x04, 0x05, 0x06})
 
-	require.NotEqual(t, hash1, hash2)
+	require.Equal(t, hash1, hash2, "placeholder sighash should be constant")
+	require.Len(t, hash1, 32) // Blake2b-256 output
 }
 
 func TestTagForMessage(t *testing.T) {

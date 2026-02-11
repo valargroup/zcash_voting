@@ -37,19 +37,21 @@ func mustReadFixture(t *testing.T, name string) []byte {
 
 // TestHalo2DelegationValidProof runs the full ante validation pipeline with a
 // real Halo2 toy proof. The MsgRegisterDelegation.Proof carries the real proof
-// bytes and Rk carries the 32-byte public input.
+// bytes and GovComm carries the 32-byte public input (toy circuit convention).
 func TestHalo2DelegationValidProof(t *testing.T) {
 	proof := mustReadFixture(t, "toy_valid_proof.bin")
 	publicInput := mustReadFixture(t, "toy_valid_input.bin")
 
-	// Build a MsgRegisterDelegation with the real proof and public input as Rk.
+	// Build a MsgRegisterDelegation with the real proof.
+	// GovComm carries the toy circuit public input; Rk is a dummy 32-byte value
+	// (not used by the toy circuit, but required by ValidateBasic).
 	msg := &types.MsgRegisterDelegation{
-		Rk:                  publicInput, // 32-byte toy circuit public input
+		Rk:                  make([]byte, 32),
 		SpendAuthSig:        make([]byte, 64),
 		SignedNoteNullifier: make([]byte, 32),
 		CmxNew:              make([]byte, 32),
 		EncMemo:             make([]byte, 64),
-		GovComm:             make([]byte, 32),
+		GovComm:             publicInput, // 32-byte toy circuit public input
 		GovNullifiers: [][]byte{
 			make([]byte, 32),
 		},
@@ -84,12 +86,12 @@ func TestHalo2DelegationWrongInput(t *testing.T) {
 	wrongInput := mustReadFixture(t, "toy_wrong_input.bin")
 
 	msg := &types.MsgRegisterDelegation{
-		Rk:                  wrongInput, // wrong public input
+		Rk:                  make([]byte, 32),
 		SpendAuthSig:        make([]byte, 64),
 		SignedNoteNullifier: make([]byte, 32),
 		CmxNew:              make([]byte, 32),
 		EncMemo:             make([]byte, 64),
-		GovComm:             make([]byte, 32),
+		GovComm:             wrongInput, // wrong public input
 		GovNullifiers: [][]byte{
 			make([]byte, 32),
 		},

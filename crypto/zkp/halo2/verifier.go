@@ -15,9 +15,12 @@ type Halo2Verifier struct{}
 func NewVerifier() zkp.Verifier { return Halo2Verifier{} }
 
 // VerifyDelegation verifies ZKP #1 using the toy circuit as a proof-of-concept.
-// Convention: inputs.Rk (32 bytes) is used as the public input to the toy circuit.
+// Convention: inputs.GovComm (32 bytes) is used as the public input to the toy
+// circuit. This keeps inputs.Rk free for RedPallas signature verification.
+// When the real delegation circuit is implemented, it will use ALL public inputs
+// (including Rk) and this convention will be replaced.
 func (h Halo2Verifier) VerifyDelegation(proof []byte, inputs zkp.DelegationInputs) error {
-	return VerifyToyProof(proof, inputs.Rk)
+	return VerifyToyProof(proof, inputs.GovComm)
 }
 
 // VerifyVoteCommitment is a stub — real circuit not yet implemented.

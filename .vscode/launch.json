@@ -7,6 +7,8 @@
             "request": "launch",
             "mode": "debug",
             "program": "cmd/zallyd/main.go",
+            "buildFlags": "-tags=halo2,redpallas",
+            "dlvFlags": ["--check-go-version=false"],
             "args": [
                 "start",
                 "--home",

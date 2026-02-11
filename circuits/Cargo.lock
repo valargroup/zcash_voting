@@ -488,6 +488,7 @@ dependencies = [
 name = "zally-circuits"
 version = "0.1.0"
 dependencies = [
+ "blake2b_simd",
  "group",
  "halo2_proofs",
  "pasta_curves",

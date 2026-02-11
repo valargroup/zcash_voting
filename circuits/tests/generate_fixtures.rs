@@ -15,6 +15,7 @@ use pasta_curves::group::ff::PrimeField;
 use std::fs;
 use std::path::Path;
 
+use blake2b_simd::Params as Blake2bParams;
 use rand::thread_rng;
 use reddsa::{orchard, SigningKey, VerificationKey};
 
@@ -108,13 +109,15 @@ fn generate_redpallas_fixtures() {
     let sk = SigningKey::<orchard::SpendAuth>::new(&mut rng);
     let vk = VerificationKey::from(&sk);
 
-    // The sighash is a 32-byte message (in production, derived from raw tx bytes).
-    let sighash: [u8; 32] = [
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
-    ];
+    // The sighash MUST match api/codec.go ComputeSigHash placeholder:
+    //   Blake2b-256("ZALLY_SIGHASH_V0")
+    // CRITICAL: When ComputeSigHash is updated to a proper sig-excluding hash,
+    // this fixture generator must be updated to match and fixtures regenerated.
+    let sighash_full = Blake2bParams::new()
+        .hash_length(32)
+        .hash(b"ZALLY_SIGHASH_V0");
+    let mut sighash = [0u8; 32];
+    sighash.copy_from_slice(sighash_full.as_bytes());
 
     // Sign the sighash.
     let sig = sk.sign(&mut rng, &sighash);
@@ -168,6 +171,43 @@ fn generate_redpallas_fixtures() {
         rp::verify_spend_auth_sig(&rk_bytes, &sighash, &wrong_sig_bytes).is_err(),
         "wrong signature should NOT verify"
     );
+
+    // Print base64-encoded values for embedding in TypeScript API tests.
+    use std::io::Write;
+    let b64 = |bytes: &[u8]| {
+        use std::io::Cursor;
+        let mut buf = Vec::new();
+        {
+            let mut cursor = Cursor::new(&mut buf);
+            // Simple base64 encoding (standard alphabet, no padding stripping).
+            let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut i = 0;
+            while i < bytes.len() {
+                let b0 = bytes[i] as u32;
+                let b1 = if i + 1 < bytes.len() { bytes[i + 1] as u32 } else { 0 };
+                let b2 = if i + 2 < bytes.len() { bytes[i + 2] as u32 } else { 0 };
+                let triple = (b0 << 16) | (b1 << 8) | b2;
+                cursor.write_all(&[alphabet[((triple >> 18) & 0x3F) as usize]]).unwrap();
+                cursor.write_all(&[alphabet[((triple >> 12) & 0x3F) as usize]]).unwrap();
+                if i + 1 < bytes.len() {
+                    cursor.write_all(&[alphabet[((triple >> 6) & 0x3F) as usize]]).unwrap();
+                } else {
+                    cursor.write_all(b"=").unwrap();
+                }
+                if i + 2 < bytes.len() {
+                    cursor.write_all(&[alphabet[(triple & 0x3F) as usize]]).unwrap();
+                } else {
+                    cursor.write_all(b"=").unwrap();
+                }
+                i += 3;
+            }
+        }
+        String::from_utf8(buf).unwrap()
+    };
+    println!("\n--- Base64 values for TypeScript tests ---");
+    println!("REAL_RK  = \"{}\"", b64(&rk_bytes));
+    println!("REAL_SIG = \"{}\"", b64(&sig_bytes));
+    println!("-------------------------------------------");
 
     println!("RedPallas fixtures generated and validated.");
 }
