@@ -10,11 +10,24 @@ public struct VotingView: View {
 
     public var body: some View {
         WithPerceptionTracking {
-            screenView(for: store.currentScreen)
+            let screen = store.screenStack.last ?? .proposalList
+            screenView(for: screen)
+                .id(screenId(screen))
                 .animation(.easeInOut(duration: 0.3), value: store.selectedProposal?.id)
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+    }
+
+    private func screenId(_ screen: Voting.State.Screen) -> String {
+        switch screen {
+        case .delegationSigning: return "delegationSigning"
+        case .proposalList: return "proposalList"
+        case .proposalDetail(let id): return "detail-\(id)"
+        case .voteReview: return "voteReview"
+        case .voteSubmission: return "voteSubmission"
+        case .complete: return "complete"
+        }
     }
 
     @ViewBuilder
