@@ -30,7 +30,7 @@ import (
 
 	voteapi "github.com/z-cale/zally/api"
 	"github.com/z-cale/zally/crypto/redpallas"
-	"github.com/z-cale/zally/crypto/zkp"
+	"github.com/z-cale/zally/crypto/zkp/halo2"
 	votekeeper "github.com/z-cale/zally/x/vote/keeper"
 )
 
@@ -148,7 +148,7 @@ func (app *ZallyApp) setAnteHandler(txConfig client.TxConfig) {
 		},
 		VoteKeeper:  app.VoteKeeper,
 		SigVerifier: redpallas.NewMockVerifier(),
-		ZKPVerifier: zkp.NewMockVerifier(),
+		ZKPVerifier: halo2.NewVerifier(),
 	})
 	if err != nil {
 		panic(err)

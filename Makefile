@@ -1,7 +1,7 @@
 BINARY = zallyd
 HOME_DIR = $(HOME)/.zallyd
 
-.PHONY: install init start clean build fmt lint test test-unit test-integration circuits fixtures test-halo2
+.PHONY: install init start clean build fmt lint test test-unit test-integration circuits fixtures test-halo2 test-halo2-ante
 
 ## install: Build and install the zallyd binary to $GOPATH/bin
 install:
@@ -61,4 +61,8 @@ fixtures: circuits
 
 ## test-halo2: Run Go tests that use real Halo2 verification via CGo (requires circuits)
 test-halo2: circuits
-	go test -tags halo2 -count=1 -v ./crypto/zkp/halo2/...
+	go test -tags halo2 -count=1 -v ./crypto/zkp/halo2/... ./x/vote/ante/...
+
+## test-halo2-ante: Run ante handler tests with real Halo2 verification
+test-halo2-ante: circuits
+	go test -tags halo2 -count=1 -v ./x/vote/ante/... -run TestHalo2
