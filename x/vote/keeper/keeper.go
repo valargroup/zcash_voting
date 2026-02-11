@@ -210,6 +210,44 @@ func (k Keeper) AddToTally(kvStore store.KVStore, roundID []byte, proposalID, de
 	return kvStore.Set(types.TallyKey(roundID, proposalID, decision), bz)
 }
 
+// GetProposalTally returns all tallied votes for a (round, proposal) pair,
+// keyed by decision ID. Iterates over the tally prefix
+// 0x05 || round_id || proposal_id to collect all decision → amount entries.
+func (k Keeper) GetProposalTally(kvStore store.KVStore, roundID []byte, proposalID uint32) (map[uint32]uint64, error) {
+	prefix := types.TallyPrefixForProposal(roundID, proposalID)
+	end := types.PrefixEndBytes(prefix)
+
+	iter, err := kvStore.Iterator(prefix, end)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	tally := make(map[uint32]uint64)
+	for ; iter.Valid(); iter.Next() {
+		key := iter.Key()
+		val := iter.Value()
+
+		// The decision is the last 4 bytes of the key.
+		if len(key) < 4 {
+			continue
+		}
+		decision := getUint32BE(key[len(key)-4:])
+		if len(val) != 8 {
+			continue
+		}
+		amount := getUint64BE(val)
+		tally[decision] = amount
+	}
+
+	return tally, nil
+}
+
+// getUint32BE reads a uint32 from big-endian bytes.
+func getUint32BE(b []byte) uint32 {
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
 // ---------------------------------------------------------------------------
 // Validation helpers (used by the ante validation pipeline, Phase 3)
 // ---------------------------------------------------------------------------

@@ -20,13 +20,17 @@ import (
 	"github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
-	"github.com/cosmos/cosmos-sdk/x/auth/ante"
 	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
 	consensuskeeper "github.com/cosmos/cosmos-sdk/x/consensus/keeper"
 	distrkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
 
+	"github.com/cosmos/cosmos-sdk/x/auth/ante"
+
+	voteapi "github.com/z-cale/zally/api"
+	"github.com/z-cale/zally/crypto/redpallas"
+	"github.com/z-cale/zally/crypto/zkp"
 	votekeeper "github.com/z-cale/zally/x/vote/keeper"
 )
 
@@ -109,14 +113,19 @@ func NewZallyApp(
 
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
 
+	// Install custom TxDecoder that handles both vote wire format
+	// ([tag || protobuf_msg]) and standard Cosmos Tx encoding.
+	standardDecoder := app.TxConfig().TxDecoder()
+	app.SetTxDecoder(CustomTxDecoder(standardDecoder))
+
 	// Register streaming services.
 	if err := app.RegisterStreamingServices(appOpts, app.kvStoreKeys()); err != nil {
 		panic(err)
 	}
 
-	// Set a standard SDK ante handler for Phase 1.
-	// In Phase 3 this will be replaced with custom ZKP/RedPallas validation
-	// that bypasses standard Cosmos signature checks entirely.
+	// Set a dual-mode ante handler:
+	// - Vote txs (VoteTxWrapper): custom ZKP/RedPallas validation
+	// - Standard Cosmos txs: standard SDK ante chain (sig verify, fees)
 	app.setAnteHandler(app.txConfig)
 
 	if err := app.Load(loadLatest); err != nil {
@@ -126,18 +135,21 @@ func NewZallyApp(
 	return app
 }
 
-// setAnteHandler wires up the ante handler chain.
-// Phase 1: standard SDK ante decorators (sig verification, fee deduction, etc.)
-// Phase 3: will be replaced with custom ValidateVoteTx pipeline.
+// setAnteHandler wires up the dual-mode ante handler chain.
+//   - Vote transactions (VoteTxWrapper): ZKP/RedPallas validation with infinite gas
+//   - Standard Cosmos transactions: standard SDK ante chain (sig verify, fees, etc.)
 func (app *ZallyApp) setAnteHandler(txConfig client.TxConfig) {
-	anteHandler, err := NewAnteHandler(
-		ante.HandlerOptions{
+	anteHandler, err := NewDualAnteHandler(DualAnteHandlerOptions{
+		HandlerOptions: ante.HandlerOptions{
 			AccountKeeper:   app.AccountKeeper,
 			BankKeeper:      app.BankKeeper,
 			SignModeHandler: txConfig.SignModeHandler(),
 			SigGasConsumer:  ante.DefaultSigVerificationGasConsumer,
 		},
-	)
+		VoteKeeper:  app.VoteKeeper,
+		SigVerifier: redpallas.NewMockVerifier(),
+		ZKPVerifier: zkp.NewMockVerifier(),
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -200,6 +212,14 @@ func (app *ZallyApp) SimulationManager() *module.SimulationManager {
 // RegisterAPIRoutes registers all application module routes with the provided API server.
 func (app *ZallyApp) RegisterAPIRoutes(apiSvr *api.Server, apiConfig config.APIConfig) {
 	app.App.RegisterAPIRoutes(apiSvr, apiConfig)
+
+	// Register vote module REST endpoints (tx submission + queries).
+	voteHandler := voteapi.NewHandler(voteapi.HandlerConfig{
+		CometRPCEndpoint: "http://localhost:26657",
+	})
+	voteHandler.RegisterTxRoutes(apiSvr.Router)
+	voteHandler.RegisterQueryRoutes(apiSvr.Router, apiSvr.ClientCtx)
+
 	// Register swagger API.
 	if err := server.RegisterSwaggerAPI(apiSvr.ClientCtx, apiSvr.Router, apiConfig.Swagger); err != nil {
 		panic(err)

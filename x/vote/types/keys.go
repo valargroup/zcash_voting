@@ -69,6 +69,35 @@ func TallyKey(roundID []byte, proposalID uint32, decision uint32) []byte {
 	return key
 }
 
+// TallyPrefixForProposal returns the KV prefix for all tally entries
+// of a given (round_id, proposal_id) pair. Used for prefix iteration
+// to collect all vote decisions for a proposal.
+func TallyPrefixForProposal(roundID []byte, proposalID uint32) []byte {
+	key := make([]byte, 0, len(TallyPrefix)+len(roundID)+4)
+	key = append(key, TallyPrefix...)
+	key = append(key, roundID...)
+	key = appendUint32BE(key, proposalID)
+	return key
+}
+
+// PrefixEndBytes returns the exclusive end key for prefix iteration.
+// It increments the last byte of the prefix, handling overflow by
+// truncating trailing 0xFF bytes.
+func PrefixEndBytes(prefix []byte) []byte {
+	if len(prefix) == 0 {
+		return nil
+	}
+	end := make([]byte, len(prefix))
+	copy(end, prefix)
+	for i := len(end) - 1; i >= 0; i-- {
+		end[i]++
+		if end[i] != 0 {
+			return end[:i+1]
+		}
+	}
+	return nil // overflow: prefix is all 0xFF
+}
+
 // putUint64BE writes a uint64 in big-endian byte order.
 func putUint64BE(b []byte, v uint64) {
 	b[0] = byte(v >> 56)

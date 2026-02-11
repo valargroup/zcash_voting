@@ -22,10 +22,10 @@ todos:
     status: done
   - id: raw-abci-api
     content: "Phase 5: Build JSON REST endpoints + raw ABCI tx pipeline (custom CheckTx/FinalizeBlock decoding, bypass Cosmos Tx envelope)"
-    status: pending
+    status: done
   - id: queries
     content: "Phase 5: Implement gRPC query handlers (commitment tree at height, latest tree, vote round, proposal tally)"
-    status: pending
+    status: done
   - id: tests
     content: "Phase 6: Unit tests for keeper, integration test for JSON tx submission, recheck behavior test"
     status: pending

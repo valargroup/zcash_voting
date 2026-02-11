@@ -10,3 +10,8 @@
      * Server handler does the dirty work: parse JSON and encoide as needed
    * Query:
      * gRPC gateway already supports JSON out-of-the-box
+3. No native x/gov module
+   *  Voters are public Cosmos accounts.
+   * Vote weight = staked tokens
+   * Uses standard Cosmos tx signing which we are bypassing
+   * For us, it is more straightforward to rebuild custom stuff instead of trying to fit a module purposed for diverging context

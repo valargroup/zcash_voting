@@ -102,12 +102,19 @@ func (AppModule) Name() string {
 }
 
 // RegisterServices registers the module's gRPC services with the app.
-// NOTE: Only the QueryServer is registered here. The MsgServer is NOT registered
-// because vote transactions bypass the standard Cosmos Tx envelope and
-// MsgServiceRouter entirely (see Phase 5). Registering MsgServer would require
-// cosmos.msg.v1.signer annotations which don't apply to ZKP-authenticated messages.
+//
+// Both QueryServer and MsgServer are registered. Although vote transactions
+// bypass the Cosmos SDK Tx envelope (using a raw [tag || protobuf] wire format),
+// the MsgServer is registered so BaseApp's MsgServiceRouter can route vote
+// messages to the keeper after the custom AnteHandler validates them.
+//
+// The cosmos.msg.v1.signer annotation is only used by the standard SDK
+// SigVerificationDecorator (which we replace with custom ZKP/RedPallas
+// validation in the AnteHandler). BaseApp's runMsgs() simply looks up
+// handlers by message type URL — no signer checking occurs during execution.
 func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterQueryServer(cfg.QueryServer(), keeper.NewQueryServerImpl(am.keeper))
+	types.RegisterMsgServer(cfg.MsgServer(), keeper.NewMsgServerImpl(am.keeper))
 }
 
 // EndBlock computes the commitment tree root and stores it keyed by block height.

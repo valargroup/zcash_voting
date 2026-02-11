@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -22,34 +23,50 @@ func NewQueryServerImpl(keeper Keeper) types.QueryServer {
 }
 
 // CommitmentTreeAtHeight returns the commitment tree root at a specific anchor height.
-// Phase 5 will fully implement this with proper gRPC-gateway REST endpoints.
-func (qs queryServer) CommitmentTreeAtHeight(_ context.Context, req *types.QueryCommitmentTreeRequest) (*types.QueryCommitmentTreeResponse, error) {
+func (qs queryServer) CommitmentTreeAtHeight(goCtx context.Context, req *types.QueryCommitmentTreeRequest) (*types.QueryCommitmentTreeResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "empty request")
 	}
 
-	// TODO(Phase 5): Implement query logic using keeper.GetCommitmentRootAtHeight.
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	kvStore := qs.k.OpenKVStore(ctx)
+
+	root, err := qs.k.GetCommitmentRootAtHeight(kvStore, req.Height)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get root: %v", err)
+	}
+	if root == nil {
+		return nil, status.Errorf(codes.NotFound, "no commitment root at height %d", req.Height)
+	}
+
 	return &types.QueryCommitmentTreeResponse{
 		Tree: &types.CommitmentTreeState{
+			Root:   root,
 			Height: req.Height,
 		},
 	}, nil
 }
 
-// LatestCommitmentTree returns the latest commitment tree state.
-func (qs queryServer) LatestCommitmentTree(_ context.Context, req *types.QueryLatestTreeRequest) (*types.QueryLatestTreeResponse, error) {
+// LatestCommitmentTree returns the latest commitment tree state including
+// the current root, height, and next leaf index.
+func (qs queryServer) LatestCommitmentTree(goCtx context.Context, req *types.QueryLatestTreeRequest) (*types.QueryLatestTreeResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "empty request")
 	}
 
-	// TODO(Phase 5): Implement query logic using keeper.GetCommitmentTreeState.
-	return &types.QueryLatestTreeResponse{
-		Tree: &types.CommitmentTreeState{},
-	}, nil
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	kvStore := qs.k.OpenKVStore(ctx)
+
+	state, err := qs.k.GetCommitmentTreeState(kvStore)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get tree state: %v", err)
+	}
+
+	return &types.QueryLatestTreeResponse{Tree: state}, nil
 }
 
 // VoteRound returns information about a specific vote round.
-func (qs queryServer) VoteRound(_ context.Context, req *types.QueryVoteRoundRequest) (*types.QueryVoteRoundResponse, error) {
+func (qs queryServer) VoteRound(goCtx context.Context, req *types.QueryVoteRoundRequest) (*types.QueryVoteRoundResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "empty request")
 	}
@@ -57,14 +74,20 @@ func (qs queryServer) VoteRound(_ context.Context, req *types.QueryVoteRoundRequ
 		return nil, status.Error(codes.InvalidArgument, "vote_round_id is required")
 	}
 
-	// TODO(Phase 5): Implement query logic using keeper.GetVoteRound.
-	return &types.QueryVoteRoundResponse{
-		Round: &types.VoteRound{},
-	}, nil
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	kvStore := qs.k.OpenKVStore(ctx)
+
+	round, err := qs.k.GetVoteRound(kvStore, req.VoteRoundId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "vote round not found: %v", err)
+	}
+
+	return &types.QueryVoteRoundResponse{Round: round}, nil
 }
 
 // ProposalTally returns the accumulated tally for a proposal within a vote round.
-func (qs queryServer) ProposalTally(_ context.Context, req *types.QueryProposalTallyRequest) (*types.QueryProposalTallyResponse, error) {
+// The tally maps each vote decision to the total accumulated vote amount.
+func (qs queryServer) ProposalTally(goCtx context.Context, req *types.QueryProposalTallyRequest) (*types.QueryProposalTallyResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "empty request")
 	}
@@ -72,8 +95,13 @@ func (qs queryServer) ProposalTally(_ context.Context, req *types.QueryProposalT
 		return nil, status.Error(codes.InvalidArgument, "vote_round_id is required")
 	}
 
-	// TODO(Phase 5): Implement query logic using keeper.GetTally.
-	return &types.QueryProposalTallyResponse{
-		Tally: make(map[uint32]uint64),
-	}, nil
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	kvStore := qs.k.OpenKVStore(ctx)
+
+	tally, err := qs.k.GetProposalTally(kvStore, req.VoteRoundId, req.ProposalId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get tally: %v", err)
+	}
+
+	return &types.QueryProposalTallyResponse{Tally: tally}, nil
 }

@@ -1,20 +1,96 @@
 package app
 
 import (
+	storetypes "cosmossdk.io/store/types"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/auth/ante"
+
+	voteapi "github.com/z-cale/zally/api"
+	"github.com/z-cale/zally/crypto/redpallas"
+	"github.com/z-cale/zally/crypto/zkp"
+	voteante "github.com/z-cale/zally/x/vote/ante"
+	votekeeper "github.com/z-cale/zally/x/vote/keeper"
 )
 
-// NewAnteHandler returns an AnteHandler that checks and increments sequence
-// numbers, checks signatures & account numbers, and deducts fees from the first
-// signer.
+// DualAnteHandlerOptions configures the dual-mode ante handler that supports
+// both vote transactions (ZKP/RedPallas authenticated) and standard Cosmos
+// transactions (secp256k1/ed25519 signatures, fees, etc.).
+type DualAnteHandlerOptions struct {
+	// Standard SDK ante handler options (for Cosmos txs: staking, etc.)
+	ante.HandlerOptions
+
+	// Vote module keeper for stateful validation.
+	VoteKeeper votekeeper.Keeper
+
+	// RedPallas signature verifier (mock during development).
+	SigVerifier redpallas.Verifier
+
+	// ZKP verifier (mock during development).
+	ZKPVerifier zkp.Verifier
+}
+
+// NewDualAnteHandler returns an AnteHandler that detects the tx type and routes
+// to the appropriate validation pipeline:
 //
-// NOTE: This is a standard SDK ante handler for Phase 1. In Phase 3, it will be
-// replaced with custom ZKP/RedPallas validation that bypasses standard Cosmos
-// signature verification entirely. Vote transactions will use a completely
-// different authorization model (ZKP proofs + RedPallas signatures instead of
-// Cosmos secp256k1/ed25519 signatures).
-func NewAnteHandler(options ante.HandlerOptions) (sdk.AnteHandler, error) {
+//   - VoteTxWrapper → custom validation via ValidateVoteTx (ZKP + RedPallas)
+//   - Standard sdk.Tx → standard Cosmos ante chain (sig verify, fees, etc.)
+//
+// This allows the chain to process both vote transactions (which bypass the
+// Cosmos Tx envelope) and standard Cosmos transactions (for staking, etc.)
+// through the same BaseApp instance.
+func NewDualAnteHandler(opts DualAnteHandlerOptions) (sdk.AnteHandler, error) {
+	// Build the standard Cosmos ante chain for non-vote transactions.
+	standardHandler, err := buildStandardAnteHandler(opts.HandlerOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	voteKeeper := opts.VoteKeeper
+	sigVerifier := opts.SigVerifier
+	zkpVerifier := opts.ZKPVerifier
+
+	return func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
+		// Vote tx path: custom ZKP/RedPallas validation.
+		if vtx, ok := tx.(*voteapi.VoteTxWrapper); ok {
+			return handleVoteAnte(ctx, vtx, voteKeeper, sigVerifier, zkpVerifier)
+		}
+
+		// Standard Cosmos tx path: signature verification, fee deduction, etc.
+		return standardHandler(ctx, tx, simulate)
+	}, nil
+}
+
+// handleVoteAnte validates a vote transaction using the custom validation
+// pipeline from x/vote/ante. Vote txs are free (infinite gas meter) and use
+// ZKP/RedPallas authentication instead of standard Cosmos signatures.
+func handleVoteAnte(
+	ctx sdk.Context,
+	vtx *voteapi.VoteTxWrapper,
+	k votekeeper.Keeper,
+	sigVerifier redpallas.Verifier,
+	zkpVerifier zkp.Verifier,
+) (sdk.Context, error) {
+	// Vote txs are free — use an infinite gas meter so no gas limit errors.
+	ctx = ctx.WithGasMeter(storetypes.NewInfiniteGasMeter())
+
+	opts := voteante.ValidateOpts{
+		IsRecheck:   ctx.IsReCheckTx(),
+		SigVerifier: sigVerifier,
+		ZKPVerifier: zkpVerifier,
+		SigHash:     vtx.SigHash,
+	}
+
+	if err := voteante.ValidateVoteTx(ctx, vtx.VoteMsg, k, opts); err != nil {
+		return ctx, err
+	}
+
+	return ctx, nil
+}
+
+// buildStandardAnteHandler creates the standard Cosmos SDK ante handler chain
+// for non-vote transactions (staking operations, bank transfers, etc.).
+func buildStandardAnteHandler(options ante.HandlerOptions) (sdk.AnteHandler, error) {
 	anteDecorators := []sdk.AnteDecorator{
 		ante.NewSetUpContextDecorator(),
 		ante.NewExtensionOptionsDecorator(options.ExtensionOptionChecker),
