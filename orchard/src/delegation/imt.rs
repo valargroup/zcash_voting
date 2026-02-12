@@ -9,8 +9,8 @@
 
 use ff::PrimeField;
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength};
+use lazy_static::lazy_static;
 use pasta_curves::pallas;
-use std::sync::LazyLock;
 
 /// Depth of the nullifier Indexed Merkle Tree Merkle path (Poseidon2-based).
 /// Total Poseidon2 calls per proof = 1 (leaf hash) + 29 (path) = 30.
@@ -31,8 +31,10 @@ pub(crate) fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base 
 }
 
 // Parsed once and reused to avoid reparsing constants on every IMT hash call.
-static POSEIDON2_PARAMS: LazyLock<super::poseidon2::Poseidon2Params<pallas::Base>> =
-    LazyLock::new(super::poseidon2::Poseidon2Params::new);
+lazy_static! {
+    static ref POSEIDON2_PARAMS: super::poseidon2::Poseidon2Params<pallas::Base> =
+        super::poseidon2::Poseidon2Params::new();
+}
 
 /// Compute Poseidon2 hash of two field elements (out of circuit).
 /// Used for IMT Merkle tree hashing.
@@ -89,12 +91,16 @@ pub trait ImtProvider {
 // Test-only
 // ================================================================
 
+#[cfg(any(test, feature = "test-dependencies"))]
+use alloc::vec::Vec;
+#[cfg(any(test, feature = "test-dependencies"))]
 use ff::Field;
 
 /// Precomputed empty subtree hashes for the IMT (Poseidon2-based).
 ///
 /// `empty[0] = Poseidon2(0, 0)` (hash of an empty (low=0, high=0) leaf),
 /// `empty[i] = Poseidon2(empty[i-1], empty[i-1])` for i >= 1.
+#[cfg(any(test, feature = "test-dependencies"))]
 pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
     let empty_leaf = poseidon2_hash_2(pallas::Base::zero(), pallas::Base::zero());
     let mut hashes = vec![empty_leaf];
@@ -111,6 +117,7 @@ pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
 /// (p ~= 16.something x 2^250). Each bracket k has low = k*step + 1 and
 /// high = (k+1)*step - 1, stored as (low, high) leaves at positions 0..16 in
 /// a 32-leaf subtree. Any hash-derived nullifier will fall within one bracket.
+#[cfg(any(test, feature = "test-dependencies"))]
 #[derive(Debug)]
 pub struct SpacedLeafImtProvider {
     /// The root of the IMT.
@@ -123,6 +130,7 @@ pub struct SpacedLeafImtProvider {
     subtree_levels: Vec<Vec<pallas::Base>>,
 }
 
+#[cfg(any(test, feature = "test-dependencies"))]
 impl SpacedLeafImtProvider {
     /// Create a new spaced-leaf IMT provider ((low, high) leaf model).
     ///
@@ -176,6 +184,7 @@ impl SpacedLeafImtProvider {
     }
 }
 
+#[cfg(any(test, feature = "test-dependencies"))]
 impl ImtProvider for SpacedLeafImtProvider {
     fn root(&self) -> pallas::Base {
         self.root

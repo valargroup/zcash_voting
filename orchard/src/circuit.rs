@@ -61,6 +61,9 @@ use halo2_gadgets::{
 mod commit_ivk;
 pub mod gadget;
 mod note_commit;
+#[cfg(feature = "delegation")]
+#[path = "delegation/mod.rs"]
+pub mod delegation;
 
 pub use crate::Proof;
 

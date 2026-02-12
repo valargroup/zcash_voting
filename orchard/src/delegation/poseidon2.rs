@@ -20,6 +20,7 @@
 //! - Reference implementation: <https://github.com/amit0365/poseidon2>
 //! - Round constants generated via Grain LFSR (see `poseidon2_params.rs`).
 
+use alloc::vec::Vec;
 use super::poseidon2_params::{MAT_INTERNAL_DIAG_M_1, ROUND_CONSTANTS};
 use ff::PrimeField;
 

@@ -17,6 +17,8 @@
 //!
 //! Total: **66 rows per hash** invocation.
 
+use alloc::vec::Vec;
+use core::marker::PhantomData;
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, Value},
@@ -27,7 +29,6 @@ use super::poseidon2::{
     add_round_constants, matmul_external, matmul_internal, sbox, sbox_full, Poseidon2Params, R_F,
     R_P, ROUNDS,
 };
-use std::marker::PhantomData;
 
 // ---------------------------------------------------------------------------
 // Config & Chip

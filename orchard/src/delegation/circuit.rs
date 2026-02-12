@@ -19,6 +19,7 @@
 //! - **Condition 15** (×4): Padded-note zero-value enforcement.
 //! - **Condition 16**: Gov null pairwise distinctness.
 
+use alloc::vec::Vec;
 use ff::Field;
 use group::{Curve, GroupEncoding};
 use halo2_proofs::{
@@ -71,17 +72,21 @@ use halo2_gadgets::{
             MerklePath as GadgetMerklePath,
         },
     },
-    utilities::{bool_check, lookup_range_check::LookupRangeCheckConfig},
+    utilities::{
+        bool_check,
+        lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig},
+    },
 };
-use std::sync::LazyLock;
+use lazy_static::lazy_static;
 
 use super::imt::IMT_DEPTH;
 use super::poseidon2::Poseidon2Params;
 use super::poseidon2_chip::{Poseidon2Chip, Poseidon2Config};
 
 // Parsed once and reused to avoid per-note constant parsing in condition 13.
-static POSEIDON2_PARAMS: LazyLock<Poseidon2Params<pallas::Base>> =
-    LazyLock::new(Poseidon2Params::new);
+lazy_static! {
+    static ref POSEIDON2_PARAMS: Poseidon2Params<pallas::Base> = Poseidon2Params::new();
+}
 
 // ================================================================
 // Public input offsets (12 field elements).
@@ -128,6 +133,41 @@ pub(crate) const MAX_PROPOSAL_AUTHORITY: u64 = 65535; // 2^16 - 1
 /// Prepended as the first Poseidon input in `gov_comm` (condition 7) for
 /// domain separation from Vote Commitments in the shared tree.
 pub(crate) const DOMAIN_VAN: u64 = 0;
+
+/// Out-of-circuit rho binding hash used by the builder and tests.
+pub(crate) fn rho_binding_hash(
+    cmx_1: pallas::Base,
+    cmx_2: pallas::Base,
+    cmx_3: pallas::Base,
+    cmx_4: pallas::Base,
+    gov_comm: pallas::Base,
+    vote_round_id: pallas::Base,
+) -> pallas::Base {
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<6>, 3, 2>::init()
+        .hash([cmx_1, cmx_2, cmx_3, cmx_4, gov_comm, vote_round_id])
+}
+
+/// Out-of-circuit governance commitment hash used by the builder and tests.
+pub(crate) fn gov_commitment_hash(
+    g_d_new_x: pallas::Base,
+    pk_d_new_x: pallas::Base,
+    v_total: pallas::Base,
+    vote_round_id: pallas::Base,
+    gov_comm_rand: pallas::Base,
+) -> pallas::Base {
+    let gov_comm_core =
+        poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<6>, 3, 2>::init().hash([
+            pallas::Base::from(DOMAIN_VAN),
+            g_d_new_x,
+            pk_d_new_x,
+            v_total,
+            vote_round_id,
+            pallas::Base::from(MAX_PROPOSAL_AUTHORITY),
+        ]);
+
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init()
+        .hash([gov_comm_core, gov_comm_rand])
+}
 
 // ================================================================
 // Config
@@ -329,7 +369,7 @@ impl Circuit {
         let rcm_signed = note.rseed().rcm(&rho_signed);
         Circuit {
             nk: Value::known(*fvk.nk()),
-            rho_signed: Value::known(rho_signed.0),
+            rho_signed: Value::known(rho_signed.into_inner()),
             psi_signed: Value::known(psi_signed),
             cm_signed: Value::known(note.commitment()),
             ak: Value::known(fvk.clone().into()),
@@ -590,6 +630,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[0],
                 lookup,
                 range_check,
+                false,
             );
             let merkle_config_1 = MerkleChip::configure(meta, sinsemilla_config_1.clone());
             (sinsemilla_config_1, merkle_config_1)
@@ -607,6 +648,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[1],
                 lookup,
                 range_check,
+                false,
             );
             let merkle_config_2 = MerkleChip::configure(meta, sinsemilla_config_2.clone());
             (sinsemilla_config_2, merkle_config_2)
@@ -870,6 +912,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             // The signed note's value is always 0.
+            // Zero is enforced transitively: v_signed feeds into NoteCommit -> cm_signed
+            // -> derive_nullifier -> nf_signed, which is constrained to the public input.
+            // Any non-zero value would produce a different nf_signed, breaking the proof.
             let v_signed = assign_free_advice(
                 layouter.namespace(|| "v_signed = 0"),
                 config.advices[0],
@@ -1160,6 +1205,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )?;
 
             // The output note's value is always 0.
+            // Zero is enforced transitively: v_new feeds into NoteCommit -> cm_new,
+            // whose x-coordinate is constrained to the CMX_NEW public input.
+            // Any non-zero value would produce a different cmx, breaking the proof.
             let v_new = assign_free_advice(
                 layouter.namespace(|| "v_new = 0"),
                 config.advices[0],
@@ -1960,11 +2008,13 @@ impl Instance {
     pub fn to_halo2_instance(&self) -> Vec<vesta::Scalar> {
         // rk is stored as compressed bytes but the circuit constrains it as
         // two field elements (x, y coordinates of the curve point).
+        // Safety: VerificationKey<SpendAuth> guarantees a valid, non-identity
+        // curve point, so both conversions are infallible.
         let rk = pallas::Point::from_bytes(&self.rk.clone().into())
-            .unwrap()
+            .expect("rk is a valid curve point (guaranteed by VerificationKey)")
             .to_affine()
             .coordinates()
-            .unwrap();
+            .expect("rk is not the identity point (guaranteed by VerificationKey)");
 
         vec![
             self.nf_signed.0,
@@ -1989,25 +2039,24 @@ impl Instance {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::{String, ToString};
     use super::*;
     use crate::{
         delegation::imt::{gov_null_hash, ImtProofData, ImtProvider, SpacedLeafImtProvider},
         keys::{FullViewingKey, Scope, SpendValidatingKey, SpendingKey},
-        note::{commitment::ExtractedNoteCommitment, Note},
-        spec::{gov_commitment_hash, rho_binding_hash},
+        note::{commitment::ExtractedNoteCommitment, Note, Rho},
         tree::MerklePath as OrchardMerklePath,
     };
     use ff::Field;
     use halo2_proofs::dev::MockProver;
-    use incrementalmerkletree::{Altitude, Hashable};
+    use incrementalmerkletree::{Hashable, Level};
     use pasta_curves::{arithmetic::CurveAffine, pallas};
     use rand::rngs::OsRng;
 
     /// Size of the delegation circuit (2^K rows).
     ///
-    /// K=16 (65,536 rows) fits all conditions including 4 per-note slots.
-    /// Estimated usage: ~42,000 rows (main ~3,000 + shared tables ~2,000 + 4 × ~9,500 per-note).
-    const K: u32 = 16;
+    /// K=13 (8,192 rows) fits all conditions including 4 per-note slots.
+    const K: u32 = 13;
 
     /// Helper: build a NoteSlotWitness for a note with a Merkle path and IMT proof.
     fn make_note_slot(
@@ -2028,7 +2077,7 @@ mod tests {
                 NonIdentityPallasPoint::from_bytes(&recipient.pk_d().to_bytes()).unwrap(),
             ),
             v: Value::known(note.value()),
-            rho: Value::known(rho.0),
+            rho: Value::known(rho.into_inner()),
             psi: Value::known(psi),
             rcm: Value::known(rcm),
             cm: Value::known(cm),
@@ -2074,37 +2123,38 @@ mod tests {
         let real_note = Note::new(
             recipient,
             note_value,
-            dummy_parent.nullifier(&fvk),
+            Rho::from_nf_old(dummy_parent.nullifier(&fvk)),
             &mut rng,
         );
 
         // Build Merkle tree with real note at position 0.
-        let cmx_real = ExtractedNoteCommitment::from(real_note.commitment()).inner();
+        let cmx_real_e = ExtractedNoteCommitment::from(real_note.commitment());
+        let cmx_real = cmx_real_e.inner();
         let empty_leaf = MerkleHashOrchard::empty_leaf();
         let leaves = [
-            MerkleHashOrchard::from_base(cmx_real),
+            MerkleHashOrchard::from_cmx(&cmx_real_e),
             empty_leaf,
             empty_leaf,
             empty_leaf,
         ];
-        let l1_0 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[0], &leaves[1]);
-        let l1_1 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[2], &leaves[3]);
-        let l2_0 = MerkleHashOrchard::combine(Altitude::from(1), &l1_0, &l1_1);
+        let l1_0 = MerkleHashOrchard::combine(Level::from(0), &leaves[0], &leaves[1]);
+        let l1_1 = MerkleHashOrchard::combine(Level::from(0), &leaves[2], &leaves[3]);
+        let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
         let mut current = l2_0;
         for level in 2..MERKLE_DEPTH_ORCHARD {
-            let sibling = MerkleHashOrchard::empty_root(Altitude::from(level as u8));
-            current = MerkleHashOrchard::combine(Altitude::from(level as u8), &current, &sibling);
+            let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
+            current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
         }
         let nc_root = current.inner();
 
-        let mut auth_path_0 = [pallas::Base::zero(); MERKLE_DEPTH_ORCHARD];
-        auth_path_0[0] = leaves[1].inner();
-        auth_path_0[1] = l1_1.inner();
+        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
+        auth_path_0[0] = leaves[1];
+        auth_path_0[1] = l1_1;
         for level in 2..MERKLE_DEPTH_ORCHARD {
-            auth_path_0[level] = MerkleHashOrchard::empty_root(Altitude::from(level as u8)).inner();
+            auth_path_0[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
         }
-        let merkle_path_0 = OrchardMerklePath::new(0u32, auth_path_0);
+        let merkle_path_0 = OrchardMerklePath::from_parts(0u32, auth_path_0);
 
         // IMT proof for real note (from shared provider).
         let real_nf = real_note.nullifier(&fvk);
@@ -2125,7 +2175,12 @@ mod tests {
             // Use fvk.address_at() so pk_d = [ivk] * g_d with the REAL ivk.
             let pad_addr = fvk.address_at(100 + i, Scope::External);
             let (_, _, dummy) = Note::dummy(&mut rng, None);
-            let pad_note = Note::new(pad_addr, NoteValue::zero(), dummy.nullifier(&fvk), &mut rng);
+            let pad_note = Note::new(
+                pad_addr,
+                NoteValue::zero(),
+                Rho::from_nf_old(dummy.nullifier(&fvk)),
+                &mut rng,
+            );
 
             let pad_cmx = ExtractedNoteCommitment::from(pad_note.commitment()).inner();
             let pad_nf = pad_note.nullifier(&fvk);
@@ -2176,11 +2231,21 @@ mod tests {
 
         // Create signed note with this rho.
         let sender_address = fvk.address_at(0u32, Scope::External);
-        let signed_note = Note::new(sender_address, NoteValue::zero(), Nullifier(rho), &mut rng);
+        let signed_note = Note::new(
+            sender_address,
+            NoteValue::zero(),
+            Rho::from_nf_old(Nullifier(rho)),
+            &mut rng,
+        );
         let nf_signed = signed_note.nullifier(&fvk);
 
         // Create output note with rho = nf_signed.
-        let output_note = Note::new(output_recipient, NoteValue::zero(), nf_signed, &mut rng);
+        let output_note = Note::new(
+            output_recipient,
+            NoteValue::zero(),
+            Rho::from_nf_old(nf_signed),
+            &mut rng,
+        );
         let cmx_new = ExtractedNoteCommitment::from(output_note.commitment()).inner();
 
         let alpha = pallas::Scalar::random(&mut rng);
@@ -2349,11 +2414,12 @@ mod tests {
         let real_note = Note::new(
             recipient,
             note_value,
-            dummy_parent.nullifier(&fvk),
+            Rho::from_nf_old(dummy_parent.nullifier(&fvk)),
             &mut rng,
         );
 
-        let cmx_real = ExtractedNoteCommitment::from(real_note.commitment()).inner();
+        let cmx_real_e = ExtractedNoteCommitment::from(real_note.commitment());
+        let cmx_real = cmx_real_e.inner();
         let real_nf = real_note.nullifier(&fvk);
         let imt_0 = imt_provider.non_membership_proof(real_nf.0);
         let gov_null_real = gov_null_hash(nk_val, vote_round_id, real_nf.0);
@@ -2361,29 +2427,29 @@ mod tests {
         // Build Merkle tree with real note at position 0.
         let empty_leaf = MerkleHashOrchard::empty_leaf();
         let leaves = [
-            MerkleHashOrchard::from_base(cmx_real),
+            MerkleHashOrchard::from_cmx(&cmx_real_e),
             empty_leaf,
             empty_leaf,
             empty_leaf,
         ];
-        let l1_0 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[0], &leaves[1]);
-        let l1_1 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[2], &leaves[3]);
-        let l2_0 = MerkleHashOrchard::combine(Altitude::from(1), &l1_0, &l1_1);
+        let l1_0 = MerkleHashOrchard::combine(Level::from(0), &leaves[0], &leaves[1]);
+        let l1_1 = MerkleHashOrchard::combine(Level::from(0), &leaves[2], &leaves[3]);
+        let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
         let mut current = l2_0;
         for level in 2..MERKLE_DEPTH_ORCHARD {
-            let sibling = MerkleHashOrchard::empty_root(Altitude::from(level as u8));
-            current = MerkleHashOrchard::combine(Altitude::from(level as u8), &current, &sibling);
+            let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
+            current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
         }
         let nc_root = current.inner();
 
-        let mut auth_path_0 = [pallas::Base::zero(); MERKLE_DEPTH_ORCHARD];
-        auth_path_0[0] = leaves[1].inner();
-        auth_path_0[1] = l1_1.inner();
+        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
+        auth_path_0[0] = leaves[1];
+        auth_path_0[1] = l1_1;
         for level in 2..MERKLE_DEPTH_ORCHARD {
-            auth_path_0[level] = MerkleHashOrchard::empty_root(Altitude::from(level as u8)).inner();
+            auth_path_0[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
         }
-        let merkle_path_0 = OrchardMerklePath::new(0u32, auth_path_0);
+        let merkle_path_0 = OrchardMerklePath::from_parts(0u32, auth_path_0);
 
         let slot_real = make_note_slot(&real_note, &merkle_path_0, &imt_0, true);
 
@@ -2400,7 +2466,12 @@ mod tests {
         for i in 2..4u32 {
             let pad_addr = fvk.address_at(100 + i, Scope::External);
             let (_, _, dummy) = Note::dummy(&mut rng, None);
-            let pad_note = Note::new(pad_addr, NoteValue::zero(), dummy.nullifier(&fvk), &mut rng);
+            let pad_note = Note::new(
+                pad_addr,
+                NoteValue::zero(),
+                Rho::from_nf_old(dummy.nullifier(&fvk)),
+                &mut rng,
+            );
 
             let pad_cmx = ExtractedNoteCommitment::from(pad_note.commitment()).inner();
             let pad_nf = pad_note.nullifier(&fvk);
@@ -2448,10 +2519,20 @@ mod tests {
         );
 
         let sender_address = fvk.address_at(0u32, Scope::External);
-        let signed_note = Note::new(sender_address, NoteValue::zero(), Nullifier(rho), &mut rng);
+        let signed_note = Note::new(
+            sender_address,
+            NoteValue::zero(),
+            Rho::from_nf_old(Nullifier(rho)),
+            &mut rng,
+        );
         let nf_signed = signed_note.nullifier(&fvk);
 
-        let output_note = Note::new(output_recipient, NoteValue::zero(), nf_signed, &mut rng);
+        let output_note = Note::new(
+            output_recipient,
+            NoteValue::zero(),
+            Rho::from_nf_old(nf_signed),
+            &mut rng,
+        );
         let cmx_new = ExtractedNoteCommitment::from(output_note.commitment()).inner();
 
         let alpha = pallas::Scalar::random(&mut rng);
@@ -2479,5 +2560,275 @@ mod tests {
             prover.verify().is_err(),
             "duplicate note slot must be rejected by gov null distinctness check"
         );
+    }
+
+    // ----------------------------------------------------------------
+    // Cost breakdown — per-region row counts via a custom Assignment
+    // ----------------------------------------------------------------
+
+    use std::collections::BTreeMap;
+
+    use halo2_proofs::plonk::{Any, Assigned, Assignment, Column, Error, Fixed, FloorPlanner};
+
+    struct RegionInfo {
+        name: String,
+        min_row: Option<usize>,
+        max_row: Option<usize>,
+    }
+
+    impl RegionInfo {
+        fn track_row(&mut self, row: usize) {
+            self.min_row = Some(self.min_row.map_or(row, |m| m.min(row)));
+            self.max_row = Some(self.max_row.map_or(row, |m| m.max(row)));
+        }
+
+        fn row_count(&self) -> usize {
+            match (self.min_row, self.max_row) {
+                (Some(lo), Some(hi)) => hi - lo + 1,
+                _ => 0,
+            }
+        }
+    }
+
+    struct RegionTracker {
+        regions: Vec<RegionInfo>,
+        current_region: Option<usize>,
+        total_rows: usize,
+        namespace_stack: Vec<String>,
+    }
+
+    impl RegionTracker {
+        fn new() -> Self {
+            Self {
+                regions: Vec::new(),
+                current_region: None,
+                total_rows: 0,
+                namespace_stack: Vec::new(),
+            }
+        }
+
+        fn current_prefix(&self) -> String {
+            if self.namespace_stack.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", self.namespace_stack.join("/"))
+            }
+        }
+    }
+
+    impl Assignment<pallas::Base> for RegionTracker {
+        fn enter_region<NR, N>(&mut self, name_fn: N)
+        where
+            NR: Into<String>,
+            N: FnOnce() -> NR,
+        {
+            let idx = self.regions.len();
+            let raw_name: String = name_fn().into();
+            let prefixed = format!("{}{}", self.current_prefix(), raw_name);
+            self.regions.push(RegionInfo {
+                name: prefixed,
+                min_row: None,
+                max_row: None,
+            });
+            self.current_region = Some(idx);
+        }
+
+        fn exit_region(&mut self) {
+            self.current_region = None;
+        }
+
+        fn enable_selector<A, AR>(
+            &mut self,
+            _: A,
+            _selector: &Selector,
+            row: usize,
+        ) -> Result<(), Error>
+        where
+            A: FnOnce() -> AR,
+            AR: Into<String>,
+        {
+            if let Some(idx) = self.current_region {
+                self.regions[idx].track_row(row);
+            }
+            if row + 1 > self.total_rows {
+                self.total_rows = row + 1;
+            }
+            Ok(())
+        }
+
+        fn query_instance(
+            &self,
+            _column: Column<InstanceColumn>,
+            _row: usize,
+        ) -> Result<Value<pallas::Base>, Error> {
+            Ok(Value::unknown())
+        }
+
+        fn assign_advice<V, VR, A, AR>(
+            &mut self,
+            _: A,
+            _column: Column<Advice>,
+            row: usize,
+            _to: V,
+        ) -> Result<(), Error>
+        where
+            V: FnOnce() -> Value<VR>,
+            VR: Into<Assigned<pallas::Base>>,
+            A: FnOnce() -> AR,
+            AR: Into<String>,
+        {
+            if let Some(idx) = self.current_region {
+                self.regions[idx].track_row(row);
+            }
+            if row + 1 > self.total_rows {
+                self.total_rows = row + 1;
+            }
+            Ok(())
+        }
+
+        fn assign_fixed<V, VR, A, AR>(
+            &mut self,
+            _: A,
+            _column: Column<Fixed>,
+            row: usize,
+            _to: V,
+        ) -> Result<(), Error>
+        where
+            V: FnOnce() -> Value<VR>,
+            VR: Into<Assigned<pallas::Base>>,
+            A: FnOnce() -> AR,
+            AR: Into<String>,
+        {
+            if let Some(idx) = self.current_region {
+                self.regions[idx].track_row(row);
+            }
+            if row + 1 > self.total_rows {
+                self.total_rows = row + 1;
+            }
+            Ok(())
+        }
+
+        fn copy(
+            &mut self,
+            _left_column: Column<Any>,
+            _left_row: usize,
+            _right_column: Column<Any>,
+            _right_row: usize,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn fill_from_row(
+            &mut self,
+            _column: Column<Fixed>,
+            _row: usize,
+            _to: Value<Assigned<pallas::Base>>,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+
+        fn push_namespace<NR, N>(&mut self, name_fn: N)
+        where
+            NR: Into<String>,
+            N: FnOnce() -> NR,
+        {
+            self.namespace_stack.push(name_fn().into());
+        }
+
+        fn pop_namespace(&mut self, _: Option<String>) {
+            self.namespace_stack.pop();
+        }
+    }
+
+    #[test]
+    fn cost_breakdown() {
+        // 1. Configure constraint system
+        let mut cs = plonk::ConstraintSystem::default();
+        let config = <Circuit as plonk::Circuit<pallas::Base>>::configure(&mut cs);
+
+        // 2. Run floor planner with our tracker.
+        //    Provide a fixed column for constants — the configure call above registered
+        //    one via enable_constant, but cs.constants is pub(crate). We create a fresh
+        //    fixed column; it won't match the real one but the V1 planner only needs
+        //    *some* column to place constants into. Row counts are unaffected.
+        let constants_col = cs.fixed_column();
+        let circuit = Circuit::default();
+        let mut tracker = RegionTracker::new();
+        floor_planner::V1::synthesize(&mut tracker, &circuit, config, vec![constants_col])
+            .unwrap();
+
+        // 3. Collect and sort regions by row count (descending)
+        let mut regions: Vec<_> = tracker
+            .regions
+            .iter()
+            .filter(|r| r.row_count() > 0)
+            .collect();
+        regions.sort_by(|a, b| b.row_count().cmp(&a.row_count()));
+
+        std::println!(
+            "\n=== Delegation Circuit Cost Breakdown (K={}, {} total rows) ===",
+            K,
+            1u64 << K
+        );
+        std::println!("Total rows used: {}\n", tracker.total_rows);
+
+        std::println!("Per-region (sorted by cost):");
+        for r in &regions {
+            std::println!(
+                "  {:60} {:>6} rows  (rows {}-{})",
+                r.name,
+                r.row_count(),
+                r.min_row.unwrap(),
+                r.max_row.unwrap()
+            );
+        }
+
+        // 4. Aggregate by top-level condition
+        std::println!("\nAggregated by top-level condition:");
+        let mut aggregated: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for r in &tracker.regions {
+            if r.row_count() == 0 {
+                continue;
+            }
+            let key = if r.name.starts_with("note ")
+                && r.name.as_bytes().get(5).map_or(false, |b| b.is_ascii_digit())
+            {
+                if let Some(slash) = r.name.find('/') {
+                    let rest = &r.name[slash + 1..];
+                    let top = rest.split('/').next().unwrap_or(rest);
+                    let top = if top.starts_with("MerkleCRH(") {
+                        "Merkle path (Sinsemilla)"
+                    } else if top.starts_with("Poseidon2(left, right) level") {
+                        "IMT Poseidon2 path"
+                    } else if top.starts_with("imt swap level") {
+                        "IMT swap"
+                    } else {
+                        top
+                    };
+                    format!("Per-note: {}", top)
+                } else {
+                    r.name.clone()
+                }
+            } else {
+                let top = r.name.split('/').next().unwrap_or(&r.name);
+                top.to_string()
+            };
+            let entry = aggregated.entry(key).or_insert((0, 0));
+            entry.0 += r.row_count();
+            entry.1 += 1;
+        }
+        let mut agg_sorted: Vec<_> = aggregated.into_iter().collect();
+        agg_sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        for (name, (total, count)) in &agg_sorted {
+            if *count > 1 {
+                std::println!(
+                    "  {:60} {:>6} rows  ({} x{})",
+                    name, total, total / count, count
+                );
+            } else {
+                std::println!("  {:60} {:>6} rows", name, total);
+            }
+        }
+        std::println!();
     }
 }

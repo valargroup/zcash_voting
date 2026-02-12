@@ -7,7 +7,7 @@ use pasta_curves::{pallas, vesta};
 use rand::{rngs::OsRng, RngCore};
 
 use ff::{Field, PrimeField};
-use incrementalmerkletree::{Altitude, Hashable};
+use incrementalmerkletree::{Hashable, Level};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::atomic::{AtomicUsize, Ordering},
@@ -19,12 +19,12 @@ use orchard::{
         imt::{ImtProvider, SpacedLeafImtProvider},
     },
     keys::{FullViewingKey, Scope, SpendingKey},
-    note::{ExtractedNoteCommitment, Note, RandomSeed},
+    note::{ExtractedNoteCommitment, Note, RandomSeed, Rho},
     tree::{MerkleHashOrchard, MerklePath},
     value::NoteValue,
 };
 
-const K: u32 = 16;
+const K: u32 = 13;
 const MERKLE_DEPTH: usize = 32;
 
 struct TrackingAllocator;
@@ -83,7 +83,7 @@ fn make_note(recipient: orchard::Address, value: NoteValue, rng: &mut impl RngCo
     loop {
         let mut rho_bytes = [0u8; 32];
         rng.fill_bytes(&mut rho_bytes);
-        let rho = orchard::note::Nullifier::from_bytes(&rho_bytes);
+        let rho = Rho::from_bytes(&rho_bytes);
         if bool::from(rho.is_none()) {
             continue;
         }
@@ -129,25 +129,26 @@ fn make_real_note_inputs(
         leaves[i] = MerkleHashOrchard::from_cmx(&cmx);
     }
 
-    let l1_0 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[0], &leaves[1]);
-    let l1_1 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[2], &leaves[3]);
-    let l2_0 = MerkleHashOrchard::combine(Altitude::from(1), &l1_0, &l1_1);
+    let l1_0 = MerkleHashOrchard::combine(Level::from(0), &leaves[0], &leaves[1]);
+    let l1_1 = MerkleHashOrchard::combine(Level::from(0), &leaves[2], &leaves[3]);
+    let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
     let mut current = l2_0;
     for level in 2..MERKLE_DEPTH {
-        let sibling = MerkleHashOrchard::empty_root(Altitude::from(level as u8));
-        current = MerkleHashOrchard::combine(Altitude::from(level as u8), &current, &sibling);
+        let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
+        current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
     }
-    let nc_root = current.inner();
+    let nc_root = pallas::Base::from_repr(current.to_bytes())
+        .expect("MerkleHashOrchard always contains a valid field element");
 
     let l1 = [l1_0, l1_1];
     let mut inputs = Vec::with_capacity(n);
     for (i, note) in notes.into_iter().enumerate() {
-        let mut auth_path = [MerkleHashOrchard::from_base(pallas::Base::zero()); MERKLE_DEPTH];
+        let mut auth_path = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH];
         auth_path[0] = leaves[i ^ 1];
         auth_path[1] = l1[1 - (i >> 1)];
         for level in 2..MERKLE_DEPTH {
-            auth_path[level] = MerkleHashOrchard::empty_root(Altitude::from(level as u8));
+            auth_path[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
         }
         let merkle_path = MerklePath::from_parts(i as u32, auth_path);
 

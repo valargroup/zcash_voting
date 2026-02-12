@@ -5,6 +5,7 @@
 //! Handles padding unused note slots with zero-value notes that still carry
 //! valid IMT non-membership proofs against the real tree root.
 
+use alloc::vec::Vec;
 use group::Curve;
 use halo2_proofs::circuit::Value;
 use pasta_curves::{arithmetic::CurveAffine, pallas};
@@ -12,14 +13,14 @@ use rand::RngCore;
 
 use crate::{
     keys::{FullViewingKey, Scope, SpendValidatingKey},
-    note::{commitment::ExtractedNoteCommitment, nullifier::Nullifier, Note},
-    spec::{self, NonIdentityPallasPoint},
+    note::{commitment::ExtractedNoteCommitment, nullifier::Nullifier, Note, Rho},
+    spec::NonIdentityPallasPoint,
     tree::MerklePath,
     value::NoteValue,
 };
 
 use super::{
-    circuit::{self, NoteSlotWitness},
+    circuit::{self, gov_commitment_hash, rho_binding_hash, NoteSlotWitness},
     imt::{gov_null_hash, ImtProofData, ImtProvider},
 };
 
@@ -129,7 +130,7 @@ pub fn build_delegation_bundle(
                 NonIdentityPallasPoint::from_bytes(&recipient.pk_d().to_bytes()).unwrap(),
             ),
             v: Value::known(note.value()),
-            rho: Value::known(rho.0),
+            rho: Value::known(rho.into_inner()),
             psi: Value::known(psi),
             rcm: Value::known(rcm),
             cm: Value::known(cm),
@@ -156,7 +157,12 @@ pub fn build_delegation_bundle(
         // Use a high diversifier index to avoid collision with real notes.
         let pad_addr = fvk.address_at((1000 + i) as u32, Scope::External);
         let (_, _, dummy) = Note::dummy(&mut *rng, None);
-        let pad_note = Note::new(pad_addr, NoteValue::zero(), dummy.nullifier(fvk), &mut *rng);
+        let pad_note = Note::new(
+            pad_addr,
+            NoteValue::zero(),
+            Rho::from_nf_old(dummy.nullifier(fvk)),
+            &mut *rng,
+        );
 
         let rho = pad_note.rho();
         let psi = pad_note.rseed().psi(&rho);
@@ -171,7 +177,7 @@ pub fn build_delegation_bundle(
         let imt_proof = imt_provider.non_membership_proof(real_nf.0);
 
         // Merkle path: zeros (condition 10 is skipped for padded notes).
-        let merkle_path = MerklePath::empty();
+        let merkle_path = MerklePath::dummy(&mut *rng);
 
         let slot = NoteSlotWitness {
             g_d: Value::known(pad_addr.g_d()),
@@ -179,7 +185,7 @@ pub fn build_delegation_bundle(
                 NonIdentityPallasPoint::from_bytes(&pad_addr.pk_d().to_bytes()).unwrap(),
             ),
             v: Value::known(NoteValue::zero()),
-            rho: Value::known(rho.0),
+            rho: Value::known(rho.into_inner()),
             psi: Value::known(psi),
             rcm: Value::known(rcm),
             cm: Value::known(cm),
@@ -220,13 +226,12 @@ pub fn build_delegation_bundle(
         .unwrap()
         .x();
 
-    let gov_comm =
-        spec::gov_commitment_hash(g_d_new_x, pk_d_new_x, v_total, vote_round_id, gov_comm_rand);
+    let gov_comm = gov_commitment_hash(g_d_new_x, pk_d_new_x, v_total, vote_round_id, gov_comm_rand);
 
     // Condition 3: rho binding.
     // rho_signed = Poseidon(cmx_1, cmx_2, cmx_3, cmx_4, gov_comm, vote_round_id)
     // Binds the keystone note to the exact notes being delegated.
-    let rho = spec::rho_binding_hash(
+    let rho = rho_binding_hash(
         cmx_values[0],
         cmx_values[1],
         cmx_values[2],
@@ -238,14 +243,24 @@ pub fn build_delegation_bundle(
     // Construct the keystone (signed) note (§1.3.4).
     // This is a zero-value dummy note whose rho is bound to the delegation via condition 3.
     let sender_address = fvk.address_at(0u32, Scope::External);
-    let signed_note = Note::new(sender_address, NoteValue::zero(), Nullifier(rho), &mut *rng);
+    let signed_note = Note::new(
+        sender_address,
+        NoteValue::zero(),
+        Rho::from_nf_old(Nullifier(rho)),
+        &mut *rng,
+    );
 
     // Condition 2: nullifier integrity — nf_signed is a public input.
     let nf_signed = signed_note.nullifier(fvk);
 
     // Condition 6: output note commitment integrity.
     // The output note is sent to the voting hotkey address with rho = nf_signed.
-    let output_note = Note::new(output_recipient, NoteValue::zero(), nf_signed, &mut *rng);
+    let output_note = Note::new(
+        output_recipient,
+        NoteValue::zero(),
+        Rho::from_nf_old(nf_signed),
+        &mut *rng,
+    );
     let cmx_new = ExtractedNoteCommitment::from(output_note.commitment()).inner();
 
     // Condition 4: spend authority — rk is the randomized spend key.
@@ -285,18 +300,18 @@ mod tests {
         constants::MERKLE_DEPTH_ORCHARD,
         delegation::imt::SpacedLeafImtProvider,
         keys::{FullViewingKey, Scope, SpendingKey},
-        note::{commitment::ExtractedNoteCommitment, Note},
+        note::{commitment::ExtractedNoteCommitment, Note, Rho},
         tree::{MerkleHashOrchard, MerklePath},
         value::NoteValue,
     };
     use ff::Field;
     use halo2_proofs::dev::MockProver;
-    use incrementalmerkletree::{Altitude, Hashable};
+    use incrementalmerkletree::{Hashable, Level};
     use pasta_curves::pallas;
     use rand::rngs::OsRng;
 
     /// Merged circuit K value.
-    const K: u32 = 16;
+    const K: u32 = 13;
 
     /// Helper: create 1–4 real note inputs with a shared Merkle tree and anchor.
     ///
@@ -320,7 +335,7 @@ mod tests {
             let note = Note::new(
                 recipient,
                 note_value,
-                dummy_parent.nullifier(fvk),
+                Rho::from_nf_old(dummy_parent.nullifier(fvk)),
                 &mut *rng,
             );
             notes.push(note);
@@ -330,20 +345,20 @@ mod tests {
         let empty_leaf = MerkleHashOrchard::empty_leaf();
         let mut leaves = [empty_leaf; 4];
         for (i, note) in notes.iter().enumerate() {
-            let cmx = ExtractedNoteCommitment::from(note.commitment()).inner();
-            leaves[i] = MerkleHashOrchard::from_base(cmx);
+            let cmx = ExtractedNoteCommitment::from(note.commitment());
+            leaves[i] = MerkleHashOrchard::from_cmx(&cmx);
         }
 
         // Build the bottom two levels of the shared tree.
-        let l1_0 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[0], &leaves[1]);
-        let l1_1 = MerkleHashOrchard::combine(Altitude::from(0), &leaves[2], &leaves[3]);
-        let l2_0 = MerkleHashOrchard::combine(Altitude::from(1), &l1_0, &l1_1);
+        let l1_0 = MerkleHashOrchard::combine(Level::from(0), &leaves[0], &leaves[1]);
+        let l1_1 = MerkleHashOrchard::combine(Level::from(0), &leaves[2], &leaves[3]);
+        let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
         // Hash up through the remaining levels with empty subtree siblings.
         let mut current = l2_0;
         for level in 2..MERKLE_DEPTH_ORCHARD {
-            let sibling = MerkleHashOrchard::empty_root(Altitude::from(level as u8));
-            current = MerkleHashOrchard::combine(Altitude::from(level as u8), &current, &sibling);
+            let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
+            current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
         }
         let nc_root = current.inner();
 
@@ -351,17 +366,16 @@ mod tests {
         let l1 = [l1_0, l1_1];
         let mut inputs = Vec::with_capacity(n);
         for (i, note) in notes.into_iter().enumerate() {
-            let mut auth_path = [pallas::Base::zero(); MERKLE_DEPTH_ORCHARD];
+            let mut auth_path = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
             // Level 0: sibling leaf in the same pair.
-            auth_path[0] = leaves[i ^ 1].inner();
+            auth_path[0] = leaves[i ^ 1];
             // Level 1: sibling pair hash.
-            auth_path[1] = l1[1 - (i >> 1)].inner();
+            auth_path[1] = l1[1 - (i >> 1)];
             // Levels 2+: empty subtree roots.
             for level in 2..MERKLE_DEPTH_ORCHARD {
-                auth_path[level] =
-                    MerkleHashOrchard::empty_root(Altitude::from(level as u8)).inner();
+                auth_path[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
             }
-            let merkle_path = MerklePath::new(i as u32, auth_path);
+            let merkle_path = MerklePath::from_parts(i as u32, auth_path);
 
             let real_nf = note.nullifier(fvk);
             let imt_proof = imt_provider.non_membership_proof(real_nf.0);

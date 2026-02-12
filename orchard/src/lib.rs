@@ -41,7 +41,7 @@ mod spec;
 pub mod tree;
 pub mod value;
 #[cfg(feature = "delegation")]
-pub mod delegation;
+pub use crate::circuit::delegation;
 pub mod zip32;
 
 #[cfg(test)]
