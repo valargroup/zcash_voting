@@ -8,5 +8,6 @@ pub mod witness;
 pub mod zkp1;
 pub mod zkp2;
 pub mod vote_commitment;
+pub mod storage;
 
 pub use types::*;

@@ -84,6 +84,98 @@ public struct VotingRoundParams: Equatable, Sendable {
     }
 }
 
+// MARK: - Round State (from Rust storage)
+
+public enum RoundPhaseInfo: Equatable, Sendable {
+    case initialized
+    case hotkeyGenerated
+    case delegationConstructed
+    case witnessBuilt
+    case delegationProved
+    case voteReady
+}
+
+public struct RoundStateInfo: Equatable, Sendable {
+    public let roundId: String
+    public let phase: RoundPhaseInfo
+    public let snapshotHeight: UInt64
+    public let hotkeyAddress: String?
+    public let delegatedWeight: UInt64?
+    public let proofGenerated: Bool
+
+    public init(
+        roundId: String,
+        phase: RoundPhaseInfo,
+        snapshotHeight: UInt64,
+        hotkeyAddress: String?,
+        delegatedWeight: UInt64?,
+        proofGenerated: Bool
+    ) {
+        self.roundId = roundId
+        self.phase = phase
+        self.snapshotHeight = snapshotHeight
+        self.hotkeyAddress = hotkeyAddress
+        self.delegatedWeight = delegatedWeight
+        self.proofGenerated = proofGenerated
+    }
+}
+
+public struct RoundSummaryInfo: Equatable, Sendable {
+    public let roundId: String
+    public let phase: RoundPhaseInfo
+    public let snapshotHeight: UInt64
+    public let createdAt: UInt64
+
+    public init(roundId: String, phase: RoundPhaseInfo, snapshotHeight: UInt64, createdAt: UInt64) {
+        self.roundId = roundId
+        self.phase = phase
+        self.snapshotHeight = snapshotHeight
+        self.createdAt = createdAt
+    }
+}
+
+// MARK: - Vote Record (from Rust votes table)
+
+public struct VoteRecord: Equatable, Sendable {
+    public let proposalId: UInt32
+    public let choice: VoteChoice
+    public let submitted: Bool
+
+    public init(proposalId: UInt32, choice: VoteChoice, submitted: Bool) {
+        self.proposalId = proposalId
+        self.choice = choice
+        self.submitted = submitted
+    }
+}
+
+/// Combined DB state published via stateStream. Drives all UI state.
+public struct VotingDbState: Equatable, Sendable {
+    public let roundState: RoundStateInfo
+    public let votes: [VoteRecord]
+
+    public init(roundState: RoundStateInfo, votes: [VoteRecord]) {
+        self.roundState = roundState
+        self.votes = votes
+    }
+
+    /// Convenience: build the votes dictionary the UI needs.
+    public var votesByProposal: [UInt32: VoteChoice] {
+        Dictionary(uniqueKeysWithValues: votes.map { ($0.proposalId, $0.choice) })
+    }
+
+    public static let initial = VotingDbState(
+        roundState: RoundStateInfo(
+            roundId: "",
+            phase: .initialized,
+            snapshotHeight: 0,
+            hotkeyAddress: nil,
+            delegatedWeight: nil,
+            proofGenerated: false
+        ),
+        votes: []
+    )
+}
+
 // MARK: - Hotkey
 
 public struct VotingHotkey: Equatable, Sendable {

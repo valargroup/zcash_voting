@@ -1,4 +1,4 @@
-public enum VoteChoice: Equatable, Hashable, Codable {
+public enum VoteChoice: Equatable, Hashable, Codable, Sendable {
     case support
     case oppose
     case skip
