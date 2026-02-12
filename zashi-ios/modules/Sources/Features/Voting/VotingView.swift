@@ -1,5 +1,6 @@
 import SwiftUI
 import ComposableArchitecture
+import VotingModels
 
 public struct VotingView: View {
     let store: StoreOf<Voting>

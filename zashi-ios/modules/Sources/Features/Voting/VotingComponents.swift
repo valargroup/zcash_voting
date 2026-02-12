@@ -1,6 +1,7 @@
 import SwiftUI
 import Generated
 import UIComponents
+import VotingModels
 
 // MARK: - Prototype Banner
 

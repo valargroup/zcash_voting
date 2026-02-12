@@ -86,6 +86,10 @@ let package = Package(
         .library(name: "Utils", targets: ["Utils"]),
         .library(name: "Vendors", targets: ["Vendors"]),
         .library(name: "Voting", targets: ["Voting"]),
+        .library(name: "VotingAPIClient", targets: ["VotingAPIClient"]),
+        .library(name: "VotingCryptoClient", targets: ["VotingCryptoClient"]),
+        .library(name: "VotingModels", targets: ["VotingModels"]),
+        .library(name: "VotingStorageClient", targets: ["VotingStorageClient"]),
         .library(name: "WalletBalances", targets: ["WalletBalances"]),
         .library(name: "WalletBirthday", targets: ["WalletBirthday"]),
         .library(name: "WalletConfigProvider", targets: ["WalletConfigProvider"]),
@@ -1114,9 +1118,42 @@ let package = Package(
             dependencies: [
                 "Generated",
                 "UIComponents",
+                "VotingAPIClient",
+                "VotingCryptoClient",
+                "VotingModels",
+                "VotingStorageClient",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],
             path: "Sources/Features/Voting"
+        ),
+        .target(
+            name: "VotingAPIClient",
+            dependencies: [
+                "VotingModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "Sources/Dependencies/VotingAPIClient"
+        ),
+        .target(
+            name: "VotingCryptoClient",
+            dependencies: [
+                "VotingModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "Sources/Dependencies/VotingCryptoClient"
+        ),
+        .target(
+            name: "VotingModels",
+            dependencies: [],
+            path: "Sources/Dependencies/VotingModels"
+        ),
+        .target(
+            name: "VotingStorageClient",
+            dependencies: [
+                "VotingModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ],
+            path: "Sources/Dependencies/VotingStorageClient"
         ),
         .target(
             name: "WalletBalances",

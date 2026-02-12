@@ -1,4 +1,5 @@
 import Foundation
+import VotingModels
 
 public enum MockVotingService {
     public static let votingWeight: UInt64 = 14_250_000_000 // 142.50 ZEC

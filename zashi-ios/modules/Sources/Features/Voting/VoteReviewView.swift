@@ -2,6 +2,7 @@ import SwiftUI
 import ComposableArchitecture
 import Generated
 import UIComponents
+import VotingModels
 
 struct VoteReviewView: View {
     @Environment(\.colorScheme) var colorScheme

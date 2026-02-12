@@ -1,8 +1,15 @@
 import Foundation
 import ComposableArchitecture
+import VotingAPIClient
+import VotingCryptoClient
+import VotingModels
+import VotingStorageClient
 
 @Reducer
 public struct Voting {
+    @Dependency(\.votingAPI) var votingAPI
+    @Dependency(\.votingCrypto) var votingCrypto
+    @Dependency(\.votingStorage) var votingStorage
     @ObservableState
     public struct State: Equatable {
         public enum Screen: Equatable {
@@ -162,12 +169,20 @@ public struct Voting {
 
             case .startDelegationProof:
                 state.delegationProofStatus = .generating(progress: 0)
-                return .run { send in
-                    for step in 1...8 {
-                        try await Task.sleep(for: .milliseconds(500))
-                        await send(.delegationProofProgress(Double(step) / 8.0))
+                return .run { [votingCrypto] send in
+                    // In the full flow: constructDelegationAction → fetch proofs → buildDelegationWitness → generateDelegationProof
+                    // For now the witness is a placeholder; the stub streams progress over ~4s
+                    let witness = Data()
+                    for try await event in votingCrypto.generateDelegationProof(witness) {
+                        switch event {
+                        case .progress(let p):
+                            await send(.delegationProofProgress(p))
+                        case .completed:
+                            await send(.delegationProofCompleted)
+                        }
                     }
-                    await send(.delegationProofCompleted)
+                } catch: { error, send in
+                    await send(.delegationProofFailed(error.localizedDescription))
                 }
 
             case .delegationProofProgress(let progress):
@@ -280,13 +295,41 @@ public struct Voting {
             case .submitVotesTapped:
                 state.screenStack.append(.voteSubmission)
                 state.submissionStatus = .submitting(proposalIndex: 0, total: state.totalProposals)
-                return .run { [total = state.totalProposals] send in
-                    for index in 0..<total {
+                let proposals = state.votingRound.proposals
+                let votes = state.votes
+                let total = state.totalProposals
+                return .run { [votingAPI, votingCrypto] send in
+                    for (index, proposal) in proposals.enumerated() {
                         await send(.submissionProgress(index, total))
-                        try await Task.sleep(for: .milliseconds(400))
+
+                        guard let choice = votes[proposal.id] else { continue }
+
+                        // Build vote commitment (ZKP #2) — drain stream to completion
+                        let mockWitness = Data()
+                        var proofData = Data()
+                        for try await event in votingCrypto.buildVoteCommitment(proposal.id, choice, [], mockWitness) {
+                            if case .completed(let proof) = event {
+                                proofData = proof
+                            }
+                        }
+
+                        // Submit vote commitment to chain
+                        let bundle = VoteCommitmentBundle(
+                            vanNullifier: Data(repeating: 0, count: 32),
+                            voteAuthorityNoteNew: Data(repeating: 0, count: 32),
+                            voteCommitment: Data(repeating: 0, count: 32),
+                            proposalId: proposal.id,
+                            proof: proofData
+                        )
+                        _ = try await votingAPI.submitVoteCommitment(bundle)
+
+                        // Build and delegate shares
+                        let payloads = try await votingCrypto.buildSharePayloads([], bundle)
+                        try await votingAPI.delegateShares(payloads)
                     }
-                    try await Task.sleep(for: .milliseconds(300))
                     await send(.submissionCompleted)
+                } catch: { error, send in
+                    await send(.submissionFailed(error.localizedDescription))
                 }
 
             // MARK: - Vote Submission

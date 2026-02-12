@@ -2,6 +2,7 @@ import SwiftUI
 import ComposableArchitecture
 import Generated
 import UIComponents
+import VotingModels
 
 struct ProposalDetailView: View {
     let store: StoreOf<Voting>
