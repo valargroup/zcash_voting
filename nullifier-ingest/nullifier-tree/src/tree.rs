@@ -3,9 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use ff::PrimeField as _;
-use incrementalmerkletree::{Altitude, Hashable as _};
-use orchard::tree::MerkleHashOrchard;
-use orchard::vote::OrchardHash;
+use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3};
 use pasta_curves::Fp;
 use rusqlite::Connection;
 
@@ -15,9 +13,6 @@ use rusqlite::Connection;
 /// → n + 1 ranges). Zcash mainnet currently has under 64M Orchard nullifiers.
 /// We plan for this circuit to support up to 256M nullifiers, so the tree
 /// needs capacity for ~2^28 leaves: `log2(256 << 20) + 1 = 29`.
-///
-/// NOTE: the orchard fork (`hhanh00/orchard`) currently hardcodes depth 32 in
-/// `calculate_merkle_paths`. That value must be updated to match this constant.
 pub const TREE_DEPTH: usize = 29;
 
 /// A gap range `[low, high]` representing an inclusive interval between two
@@ -50,7 +45,7 @@ pub const TREE_DEPTH: usize = 29;
 ///
 /// Empty slots are filled with a sentinel value `Fp::from(2)`. At each level
 /// of the tree, the empty hash is computed by self-hashing the level below:
-/// `empty[0] = 2`, `empty[i+1] = hash(level=i, empty[i], empty[i])`. Any
+/// `empty[0] = 2`, `empty[i+1] = hash(empty[i], empty[i])`. Any
 /// subtree consisting entirely of empty leaves collapses to the empty hash for
 /// that level. Odd-length layers are padded with the empty hash before hashing
 /// up to the next level.
@@ -74,12 +69,12 @@ pub fn list_nf_ranges(connection: &Connection) -> Result<Vec<Range>> {
 }
 
 /// Compute the Merkle root over the nullifier gap-range tree.
-pub fn compute_nf_root(connection: &Connection) -> Result<OrchardHash> {
+pub fn compute_nf_root(connection: &Connection) -> Result<Fp> {
     let ranges = list_nf_ranges(connection)?;
     let leaves = commit_ranges(&ranges);
     let empty = precompute_empty_hashes();
     let (root, _) = build_levels(&leaves, &empty);
-    Ok(OrchardHash(root.to_repr()))
+    Ok(root)
 }
 
 /// Build gap ranges from a sorted nullifier set.
@@ -101,32 +96,33 @@ pub fn build_nf_ranges(nfs: impl IntoIterator<Item = Fp>) -> Vec<Range> {
     ranges
 }
 
-/// Hash each `(low, high)` range pair into a single leaf commitment
-/// using the same hash function as the Merkle tree's level-0 combine.
+/// Hash two field elements using Poseidon with the P128Pow5T3 spec.
+///
+/// This is the single hash primitive used throughout the tree: leaf
+/// commitments (`hash(low, high)`) and internal node combines
+/// (`hash(left_child, right_child)`) both call this function.
+///
+/// Unlike the previous Sinsemilla-based hash, Poseidon does not use
+/// level-based domain separation — the same function is applied at
+/// every tree level. This is the standard approach for Poseidon
+/// Merkle trees (Semaphore, Tornado Cash, etc.).
+pub fn poseidon_hash(left: Fp, right: Fp) -> Fp {
+    poseidon::Hash::<_, P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash([left, right])
+}
+
+/// Hash each `(low, high)` range pair into a single leaf commitment.
 pub fn commit_ranges(ranges: &[Range]) -> Vec<Fp> {
     ranges
         .iter()
-        .map(|[low, high]| {
-            let left = MerkleHashOrchard::from_base(*low);
-            let right = MerkleHashOrchard::from_base(*high);
-            MerkleHashOrchard::combine(Altitude::from(0), &left, &right).inner()
-        })
+        .map(|[low, high]| poseidon_hash(*low, *high))
         .collect()
-}
-
-/// Hash two child nodes at the given tree level using the Sinsemilla-based
-/// combine from the Orchard Merkle tree.
-fn combine(level: u8, left: Fp, right: Fp) -> Fp {
-    let l = MerkleHashOrchard::from_base(left);
-    let r = MerkleHashOrchard::from_base(right);
-    MerkleHashOrchard::combine(Altitude::from(level), &l, &r).inner()
 }
 
 /// Pre-compute the empty subtree hash at each tree level.
 ///
 /// `empty[0]` is the sentinel empty leaf value `Fp::from(2)`.
 /// `empty[i]` is the hash of a fully-empty subtree of height `i`, computed as
-/// `combine(level = i-1, empty[i-1], empty[i-1])`.
+/// `poseidon_hash(empty[i-1], empty[i-1])`.
 ///
 /// These are used during tree construction and proof generation to represent
 /// the hash of any subtree that contains no populated leaves, avoiding the
@@ -135,7 +131,7 @@ pub fn precompute_empty_hashes() -> [Fp; TREE_DEPTH] {
     let mut empty = [Fp::default(); TREE_DEPTH];
     empty[0] = Fp::from(2u64);
     for i in 1..TREE_DEPTH {
-        empty[i] = combine((i - 1) as u8, empty[i - 1], empty[i - 1]);
+        empty[i] = poseidon_hash(empty[i - 1], empty[i - 1]);
     }
     empty
 }
@@ -147,10 +143,9 @@ pub fn precompute_empty_hashes() -> [Fp; TREE_DEPTH] {
 /// even length using the pre-computed empty hash for that level so that
 /// pair-wise hashing produces the next level cleanly.
 ///
-/// This is the tree's own construction — it uses [`TREE_DEPTH`] levels
-/// (not the orchard fork's hardcoded 32) and retains every intermediate
-/// layer so that Merkle auth paths can be extracted in O([`TREE_DEPTH`])
-/// via simple sibling lookups.
+/// This uses [`TREE_DEPTH`] levels and retains every intermediate layer so
+/// that Merkle auth paths can be extracted in O([`TREE_DEPTH`]) via simple
+/// sibling lookups.
 fn build_levels(leaves: &[Fp], empty: &[Fp; TREE_DEPTH]) -> (Fp, Vec<Vec<Fp>>) {
     let mut levels: Vec<Vec<Fp>> = Vec::with_capacity(TREE_DEPTH);
 
@@ -170,7 +165,7 @@ fn build_levels(leaves: &[Fp], empty: &[Fp; TREE_DEPTH]) -> (Fp, Vec<Vec<Fp>>) {
         let pairs = prev.len() / 2;
         let mut next = Vec::with_capacity(pairs + 1);
         for j in 0..pairs {
-            next.push(combine(i as u8, prev[j * 2], prev[j * 2 + 1]));
+            next.push(poseidon_hash(prev[j * 2], prev[j * 2 + 1]));
         }
         if next.len() & 1 == 1 {
             next.push(empty[i + 1]);
@@ -180,7 +175,7 @@ fn build_levels(leaves: &[Fp], empty: &[Fp; TREE_DEPTH]) -> (Fp, Vec<Vec<Fp>>) {
 
     // The final level has exactly two nodes; hash them to get the root.
     let top = &levels[TREE_DEPTH - 1];
-    let root = combine((TREE_DEPTH - 1) as u8, top[0], top[1]);
+    let root = poseidon_hash(top[0], top[1]);
 
     (root, levels)
 }
@@ -300,13 +295,8 @@ impl NullifierTree {
         Self { ranges, levels, empty_hashes, root }
     }
 
-    /// The Merkle root of the tree.
-    pub fn root(&self) -> OrchardHash {
-        OrchardHash(self.root.to_repr())
-    }
-
-    /// The raw Merkle root as an `Fp`.
-    pub fn root_fp(&self) -> Fp {
+    /// The Merkle root of the tree as an `Fp`.
+    pub fn root(&self) -> Fp {
         self.root
     }
 
@@ -379,24 +369,20 @@ impl ExclusionProof {
             return false;
         }
         // Recompute the leaf commitment
-        let left = MerkleHashOrchard::from_base(low);
-        let right = MerkleHashOrchard::from_base(high);
-        let expected_leaf = MerkleHashOrchard::combine(Altitude::from(0), &left, &right).inner();
+        let expected_leaf = poseidon_hash(low, high);
         if self.leaf != expected_leaf {
             return false;
         }
         // Walk the auth path from leaf to root
         let mut current = self.leaf;
         let mut pos = self.position;
-        for (i, sibling) in self.auth_path.iter().enumerate() {
+        for sibling in self.auth_path.iter() {
             let (l, r) = if pos & 1 == 0 {
                 (current, *sibling)
             } else {
                 (*sibling, current)
             };
-            let lh = MerkleHashOrchard::from_base(l);
-            let rh = MerkleHashOrchard::from_base(r);
-            current = MerkleHashOrchard::combine(Altitude::from(i as u8), &lh, &rh).inner();
+            current = poseidon_hash(l, r);
             pos >>= 1;
         }
         current == root
@@ -406,8 +392,6 @@ impl ExclusionProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orchard::note::ExtractedNoteCommitment;
-    use orchard::vote::calculate_merkle_paths;
 
     /// Helper: make an Fp from a u64.
     fn fp(v: u64) -> Fp {
@@ -468,13 +452,13 @@ mod tests {
     fn test_merkle_root_is_deterministic() {
         let tree1 = NullifierTree::build(four_nullifiers());
         let tree2 = NullifierTree::build(four_nullifiers());
-        assert_eq!(tree1.root_fp(), tree2.root_fp());
+        assert_eq!(tree1.root(), tree2.root());
     }
 
     #[test]
     fn test_merkle_paths_verify_for_each_range() {
         let tree = NullifierTree::build(four_nullifiers());
-        let root = tree.root_fp();
+        let root = tree.root();
 
         // Verify an exclusion proof for a value in every range
         let test_values = [fp(5), fp(15), fp(25), fp(35), fp(41)];
@@ -492,7 +476,7 @@ mod tests {
     #[test]
     fn test_exclusion_proof_end_to_end() {
         let tree = NullifierTree::build(four_nullifiers());
-        let root = tree.root_fp();
+        let root = tree.root();
 
         // Prove that 15 is not a nullifier
         let value = fp(15);
@@ -509,7 +493,7 @@ mod tests {
     #[test]
     fn test_proof_verify_rejects_wrong_value() {
         let tree = NullifierTree::build(four_nullifiers());
-        let root = tree.root_fp();
+        let root = tree.root();
 
         let proof = tree.prove(fp(15)).unwrap();
         // A value outside the range should fail verification
@@ -554,7 +538,7 @@ mod tests {
 
         tree.save(&path).unwrap();
         let loaded = NullifierTree::load(&path).unwrap();
-        assert_eq!(tree.root_fp(), loaded.root_fp());
+        assert_eq!(tree.root(), loaded.root());
         assert_eq!(tree.ranges(), loaded.ranges());
 
         std::fs::remove_file(&path).unwrap();
@@ -564,32 +548,7 @@ mod tests {
     fn test_unsorted_input_produces_same_tree() {
         let sorted = NullifierTree::build(four_nullifiers());
         let unsorted = NullifierTree::build(vec![fp(30), fp(10), fp(40), fp(20)]);
-        assert_eq!(sorted.root_fp(), unsorted.root_fp());
-    }
-
-    #[test]
-    fn test_proof_cross_verified_with_orchard() {
-        let tree = NullifierTree::build(four_nullifiers());
-        let leaves = commit_ranges(tree.ranges());
-
-        // The orchard fork uses depth 32 while we use TREE_DEPTH (29).
-        // Both should be internally consistent, but produce different roots.
-
-        // Verify the orchard fork's paths are self-consistent at depth 32.
-        let (orchard_root, paths) = calculate_merkle_paths(0, &[1], &leaves);
-        let path = &paths[0];
-        let mp = path.to_orchard_merkle_tree();
-        let anchor = mp.root(
-            ExtractedNoteCommitment::from_bytes(&path.value.to_repr()).unwrap(),
-        );
-        assert_eq!(orchard_root.to_repr(), anchor.to_bytes());
-
-        // Leaf values must agree between both implementations.
-        assert_eq!(path.value, tree.leaves()[1]);
-
-        // Our own prove + verify is self-consistent at depth 29.
-        let proof = tree.prove(fp(15)).unwrap();
-        assert!(proof.verify(fp(15), tree.root_fp()));
+        assert_eq!(sorted.root(), unsorted.root());
     }
 
     #[test]
@@ -601,7 +560,7 @@ mod tests {
 
         // Each subsequent level is the self-hash of the level below.
         for i in 1..TREE_DEPTH {
-            let expected = combine((i - 1) as u8, empty[i - 1], empty[i - 1]);
+            let expected = poseidon_hash(empty[i - 1], empty[i - 1]);
             assert_eq!(
                 empty[i], expected,
                 "empty hash mismatch at level {}",
@@ -620,7 +579,7 @@ mod tests {
             let next = &tree.levels[i + 1];
             let pairs = prev.len() / 2;
             for j in 0..pairs {
-                let expected = combine(i as u8, prev[j * 2], prev[j * 2 + 1]);
+                let expected = poseidon_hash(prev[j * 2], prev[j * 2 + 1]);
                 assert_eq!(
                     next[j], expected,
                     "level {} node {} does not match hash of level {} children",
@@ -631,8 +590,8 @@ mod tests {
 
         // Root should be the hash of the top-level pair.
         let top = &tree.levels[TREE_DEPTH - 1];
-        let expected_root = combine((TREE_DEPTH - 1) as u8, top[0], top[1]);
-        assert_eq!(tree.root_fp(), expected_root);
+        let expected_root = poseidon_hash(top[0], top[1]);
+        assert_eq!(tree.root(), expected_root);
     }
 
     #[test]

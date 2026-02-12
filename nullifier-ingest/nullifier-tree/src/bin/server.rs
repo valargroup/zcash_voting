@@ -124,7 +124,7 @@ async fn exclusion_proof(
                 position: proof.position,
                 leaf: fp_hex(&proof.leaf),
                 auth_path: proof.auth_path.iter().map(fp_hex).collect(),
-                root: fp_hex(&state.tree.root_fp()),
+                root: fp_hex(&state.tree.root()),
             };
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -140,7 +140,7 @@ async fn exclusion_proof(
 
 async fn root(State(state): State<Arc<AppState>>) -> Json<RootJson> {
     Json(RootJson {
-        root: fp_hex(&state.tree.root_fp()),
+        root: fp_hex(&state.tree.root()),
     })
 }
 
@@ -148,7 +148,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthJson> {
     Json(HealthJson {
         status: "ok".into(),
         num_ranges: state.tree.len(),
-        root: fp_hex(&state.tree.root_fp()),
+        root: fp_hex(&state.tree.root()),
     })
 }
 
@@ -175,7 +175,7 @@ async fn main() -> Result<()> {
     eprintln!(
         "Tree loaded: {} ranges, root = {}",
         tree.len(),
-        fp_hex(&tree.root_fp())
+        fp_hex(&tree.root())
     );
 
     let state = Arc::new(AppState { tree });

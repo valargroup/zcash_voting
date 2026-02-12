@@ -97,7 +97,7 @@ The Zcash sandblasting attack periods (heights ~1.7M-1.85M and ~2.0M-2.5M) conta
 
 An exclusion proof shows that a given nullifier value falls inside a **gap range** (an interval between two adjacent on-chain nullifiers), meaning it has never been spent.
 
-Each leaf in the Merkle tree is a **commitment to a `(low, high)` range pair** — `hash(low, high)` using the same Sinsemilla-based combine as the rest of the tree. Given on-chain nullifiers `n1, n2`, the leaves are:
+Each leaf in the Merkle tree is a **commitment to a `(low, high)` range pair** — `poseidon_hash(low, high)` using the Poseidon hash function (P128Pow5T3 spec over the Pallas base field). The same hash is used at every tree level with no level-based domain separation. Given on-chain nullifiers `n1, n2`, the leaves are:
 
 ```
 hash(0, n1-1) | hash(n1+1, n2-1) | hash(n2+1, max)
@@ -106,30 +106,27 @@ hash(0, n1-1) | hash(n1+1, n2-1) | hash(n2+1, max)
 A single Merkle path proves a committed range is in the tree. The prover then reveals `(low, high)` and the verifier checks the hash matches and the target value falls within.
 
 ```rust
-use nullifier_tree::{list_nf_ranges, commit_ranges, find_range_for_value};
-use orchard::vote::calculate_merkle_paths;
+use nullifier_tree::NullifierTree;
 use rusqlite::Connection;
 
-// 1. Open the nullifier database
+// 1. Open the nullifier database and build the tree
 let conn = Connection::open("nullifiers.db")?;
+let tree = NullifierTree::from_db(&conn)?;
 
-// 2. Build gap ranges and commit each (low, high) pair into a leaf hash
-let ranges = list_nf_ranges(&conn)?;
-let leaves = commit_ranges(&ranges);
-
-// 3. Find which gap range contains your value
-let my_nullifier: Fp = /* ... */;
-let range_idx = find_range_for_value(&ranges, my_nullifier)
+// 2. Generate an exclusion proof for a value
+let my_value: Fp = /* ... */;
+let proof = tree.prove(my_value)
     .expect("value IS an existing nullifier — no exclusion proof possible");
 
-// 4. Get the Merkle path for this leaf
-let pos = range_idx as u32;
-let (root, paths) = calculate_merkle_paths(0, &[pos], &leaves);
+// 3. Verify the proof
+let root = tree.root();
+assert!(proof.verify(my_value, root));
 
-// The proof is:
-//   - Merkle path reconstructs to root
-//   - hash(low, high) matches the leaf
-//   - my_nullifier ∈ [low, high]
+// The proof contains:
+//   - proof.range: the (low, high) gap range
+//   - proof.leaf: poseidon_hash(low, high) commitment
+//   - proof.auth_path: Merkle sibling hashes from leaf to root
+//   - Verifier checks: hash matches, path reconstructs to root, value ∈ [low, high]
 ```
 
 Run the built-in test binary to verify end-to-end:

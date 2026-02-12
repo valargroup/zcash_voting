@@ -18,7 +18,7 @@ r2d2_sqlite = "0.22"
 r2d2 = "0.8"
 pasta_curves = "0.5"
 ff = "0.13"
-incrementalmerkletree = "0.3.1"
+halo2_gadgets = { git = "https://github.com/zcash/halo2.git", rev = "642924d614305d882cc122739c59144109f4bd3f", default-features = false }
 
 [patch.crates-io]
 orchard = { git = "https://github.com/hhanh00/orchard.git", rev = "768c365" }
