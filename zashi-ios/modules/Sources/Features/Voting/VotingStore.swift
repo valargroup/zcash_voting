@@ -63,6 +63,12 @@ public struct Voting {
             delegationProofStatus == .complete
         }
 
+        /// Whether the previous vote's VAN has landed in the vote commitment tree.
+        /// Always true in the prototype; real implementation checks tree sync.
+        public var canConfirmVote: Bool {
+            true
+        }
+
         public var nextUnvotedProposalId: UInt32? {
             votingRound.proposals.first { votes[$0.id] == nil }?.id
         }
@@ -118,6 +124,7 @@ public struct Voting {
         // Proposal detail
         case castVote(proposalId: UInt32, choice: VoteChoice)
         case confirmVote
+        case cancelPendingVote
         case advanceAfterVote(nextId: UInt32?)
         case backToList
         case nextProposalDetail
@@ -197,6 +204,10 @@ public struct Voting {
                 // If already confirmed for this proposal, ignore
                 guard state.votes[proposalId] == nil else { return .none }
                 state.pendingVote = .init(proposalId: proposalId, choice: choice)
+                return .none
+
+            case .cancelPendingVote:
+                state.pendingVote = nil
                 return .none
 
             case .confirmVote:

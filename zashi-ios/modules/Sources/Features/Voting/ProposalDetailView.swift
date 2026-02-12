@@ -5,6 +5,8 @@ import UIComponents
 import VotingModels
 
 struct ProposalDetailView: View {
+    @Environment(\.colorScheme) var colorScheme
+
     let store: StoreOf<Voting>
     let proposal: Proposal
 
@@ -12,48 +14,53 @@ struct ProposalDetailView: View {
 
     var body: some View {
         WithPerceptionTracking {
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        // Header
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let zip = proposal.zipNumber {
-                                ZIPBadge(zipNumber: zip)
+            ZStack {
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            // Header
+                            VStack(alignment: .leading, spacing: 8) {
+                                if let zip = proposal.zipNumber {
+                                    ZIPBadge(zipNumber: zip)
+                                }
+
+                                Text(proposal.title)
+                                    .zFont(.semiBold, size: 22, style: Design.Text.primary)
+
+                                Text(proposal.description)
+                                    .zFont(.regular, size: 15, style: Design.Text.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
 
-                            Text(proposal.title)
-                                .zFont(.semiBold, size: 22, style: Design.Text.primary)
-
-                            Text(proposal.description)
-                                .zFont(.regular, size: 15, style: Design.Text.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        // Forum link
-                        if let url = proposal.forumURL {
-                            Link(destination: url) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "bubble.left.and.text.bubble.right")
-                                        .font(.caption)
-                                    Text("View Forum Discussion")
-                                        .zFont(.medium, size: 14, style: Design.Text.link)
+                            // Forum link
+                            if let url = proposal.forumURL {
+                                Link(destination: url) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "bubble.left.and.text.bubble.right")
+                                            .font(.caption)
+                                        Text("View Forum Discussion")
+                                            .zFont(.medium, size: 14, style: Design.Text.link)
+                                    }
                                 }
                             }
+
+                            Spacer().frame(height: 8)
+
+                            // Vote section
+                            voteSection()
+
+                            Spacer()
                         }
-
-                        Spacer().frame(height: 8)
-
-                        // Vote section
-                        voteSection()
-
-                        Spacer()
+                        .padding(.horizontal, 24)
+                        .padding(.top, 16)
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 16)
+
+                    // Bottom prev/next navigation
+                    proposalNavigationBar()
                 }
 
-                // Bottom prev/next navigation
-                proposalNavigationBar()
+                // Confirmation overlay
+                confirmationOverlay()
             }
             .navigationTitle(positionLabel)
             .navigationBarTitleDisplayMode(.inline)
@@ -168,10 +175,6 @@ struct ProposalDetailView: View {
                 ) {
                     store.send(.castVote(proposalId: proposal.id, choice: .oppose))
                 }
-
-                if let pending = pendingChoice {
-                    confirmationArea(choice: pending)
-                }
             }
         }
     }
@@ -200,27 +203,104 @@ struct ProposalDetailView: View {
         )
     }
 
-    @ViewBuilder
-    private func confirmationArea(choice: VoteChoice) -> some View {
-        VStack(spacing: 10) {
-            Text("This vote cannot be changed once confirmed.")
-                .zFont(.regular, size: 13, style: Design.Text.secondary)
-                .multilineTextAlignment(.center)
+    // MARK: - Confirmation Overlay
 
-            Button {
-                impactFeedback.impactOccurred()
-                store.send(.confirmVote)
-            } label: {
-                Text("Confirm \(choice.label)")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundStyle(.white)
-                    .background(voteColor(choice))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+    @ViewBuilder
+    private func confirmationOverlay() -> some View {
+        let pendingChoice: VoteChoice? = {
+            guard let pending = store.pendingVote,
+                  pending.proposalId == proposal.id else { return nil }
+            return pending.choice
+        }()
+
+        if let choice = pendingChoice {
+            let canConfirm = store.canConfirmVote
+
+            ZStack {
+                // Dimmed background — tap to dismiss
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        store.send(.cancelPendingVote)
+                    }
+
+                // Overlay card
+                VStack(spacing: 0) {
+                    // Icon
+                    ZStack {
+                        Circle()
+                            .fill(voteColor(choice).opacity(0.12))
+                            .frame(width: 64, height: 64)
+                        Image(systemName: choice == .support ? "hand.thumbsup.fill" : "hand.thumbsdown.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(voteColor(choice))
+                    }
+                    .padding(.top, 28)
+                    .padding(.bottom, 16)
+
+                    // Title
+                    Text("Confirm your vote")
+                        .zFont(.semiBold, size: 20, style: Design.Text.primary)
+                        .padding(.bottom, 6)
+
+                    // Choice
+                    Text(choice.label)
+                        .zFont(.semiBold, size: 16, style: Design.Text.primary)
+                        .foregroundStyle(voteColor(choice))
+                        .padding(.bottom, 12)
+
+                    // Warning
+                    Text("This is final. Your vote will be\npublished and cannot be changed.")
+                        .zFont(.medium, size: 14, style: Design.Text.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.bottom, 24)
+
+                    // Processing state
+                    if !canConfirm {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Processing previous vote...")
+                                .zFont(.regular, size: 13, style: Design.Text.secondary)
+                        }
+                        .padding(.bottom, 16)
+                    }
+
+                    // Buttons
+                    VStack(spacing: 10) {
+                        Button {
+                            impactFeedback.impactOccurred()
+                            store.send(.confirmVote)
+                        } label: {
+                            Text("Confirm \(choice.label)")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .foregroundStyle(.white)
+                                .background(canConfirm ? voteColor(choice) : voteColor(choice).opacity(0.4))
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                        .disabled(!canConfirm)
+
+                        Button {
+                            store.send(.cancelPendingVote)
+                        } label: {
+                            Text("Go Back")
+                                .zFont(.medium, size: 15, style: Design.Text.primary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
+                }
+                .background(Design.Surfaces.bgPrimary.color(colorScheme))
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+                .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
+                .padding(.horizontal, 32)
             }
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: store.pendingVote)
         }
-        .padding(.top, 4)
     }
 
     // MARK: - Components
