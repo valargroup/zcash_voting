@@ -3,23 +3,23 @@ import Foundation
 import VotingModels
 
 private actor VotingStore {
-    var hotkeys: [String: VotingHotkey] = [:]
-    var delegations: [String: DelegationRegistration] = [:]
-    var sessions: [String: VotingSession] = [:]
+    var hotkeys: [Data: VotingHotkey] = [:]
+    var delegations: [Data: DelegationRegistration] = [:]
+    var sessions: [Data: VotingSession] = [:]
 
-    func storeHotkey(roundId: String, hotkey: VotingHotkey) {
+    func storeHotkey(roundId: Data, hotkey: VotingHotkey) {
         hotkeys[roundId] = hotkey
     }
 
-    func loadHotkey(roundId: String) -> VotingHotkey? {
+    func loadHotkey(roundId: Data) -> VotingHotkey? {
         hotkeys[roundId]
     }
 
-    func storeDelegation(roundId: String, registration: DelegationRegistration) {
+    func storeDelegation(roundId: Data, registration: DelegationRegistration) {
         delegations[roundId] = registration
     }
 
-    func loadDelegation(roundId: String) -> DelegationRegistration? {
+    func loadDelegation(roundId: Data) -> DelegationRegistration? {
         delegations[roundId]
     }
 
@@ -27,11 +27,11 @@ private actor VotingStore {
         sessions[session.voteRoundId] = session
     }
 
-    func loadSession(roundId: String) -> VotingSession? {
+    func loadSession(roundId: Data) -> VotingSession? {
         sessions[roundId]
     }
 
-    func clearRound(roundId: String) {
+    func clearRound(roundId: Data) {
         hotkeys.removeValue(forKey: roundId)
         delegations.removeValue(forKey: roundId)
         sessions.removeValue(forKey: roundId)

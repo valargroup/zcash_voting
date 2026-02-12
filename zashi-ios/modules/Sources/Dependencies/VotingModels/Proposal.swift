@@ -1,14 +1,16 @@
 import Foundation
 
+/// Maps to Proposal message (zvote/v1/types.proto).
+/// Chain uses uint32 id. UI-only metadata (zipNumber, forumURL) comes from off-chain sources.
 public struct Proposal: Equatable, Identifiable, Sendable {
-    public let id: String
+    public let id: UInt32
     public let title: String
     public let description: String
     public let zipNumber: String?
     public let forumURL: URL?
 
     public init(
-        id: String,
+        id: UInt32,
         title: String,
         description: String,
         zipNumber: String? = nil,

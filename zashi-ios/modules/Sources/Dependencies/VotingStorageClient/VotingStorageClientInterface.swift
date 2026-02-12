@@ -11,11 +11,11 @@ extension DependencyValues {
 
 @DependencyClient
 public struct VotingStorageClient {
-    public var storeHotkey: @Sendable (_ roundId: String, _ hotkey: VotingHotkey) async throws -> Void
-    public var loadHotkey: @Sendable (_ roundId: String) async -> VotingHotkey?
-    public var storeDelegation: @Sendable (_ roundId: String, _ registration: DelegationRegistration) async throws -> Void
-    public var loadDelegation: @Sendable (_ roundId: String) async -> DelegationRegistration?
+    public var storeHotkey: @Sendable (_ roundId: Data, _ hotkey: VotingHotkey) async throws -> Void
+    public var loadHotkey: @Sendable (_ roundId: Data) async -> VotingHotkey?
+    public var storeDelegation: @Sendable (_ roundId: Data, _ registration: DelegationRegistration) async throws -> Void
+    public var loadDelegation: @Sendable (_ roundId: Data) async -> DelegationRegistration?
     public var storeSession: @Sendable (_ session: VotingSession) async throws -> Void
-    public var loadSession: @Sendable (_ roundId: String) async -> VotingSession?
-    public var clearRound: @Sendable (_ roundId: String) async -> Void
+    public var loadSession: @Sendable (_ roundId: Data) async -> VotingSession?
+    public var clearRound: @Sendable (_ roundId: Data) async -> Void
 }

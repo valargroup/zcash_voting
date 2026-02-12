@@ -30,7 +30,7 @@ public struct VotingCryptoClient {
         _ eaPK: Data
     ) async throws -> [EncryptedShare]
     public var buildVoteCommitment: @Sendable (
-        _ proposalId: String,
+        _ proposalId: UInt32,
         _ choice: VoteChoice,
         _ encShares: [EncryptedShare],
         _ vanWitness: Data

@@ -15,7 +15,7 @@ public struct Voting {
         public enum Screen: Equatable {
             case delegationSigning
             case proposalList
-            case proposalDetail(id: String)
+            case proposalDetail(id: UInt32)
             case voteReview
             case voteSubmission
             case complete
@@ -23,12 +23,12 @@ public struct Voting {
 
         public var screenStack: [Screen] = [.delegationSigning]
         public var votingRound: VotingRound
-        public var votes: [String: VoteChoice] = [:]
+        public var votes: [UInt32: VoteChoice] = [:]
         public var votingWeight: UInt64
         public var isKeystoneUser: Bool
 
         // Which proposal the bottom bar targets
-        public var selectedProposalId: String?
+        public var selectedProposalId: UInt32?
 
         // ZKP #1 (delegation) — runs in background
         public var delegationProofStatus: ProofStatus = .notStarted
@@ -65,11 +65,11 @@ public struct Voting {
             allVoted && isDelegationReady
         }
 
-        public var nextUnvotedProposalId: String? {
+        public var nextUnvotedProposalId: UInt32? {
             votingRound.proposals.first { votes[$0.id] == nil }?.id
         }
 
-        public var activeProposalId: String? {
+        public var activeProposalId: UInt32? {
             selectedProposalId ?? nextUnvotedProposalId
         }
 
@@ -115,20 +115,20 @@ public struct Voting {
         case delegationProofFailed(String)
 
         // Proposal list
-        case proposalTapped(String)
+        case proposalTapped(UInt32)
         case bottomBarNext
         case bottomBarPrevious
 
         // Proposal detail
-        case castVote(proposalId: String, choice: VoteChoice)
-        case advanceAfterVote(nextId: String?)
+        case castVote(proposalId: UInt32, choice: VoteChoice)
+        case advanceAfterVote(nextId: UInt32?)
         case backToList
         case nextProposalDetail
         case previousProposalDetail
 
         // Vote review
         case reviewVotesTapped
-        case editVote(proposalId: String)
+        case editVote(proposalId: UInt32)
         case submitVotesTapped
 
         // Vote submission
@@ -319,7 +319,9 @@ public struct Voting {
                             voteAuthorityNoteNew: Data(repeating: 0, count: 32),
                             voteCommitment: Data(repeating: 0, count: 32),
                             proposalId: proposal.id,
-                            proof: proofData
+                            proof: proofData,
+                            voteRoundId: Data(repeating: 0, count: 32),
+                            voteCommTreeAnchorHeight: 0
                         )
                         _ = try await votingAPI.submitVoteCommitment(bundle)
 
@@ -357,7 +359,7 @@ public struct Voting {
     }
 
     // Find the next unvoted proposal after the given one (wrapping around)
-    private func nextUnvotedId(after proposalId: String, in state: State) -> String? {
+    private func nextUnvotedId(after proposalId: UInt32, in state: State) -> UInt32? {
         let proposals = state.votingRound.proposals
         guard let currentIndex = proposals.firstIndex(where: { $0.id == proposalId }) else { return nil }
 

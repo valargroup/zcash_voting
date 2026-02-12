@@ -9,7 +9,7 @@ extension VotingAPIClient: DependencyKey {
                 // Stub: return mock session matching the prototype's VotingRound
                 try await Task.sleep(for: .milliseconds(200))
                 return VotingSession(
-                    voteRoundId: "nu7-sentiment-0xab3f7c91e2d4",
+                    voteRoundId: Data(repeating: 0xAB, count: 32),
                     snapshotHeight: 2_800_000,
                     snapshotBlockhash: Data(repeating: 0xAB, count: 32),
                     proposalsHash: Data(repeating: 0xCD, count: 32),
@@ -20,6 +20,7 @@ extension VotingAPIClient: DependencyKey {
                     vkZkp3: Data(repeating: 0x04, count: 32),
                     ncRoot: Data(repeating: 0x05, count: 32),
                     nullifierIMTRoot: Data(repeating: 0x06, count: 32),
+                    creator: "zvote1admin",
                     proposals: [],
                     status: .active
                 )

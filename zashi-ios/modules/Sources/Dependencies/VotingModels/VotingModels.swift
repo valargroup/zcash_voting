@@ -2,8 +2,10 @@ import Foundation
 
 // MARK: - Session & Round
 
+/// Full on-chain representation from VoteRound proto (zvote/v1/types.proto).
+/// vote_round_id is a 32-byte Blake2b hash derived on-chain from session setup fields.
 public struct VotingSession: Equatable, Sendable {
-    public let voteRoundId: String
+    public let voteRoundId: Data
     public let snapshotHeight: UInt64
     public let snapshotBlockhash: Data
     public let proposalsHash: Data
@@ -14,11 +16,12 @@ public struct VotingSession: Equatable, Sendable {
     public let vkZkp3: Data
     public let ncRoot: Data
     public let nullifierIMTRoot: Data
+    public let creator: String
     public let proposals: [Proposal]
     public let status: SessionStatus
 
     public init(
-        voteRoundId: String,
+        voteRoundId: Data,
         snapshotHeight: UInt64,
         snapshotBlockhash: Data,
         proposalsHash: Data,
@@ -29,6 +32,7 @@ public struct VotingSession: Equatable, Sendable {
         vkZkp3: Data,
         ncRoot: Data,
         nullifierIMTRoot: Data,
+        creator: String,
         proposals: [Proposal],
         status: SessionStatus
     ) {
@@ -43,26 +47,30 @@ public struct VotingSession: Equatable, Sendable {
         self.vkZkp3 = vkZkp3
         self.ncRoot = ncRoot
         self.nullifierIMTRoot = nullifierIMTRoot
+        self.creator = creator
         self.proposals = proposals
         self.status = status
     }
 }
 
-public enum SessionStatus: Equatable, Sendable {
-    case active
-    case tallying
-    case finalized
+/// Maps to proto SessionStatus (zvote/v1/types.proto).
+public enum SessionStatus: UInt32, Equatable, Sendable {
+    case unspecified = 0
+    case active = 1
+    case tallying = 2
+    case finalized = 3
 }
 
+/// Lightweight subset of VotingSession passed to crypto operations.
 public struct VotingRoundParams: Equatable, Sendable {
-    public let voteRoundId: String
+    public let voteRoundId: Data
     public let snapshotHeight: UInt64
     public let eaPK: Data
     public let ncRoot: Data
     public let nullifierIMTRoot: Data
 
     public init(
-        voteRoundId: String,
+        voteRoundId: Data,
         snapshotHeight: UInt64,
         eaPK: Data,
         ncRoot: Data,
@@ -92,6 +100,7 @@ public struct VotingHotkey: Equatable, Sendable {
 
 // MARK: - Delegation
 
+/// Intermediate client-side type: the built action before proof generation.
 public struct DelegationAction: Equatable, Sendable {
     public let actionBytes: Data
     public let rk: Data
@@ -104,15 +113,42 @@ public struct DelegationAction: Equatable, Sendable {
     }
 }
 
+/// Maps to MsgDelegateVote (zvote/v1/tx.proto).
+/// All fields needed for the on-chain delegation transaction.
 public struct DelegationRegistration: Equatable, Sendable {
     public let rk: Data
     public let spendAuthSig: Data
+    public let signedNoteNullifier: Data
+    public let cmxNew: Data
+    public let encMemo: Data
+    public let govComm: Data
+    public let govNullifiers: [Data]
     public let proof: Data
+    public let voteRoundId: Data
+    public let sighash: Data
 
-    public init(rk: Data, spendAuthSig: Data, proof: Data) {
+    public init(
+        rk: Data,
+        spendAuthSig: Data,
+        signedNoteNullifier: Data,
+        cmxNew: Data,
+        encMemo: Data,
+        govComm: Data,
+        govNullifiers: [Data],
+        proof: Data,
+        voteRoundId: Data,
+        sighash: Data
+    ) {
         self.rk = rk
         self.spendAuthSig = spendAuthSig
+        self.signedNoteNullifier = signedNoteNullifier
+        self.cmxNew = cmxNew
+        self.encMemo = encMemo
+        self.govComm = govComm
+        self.govNullifiers = govNullifiers
         self.proof = proof
+        self.voteRoundId = voteRoundId
+        self.sighash = sighash
     }
 }
 
@@ -132,31 +168,45 @@ public struct EncryptedShare: Equatable, Sendable {
     }
 }
 
+/// Maps to MsgCastVote (zvote/v1/tx.proto).
 public struct VoteCommitmentBundle: Equatable, Sendable {
     public let vanNullifier: Data
     public let voteAuthorityNoteNew: Data
     public let voteCommitment: Data
-    public let proposalId: String
+    public let proposalId: UInt32
     public let proof: Data
+    public let voteRoundId: Data
+    public let voteCommTreeAnchorHeight: UInt64
 
-    public init(vanNullifier: Data, voteAuthorityNoteNew: Data, voteCommitment: Data, proposalId: String, proof: Data) {
+    public init(
+        vanNullifier: Data,
+        voteAuthorityNoteNew: Data,
+        voteCommitment: Data,
+        proposalId: UInt32,
+        proof: Data,
+        voteRoundId: Data,
+        voteCommTreeAnchorHeight: UInt64
+    ) {
         self.vanNullifier = vanNullifier
         self.voteAuthorityNoteNew = voteAuthorityNoteNew
         self.voteCommitment = voteCommitment
         self.proposalId = proposalId
         self.proof = proof
+        self.voteRoundId = voteRoundId
+        self.voteCommTreeAnchorHeight = voteCommTreeAnchorHeight
     }
 }
 
+/// Payload sent to helper servers for share delegation (not directly to chain).
 public struct SharePayload: Equatable, Sendable {
     public let sharesHash: Data
-    public let proposalId: String
+    public let proposalId: UInt32
     public let voteDecision: UInt32
     public let encShare: EncryptedShare
     public let shareIndex: UInt32
     public let treePosition: UInt64
 
-    public init(sharesHash: Data, proposalId: String, voteDecision: UInt32, encShare: EncryptedShare, shareIndex: UInt32, treePosition: UInt64) {
+    public init(sharesHash: Data, proposalId: UInt32, voteDecision: UInt32, encShare: EncryptedShare, shareIndex: UInt32, treePosition: UInt64) {
         self.sharesHash = sharesHash
         self.proposalId = proposalId
         self.voteDecision = voteDecision
@@ -168,6 +218,7 @@ public struct SharePayload: Equatable, Sendable {
 
 // MARK: - Tree & Transactions
 
+/// Maps to CommitmentTreeState (zvote/v1/types.proto).
 public struct CommitmentTreeState: Equatable, Sendable {
     public let nextIndex: UInt64
     public let root: Data
@@ -180,16 +231,21 @@ public struct CommitmentTreeState: Equatable, Sendable {
     }
 }
 
+/// Maps to BroadcastResult from the REST API (api/handler.go).
 public struct TxResult: Equatable, Sendable {
     public let txHash: String
     public let code: UInt32
+    public let log: String
 
-    public init(txHash: String, code: UInt32) {
+    public init(txHash: String, code: UInt32, log: String = "") {
         self.txHash = txHash
         self.code = code
+        self.log = log
     }
 }
 
+/// Maps to QueryProposalTallyResponse (zvote/v1/query.proto).
+/// Chain returns map<uint32, uint64> (vote_decision → accumulated amount).
 public struct TallyResult: Equatable, Sendable {
     public struct Entry: Equatable, Sendable {
         public let decision: UInt32

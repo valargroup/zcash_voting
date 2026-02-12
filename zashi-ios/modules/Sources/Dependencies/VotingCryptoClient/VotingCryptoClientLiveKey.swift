@@ -76,7 +76,9 @@ extension VotingCryptoClient: DependencyKey {
                             voteAuthorityNoteNew: Data(repeating: 0x11, count: 32),
                             voteCommitment: Data(repeating: 0x12, count: 32),
                             proposalId: proposalId,
-                            proof: Data(repeating: 0x13, count: 64)
+                            proof: Data(repeating: 0x13, count: 64),
+                            voteRoundId: Data(repeating: 0, count: 32),
+                            voteCommTreeAnchorHeight: 0
                         )
                         continuation.yield(.completed(bundle.proof))
                         continuation.finish()

@@ -20,5 +20,5 @@ public struct VotingAPIClient {
     public var submitDelegation: @Sendable (_ registration: DelegationRegistration) async throws -> TxResult
     public var submitVoteCommitment: @Sendable (_ bundle: VoteCommitmentBundle) async throws -> TxResult
     public var delegateShares: @Sendable (_ payloads: [SharePayload]) async throws -> Void
-    public var fetchProposalTally: @Sendable (_ roundId: String, _ proposalId: String) async throws -> TallyResult
+    public var fetchProposalTally: @Sendable (_ roundId: Data, _ proposalId: UInt32) async throws -> TallyResult
 }
