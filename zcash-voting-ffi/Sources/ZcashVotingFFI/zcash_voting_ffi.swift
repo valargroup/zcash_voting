@@ -1142,18 +1142,16 @@ public struct RoundState {
     public var hotkeyAddress: String?
     public var delegatedWeight: UInt64?
     public var proofGenerated: Bool
-    public var votesCast: [String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(roundId: String, phase: RoundPhase, snapshotHeight: UInt64, hotkeyAddress: String?, delegatedWeight: UInt64?, proofGenerated: Bool, votesCast: [String]) {
+    public init(roundId: String, phase: RoundPhase, snapshotHeight: UInt64, hotkeyAddress: String?, delegatedWeight: UInt64?, proofGenerated: Bool) {
         self.roundId = roundId
         self.phase = phase
         self.snapshotHeight = snapshotHeight
         self.hotkeyAddress = hotkeyAddress
         self.delegatedWeight = delegatedWeight
         self.proofGenerated = proofGenerated
-        self.votesCast = votesCast
     }
 }
 
@@ -1182,9 +1180,6 @@ extension RoundState: Equatable, Hashable {
         if lhs.proofGenerated != rhs.proofGenerated {
             return false
         }
-        if lhs.votesCast != rhs.votesCast {
-            return false
-        }
         return true
     }
 
@@ -1195,7 +1190,6 @@ extension RoundState: Equatable, Hashable {
         hasher.combine(hotkeyAddress)
         hasher.combine(delegatedWeight)
         hasher.combine(proofGenerated)
-        hasher.combine(votesCast)
     }
 }
 
@@ -1213,8 +1207,7 @@ public struct FfiConverterTypeRoundState: FfiConverterRustBuffer {
                 snapshotHeight: FfiConverterUInt64.read(from: &buf), 
                 hotkeyAddress: FfiConverterOptionString.read(from: &buf), 
                 delegatedWeight: FfiConverterOptionUInt64.read(from: &buf), 
-                proofGenerated: FfiConverterBool.read(from: &buf), 
-                votesCast: FfiConverterSequenceString.read(from: &buf)
+                proofGenerated: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1225,7 +1218,6 @@ public struct FfiConverterTypeRoundState: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.hotkeyAddress, into: &buf)
         FfiConverterOptionUInt64.write(value.delegatedWeight, into: &buf)
         FfiConverterBool.write(value.proofGenerated, into: &buf)
-        FfiConverterSequenceString.write(value.votesCast, into: &buf)
     }
 }
 
@@ -1333,14 +1325,14 @@ public func FfiConverterTypeRoundSummary_lower(_ value: RoundSummary) -> RustBuf
 
 public struct SharePayload {
     public var sharesHash: Data
-    public var proposalId: String
+    public var proposalId: UInt32
     public var voteDecision: UInt32
     public var encShare: EncryptedShare
     public var treePosition: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(sharesHash: Data, proposalId: String, voteDecision: UInt32, encShare: EncryptedShare, treePosition: UInt64) {
+    public init(sharesHash: Data, proposalId: UInt32, voteDecision: UInt32, encShare: EncryptedShare, treePosition: UInt64) {
         self.sharesHash = sharesHash
         self.proposalId = proposalId
         self.voteDecision = voteDecision
@@ -1393,7 +1385,7 @@ public struct FfiConverterTypeSharePayload: FfiConverterRustBuffer {
         return
             try SharePayload(
                 sharesHash: FfiConverterData.read(from: &buf), 
-                proposalId: FfiConverterString.read(from: &buf), 
+                proposalId: FfiConverterUInt32.read(from: &buf), 
                 voteDecision: FfiConverterUInt32.read(from: &buf), 
                 encShare: FfiConverterTypeEncryptedShare.read(from: &buf), 
                 treePosition: FfiConverterUInt64.read(from: &buf)
@@ -1402,7 +1394,7 @@ public struct FfiConverterTypeSharePayload: FfiConverterRustBuffer {
 
     public static func write(_ value: SharePayload, into buf: inout [UInt8]) {
         FfiConverterData.write(value.sharesHash, into: &buf)
-        FfiConverterString.write(value.proposalId, into: &buf)
+        FfiConverterUInt32.write(value.proposalId, into: &buf)
         FfiConverterUInt32.write(value.voteDecision, into: &buf)
         FfiConverterTypeEncryptedShare.write(value.encShare, into: &buf)
         FfiConverterUInt64.write(value.treePosition, into: &buf)
@@ -1429,12 +1421,12 @@ public struct VoteCommitmentBundle {
     public var vanNullifier: Data
     public var voteAuthorityNoteNew: Data
     public var voteCommitment: Data
-    public var proposalId: String
+    public var proposalId: UInt32
     public var proof: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(vanNullifier: Data, voteAuthorityNoteNew: Data, voteCommitment: Data, proposalId: String, proof: Data) {
+    public init(vanNullifier: Data, voteAuthorityNoteNew: Data, voteCommitment: Data, proposalId: UInt32, proof: Data) {
         self.vanNullifier = vanNullifier
         self.voteAuthorityNoteNew = voteAuthorityNoteNew
         self.voteCommitment = voteCommitment
@@ -1489,7 +1481,7 @@ public struct FfiConverterTypeVoteCommitmentBundle: FfiConverterRustBuffer {
                 vanNullifier: FfiConverterData.read(from: &buf), 
                 voteAuthorityNoteNew: FfiConverterData.read(from: &buf), 
                 voteCommitment: FfiConverterData.read(from: &buf), 
-                proposalId: FfiConverterString.read(from: &buf), 
+                proposalId: FfiConverterUInt32.read(from: &buf), 
                 proof: FfiConverterData.read(from: &buf)
         )
     }
@@ -1498,7 +1490,7 @@ public struct FfiConverterTypeVoteCommitmentBundle: FfiConverterRustBuffer {
         FfiConverterData.write(value.vanNullifier, into: &buf)
         FfiConverterData.write(value.voteAuthorityNoteNew, into: &buf)
         FfiConverterData.write(value.voteCommitment, into: &buf)
-        FfiConverterString.write(value.proposalId, into: &buf)
+        FfiConverterUInt32.write(value.proposalId, into: &buf)
         FfiConverterData.write(value.proof, into: &buf)
     }
 }
@@ -1520,13 +1512,13 @@ public func FfiConverterTypeVoteCommitmentBundle_lower(_ value: VoteCommitmentBu
 
 
 public struct VoteRecord {
-    public var proposalId: String
+    public var proposalId: UInt32
     public var choice: UInt32
     public var submitted: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(proposalId: String, choice: UInt32, submitted: Bool) {
+    public init(proposalId: UInt32, choice: UInt32, submitted: Bool) {
         self.proposalId = proposalId
         self.choice = choice
         self.submitted = submitted
@@ -1568,14 +1560,14 @@ public struct FfiConverterTypeVoteRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VoteRecord {
         return
             try VoteRecord(
-                proposalId: FfiConverterString.read(from: &buf), 
+                proposalId: FfiConverterUInt32.read(from: &buf), 
                 choice: FfiConverterUInt32.read(from: &buf), 
                 submitted: FfiConverterBool.read(from: &buf)
         )
     }
 
     public static func write(_ value: VoteRecord, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.proposalId, into: &buf)
+        FfiConverterUInt32.write(value.proposalId, into: &buf)
         FfiConverterUInt32.write(value.choice, into: &buf)
         FfiConverterBool.write(value.submitted, into: &buf)
     }
@@ -2240,31 +2232,6 @@ fileprivate struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
-    typealias SwiftType = [String]
-
-    public static func write(_ value: [String], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterString.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [String]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterString.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterSequenceData: FfiConverterRustBuffer {
     typealias SwiftType = [Data]
 
@@ -2428,10 +2395,10 @@ public func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteComm
     )
 })
 }
-public func buildVoteCommitment(proposalId: String, choice: UInt32, encShares: [EncryptedShare], vanWitness: Data)throws  -> VoteCommitmentBundle  {
+public func buildVoteCommitment(proposalId: UInt32, choice: UInt32, encShares: [EncryptedShare], vanWitness: Data)throws  -> VoteCommitmentBundle  {
     return try  FfiConverterTypeVoteCommitmentBundle_lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_func_build_vote_commitment(
-        FfiConverterString.lower(proposalId),
+        FfiConverterUInt32.lower(proposalId),
         FfiConverterUInt32.lower(choice),
         FfiConverterSequenceTypeEncryptedShare.lower(encShares),
         FfiConverterData.lower(vanWitness),$0
@@ -2512,7 +2479,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zcash_voting_ffi_checksum_func_build_share_payloads() != 30529) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zcash_voting_ffi_checksum_func_build_vote_commitment() != 35901) {
+    if (uniffi_zcash_voting_ffi_checksum_func_build_vote_commitment() != 37719) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_func_construct_delegation_action() != 62937) {
