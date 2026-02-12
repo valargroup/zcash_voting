@@ -46,6 +46,14 @@ pub struct RoundState {
     pub votes_cast: Vec<String>,
 }
 
+/// A vote record from the votes table.
+#[derive(Clone, Debug)]
+pub struct VoteRecord {
+    pub proposal_id: String,
+    pub choice: u32,
+    pub submitted: bool,
+}
+
 /// Compact round info for list_rounds().
 #[derive(Clone, Debug)]
 pub struct RoundSummary {
@@ -191,5 +199,35 @@ mod tests {
         assert_eq!(state.votes_cast.len(), 2);
 
         queries::mark_vote_submitted(&conn, "test-round-1", 0).unwrap();
+    }
+
+    #[test]
+    fn test_get_votes() {
+        let db = test_db();
+        let conn = db.conn();
+        queries::insert_round(&conn, &test_params(), None).unwrap();
+
+        // No votes initially
+        let votes = queries::get_votes(&conn, "test-round-1").unwrap();
+        assert!(votes.is_empty());
+
+        // Store two votes with different choices
+        let commitment = vec![0xCC; 128];
+        queries::store_vote(&conn, "test-round-1", 0, 0, &commitment).unwrap();
+        queries::store_vote(&conn, "test-round-1", 1, 2, &commitment).unwrap();
+
+        let votes = queries::get_votes(&conn, "test-round-1").unwrap();
+        assert_eq!(votes.len(), 2);
+        assert_eq!(votes[0].proposal_id, "0");
+        assert_eq!(votes[0].choice, 0);
+        assert!(!votes[0].submitted);
+        assert_eq!(votes[1].proposal_id, "1");
+        assert_eq!(votes[1].choice, 2);
+
+        // Mark first vote submitted and verify
+        queries::mark_vote_submitted(&conn, "test-round-1", 0).unwrap();
+        let votes = queries::get_votes(&conn, "test-round-1").unwrap();
+        assert!(votes[0].submitted);
+        assert!(!votes[1].submitted);
     }
 }

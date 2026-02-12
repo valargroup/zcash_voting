@@ -113,6 +113,23 @@ impl From<voting::storage::RoundSummary> for RoundSummary {
     }
 }
 
+#[derive(Clone, uniffi::Record)]
+pub struct VoteRecord {
+    pub proposal_id: String,
+    pub choice: u32,
+    pub submitted: bool,
+}
+
+impl From<voting::storage::VoteRecord> for VoteRecord {
+    fn from(v: voting::storage::VoteRecord) -> Self {
+        Self {
+            proposal_id: v.proposal_id,
+            choice: v.choice,
+            submitted: v.submitted,
+        }
+    }
+}
+
 // --- Existing UniFFI Record types ---
 
 #[derive(Clone, uniffi::Record)]
@@ -362,6 +379,10 @@ impl VotingDatabase {
 
     pub fn list_rounds(&self) -> Result<Vec<RoundSummary>, VotingError> {
         Ok(self.db.list_rounds()?.into_iter().map(Into::into).collect())
+    }
+
+    pub fn get_votes(&self, round_id: String) -> Result<Vec<VoteRecord>, VotingError> {
+        Ok(self.db.get_votes(&round_id)?.into_iter().map(Into::into).collect())
     }
 
     pub fn clear_round(&self, round_id: String) -> Result<(), VotingError> {

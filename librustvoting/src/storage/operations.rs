@@ -1,4 +1,4 @@
-use crate::storage::{RoundPhase, RoundState, RoundSummary, VotingDb};
+use crate::storage::{RoundPhase, RoundState, RoundSummary, VoteRecord, VotingDb};
 use crate::storage::queries;
 use crate::types::{
     DelegationAction, EncryptedShare, NoteInfo, ProofProgressReporter, ProofResult,
@@ -24,6 +24,12 @@ impl VotingDb {
     pub fn list_rounds(&self) -> Result<Vec<RoundSummary>, VotingError> {
         let conn = self.conn();
         queries::list_rounds(&conn)
+    }
+
+    /// Get all votes for a round (with choice and submitted status).
+    pub fn get_votes(&self, round_id: &str) -> Result<Vec<VoteRecord>, VotingError> {
+        let conn = self.conn();
+        queries::get_votes(&conn, round_id)
     }
 
     /// Delete all data for a round.

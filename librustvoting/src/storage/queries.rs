@@ -1,7 +1,7 @@
 use rusqlite::{named_params, Connection};
 
 use crate::types::{ProofResult, VotingError, VotingRoundParams};
-use crate::storage::{RoundPhase, RoundState, RoundSummary};
+use crate::storage::{RoundPhase, RoundState, RoundSummary, VoteRecord};
 
 // --- Rounds ---
 
@@ -259,6 +259,32 @@ pub fn store_vote(
         message: format!("failed to store vote: {}", e),
     })?;
     Ok(())
+}
+
+pub fn get_votes(conn: &Connection, round_id: &str) -> Result<Vec<VoteRecord>, VotingError> {
+    let mut stmt = conn
+        .prepare("SELECT proposal_id, choice, submitted FROM votes WHERE round_id = :round_id")
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to prepare get_votes: {}", e),
+        })?;
+
+    let votes = stmt
+        .query_map(named_params! { ":round_id": round_id }, |row| {
+            Ok(VoteRecord {
+                proposal_id: row.get::<_, i64>(0)?.to_string(),
+                choice: row.get::<_, i64>(1)? as u32,
+                submitted: row.get::<_, i64>(2)? != 0,
+            })
+        })
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to get votes: {}", e),
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to collect votes: {}", e),
+        })?;
+
+    Ok(votes)
 }
 
 pub fn mark_vote_submitted(conn: &Connection, round_id: &str, proposal_id: u32) -> Result<(), VotingError> {
