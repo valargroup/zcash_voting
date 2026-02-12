@@ -44,6 +44,15 @@ extension HomeView {
             }
             
             ActionRow(
+                icon: Image(systemName: "checkmark.shield"),
+                title: "NU7 Sentiment Poll",
+                desc: "Vote on proposed network upgrades",
+                divider: true
+            ) {
+                store.send(.votingBannerTapped)
+            }
+
+            ActionRow(
                 icon: Asset.Assets.Icons.settings.image,
                 title: L10n.HomeScreen.moreDotted,
                 divider: false

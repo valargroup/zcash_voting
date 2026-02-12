@@ -17,6 +17,7 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.24.2"),
         .package(url: "https://github.com/stephencelis/SQLite.swift.git", from: "0.15.3"),
         .package(path: "../zcash-light-client-ffi"),
+        .package(path: "../zcash-voting-ffi"),
     ],
     targets: [
         .target(
@@ -25,6 +26,7 @@ let package = Package(
                 .product(name: "SQLite", package: "SQLite.swift"),
                 .product(name: "GRPC", package: "grpc-swift"),
                 .product(name: "libzcashlc", package: "zcash-light-client-ffi"),
+                .product(name: "ZcashVotingFFI", package: "zcash-voting-ffi"),
             ],
             exclude: [
                 "Modules/Service/GRPC/ProtoBuf/proto/compact_formats.proto",

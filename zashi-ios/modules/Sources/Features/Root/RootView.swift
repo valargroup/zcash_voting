@@ -21,6 +21,7 @@ import CoordFlows
 import ServerSetup
 import Settings
 import TorSetup
+import Voting
 
 public struct RootView: View {
     @Environment(\.scenePhase) var scenePhase
@@ -228,6 +229,14 @@ private extension RootView {
                                         state: \.swapAndPayCoordFlowState,
                                         action: \.swapAndPayCoordFlow),
                                 tokenName: tokenName
+                            )
+                        }
+                        .navigationLinkEmpty(isActive: store.bindingFor(.voting)) {
+                            VotingView(
+                                store:
+                                    store.scope(
+                                        state: \.votingState,
+                                        action: \.voting)
                             )
                         }
                         .popover(isPresented: $store.signWithKeystoneCoordFlowBinding) {

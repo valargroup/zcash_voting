@@ -121,6 +121,7 @@ public struct Home {
         
         // more actions
         case flexaTapped
+        case votingBannerTapped
     }
     
     @Dependency(\.mainQueue) var mainQueue
@@ -362,6 +363,9 @@ public struct Home {
                 // More actions
 
             case .flexaTapped:
+                return .none
+
+            case .votingBannerTapped:
                 return .none
 
             case .walletBalances:

@@ -1,0 +1,5 @@
+/rust/target
+/products
+/.build
+/.swiftpm
+.DS_Store

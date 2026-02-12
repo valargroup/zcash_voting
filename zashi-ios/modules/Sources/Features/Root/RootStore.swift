@@ -33,6 +33,7 @@ import AudioServices
 import ShieldingProcessor
 import SupportDataGenerator
 import SwapAndPay
+import Voting
 
 // Path
 import CurrencyConversionSetup
@@ -73,6 +74,7 @@ public struct Root {
             case swapAndPayCoordFlow
             case torSetup
             case transactionsCoordFlow
+            case voting
             case walletBackup
         }
         
@@ -143,6 +145,7 @@ public struct Root {
         public var transactionsCoordFlowState = TransactionsCoordFlow.State.initial
         public var walletBackupCoordFlowState = WalletBackupCoordFlow.State.initial
         public var torSetupState = TorSetup.State.initial
+        public var votingState = Voting.State.initial
 
         public init(
             appInitializationState: InitializationState = .uninitialized,
@@ -232,6 +235,7 @@ public struct Root {
         case transactionsCoordFlow(TransactionsCoordFlow.Action)
         case walletBackupCoordFlow(WalletBackupCoordFlow.Action)
         case torSetup(TorSetup.Action)
+        case voting(Voting.Action)
 
         // Transactions
         case observeTransactions
@@ -386,6 +390,10 @@ public struct Root {
 
         Scope(state: \.torSetupState, action: \.torSetup) {
             TorSetup()
+        }
+
+        Scope(state: \.votingState, action: \.voting) {
+            Voting()
         }
 
         Scope(state: \.swapAndPayCoordFlowState, action: \.swapAndPayCoordFlow) {
