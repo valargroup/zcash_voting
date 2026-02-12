@@ -106,6 +106,7 @@ let package = Package(
         .package(url: "https://github.com/pointfreeco/swift-url-routing", from: "0.6.2"),
         .package(url: "https://github.com/zcash-hackworks/MnemonicSwift", from: "2.2.5"),
         .package(path: "../../zcash-swift-wallet-sdk"),
+        .package(path: "../../zcash-voting-ffi"),
         .package(url: "https://github.com/flexa/flexa-ios.git", exact: "1.1.4"),
         .package(url: "https://github.com/pacu/zcash-swift-payment-uri", from: "1.0.1"),
         .package(url: "https://github.com/airbnb/lottie-spm.git", from: "4.5.2"),
@@ -1139,6 +1140,7 @@ let package = Package(
             dependencies: [
                 "VotingModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "ZcashVotingFFI", package: "zcash-voting-ffi"),
             ],
             path: "Sources/Dependencies/VotingCryptoClient"
         ),
