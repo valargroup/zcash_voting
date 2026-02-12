@@ -95,7 +95,7 @@ public struct Voting {
             votingRound: VotingRound = MockVotingService.votingRound,
             votingWeight: UInt64 = MockVotingService.votingWeight,
             isKeystoneUser: Bool = false,
-            roundId: String = "mock-round-1"
+            roundId: String = "01010101010101010101010101010101"
         ) {
             self.votingRound = votingRound
             self.votingWeight = votingWeight
@@ -165,7 +165,43 @@ public struct Voting {
             case .startDelegationProof:
                 state.delegationProofStatus = .generating(progress: 0)
                 let roundId = state.roundId
+                let snapshotHeight = state.votingRound.snapshotHeight
                 return .run { [votingCrypto] send in
+                    // Open database
+                    let dbPath = FileManager.default
+                        .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                        .appendingPathComponent("voting.sqlite3").path
+                    try await votingCrypto.openDatabase(dbPath)
+
+                    // Clear any previous data for this round, then initialize
+                    try? await votingCrypto.clearRound(roundId)
+                    let params = VotingRoundParams(
+                        voteRoundId: Data(repeating: 0x01, count: 16),
+                        snapshotHeight: snapshotHeight,
+                        eaPK: Data(repeating: 0xEA, count: 32),
+                        ncRoot: Data(repeating: 0xAA, count: 32),
+                        nullifierIMTRoot: Data(repeating: 0xBB, count: 32)
+                    )
+                    try await votingCrypto.initRound(params, nil)
+
+                    // Stub delegation setup: hotkey → action → witness
+                    let hotkey = try await votingCrypto.generateHotkey(roundId)
+                    let mockNote = NoteInfo(
+                        commitment: Data(repeating: 0x01, count: 32),
+                        nullifier: Data(repeating: 0x02, count: 32),
+                        value: 1_000_000,
+                        position: 42
+                    )
+                    let action = try await votingCrypto.constructDelegationAction(
+                        roundId, hotkey, [mockNote]
+                    )
+                    _ = try await votingCrypto.buildDelegationWitness(
+                        roundId, action,
+                        [Data(repeating: 0x11, count: 32)],
+                        [Data(repeating: 0x22, count: 32)]
+                    )
+
+                    // Generate delegation proof (long-running, reports progress)
                     for try await event in votingCrypto.generateDelegationProof(roundId) {
                         switch event {
                         case .progress(let p):
@@ -217,24 +253,26 @@ public struct Voting {
                 let proposalId = pending.proposalId
                 let choice = pending.choice
                 let roundId = state.roundId
+                let votingWeight = state.votingWeight
                 let nextId = nextUnvotedId(after: proposalId, in: state)
 
                 return .merge(
                     // Submit this vote to chain in background
                     .run { [votingAPI, votingCrypto] _ in
-                        let mockWitness = Data(repeating: 0xDD, count: 64)
-                        let mockShares = [EncryptedShare(
-                            c1: Data(repeating: 0xC1, count: 32),
-                            c2: Data(repeating: 0xC2, count: 32),
-                            shareIndex: 0,
-                            plaintextValue: 1
-                        )]
+                        // Decompose weight into binary shares, encrypt under EA public key
+                        let shares = votingCrypto.decomposeWeight(votingWeight)
+                        let encShares = try await votingCrypto.encryptShares(roundId, shares)
+                        let vanWitness = Data(repeating: 0xDD, count: 64) // mock VAN witness
+
+                        // Build vote commitment + ZKP #2 (stored in DB)
                         var proofData = Data()
-                        for try await event in votingCrypto.buildVoteCommitment(roundId, proposalId, choice, mockShares, mockWitness) {
+                        for try await event in votingCrypto.buildVoteCommitment(roundId, proposalId, choice, encShares, vanWitness) {
                             if case .completed(let proof) = event {
                                 proofData = proof
                             }
                         }
+
+                        // Submit to chain (API stubs for now)
                         let bundle = VoteCommitmentBundle(
                             vanNullifier: Data(repeating: 0, count: 32),
                             voteAuthorityNoteNew: Data(repeating: 0, count: 32),
@@ -245,8 +283,11 @@ public struct Voting {
                             voteCommTreeAnchorHeight: 0
                         )
                         _ = try await votingAPI.submitVoteCommitment(bundle)
-                        let payloads = try await votingCrypto.buildSharePayloads([], bundle)
+                        let payloads = try await votingCrypto.buildSharePayloads(encShares, bundle)
                         try await votingAPI.delegateShares(payloads)
+
+                        // Mark vote submitted in DB
+                        try await votingCrypto.markVoteSubmitted(roundId, proposalId)
                     },
                     // Advance UI after brief pause
                     .run { send in
