@@ -1116,11 +1116,13 @@ let package = Package(
         .target(
             name: "Voting",
             dependencies: [
+                "DatabaseFiles",
                 "Generated",
                 "UIComponents",
                 "VotingAPIClient",
                 "VotingCryptoClient",
                 "VotingModels",
+                "ZcashSDKEnvironment",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],
             path: "Sources/Features/Voting"

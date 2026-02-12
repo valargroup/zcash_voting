@@ -1,14 +1,18 @@
 import Combine
 import Foundation
 import ComposableArchitecture
+import DatabaseFiles
 import VotingAPIClient
 import VotingCryptoClient
 import VotingModels
+import ZcashSDKEnvironment
 
 @Reducer
 public struct Voting {
+    @Dependency(\.databaseFiles) var databaseFiles
     @Dependency(\.votingAPI) var votingAPI
     @Dependency(\.votingCrypto) var votingCrypto
+    @Dependency(\.zcashSDKEnvironment) var zcashSDKEnvironment
     @ObservableState
     public struct State: Equatable {
         public enum Screen: Equatable {
@@ -29,8 +33,6 @@ public struct Voting {
         public var votingWeight: UInt64
         public var isKeystoneUser: Bool
         public var roundId: String
-        public var walletDbPath: String
-        public var networkId: UInt32
 
         /// Cached wallet notes from the snapshot query, used by delegation proof.
         public var walletNotes: [NoteInfo] = []
@@ -101,16 +103,12 @@ public struct Voting {
             votingRound: VotingRound = MockVotingService.votingRound,
             votingWeight: UInt64 = MockVotingService.votingWeight,
             isKeystoneUser: Bool = false,
-            roundId: String = "0101010101010101010101010101010101010101010101010101010101010101",
-            walletDbPath: String = "",
-            networkId: UInt32 = 0
+            roundId: String = "0101010101010101010101010101010101010101010101010101010101010101"
         ) {
             self.votingRound = votingRound
             self.votingWeight = votingWeight
             self.isKeystoneUser = isKeystoneUser
             self.roundId = roundId
-            self.walletDbPath = walletDbPath
-            self.networkId = networkId
         }
     }
 
@@ -174,9 +172,10 @@ public struct Voting {
             // MARK: - Wallet Notes / Voting Weight
 
             case .fetchVotingWeight:
-                let walletDbPath = state.walletDbPath
                 let snapshotHeight = state.votingRound.snapshotHeight
-                let networkId = state.networkId
+                let network = zcashSDKEnvironment.network
+                let walletDbPath = databaseFiles.dataDbURLFor(network).path
+                let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 return .run { [votingCrypto] send in
                     // Open the voting database (needed for FFI method)
                     let dbPath = FileManager.default
