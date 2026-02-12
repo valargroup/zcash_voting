@@ -557,6 +557,8 @@ public protocol VotingDatabaseProtocol: AnyObject, Sendable {
     
     func getRoundState(roundId: String) throws  -> RoundState
     
+    func getVotes(roundId: String) throws  -> [VoteRecord]
+    
     func initRound(params: VotingRoundParams, sessionJson: String?) throws 
     
     func listRounds() throws  -> [RoundSummary]
@@ -705,6 +707,14 @@ open func generateHotkey(roundId: String)throws  -> VotingHotkey  {
 open func getRoundState(roundId: String)throws  -> RoundState  {
     return try  FfiConverterTypeRoundState_lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_method_votingdatabase_get_round_state(self.uniffiClonePointer(),
+        FfiConverterString.lower(roundId),$0
+    )
+})
+}
+    
+open func getVotes(roundId: String)throws  -> [VoteRecord]  {
+    return try  FfiConverterSequenceTypeVoteRecord.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
+    uniffi_zcash_voting_ffi_fn_method_votingdatabase_get_votes(self.uniffiClonePointer(),
         FfiConverterString.lower(roundId),$0
     )
 })
@@ -1509,6 +1519,84 @@ public func FfiConverterTypeVoteCommitmentBundle_lower(_ value: VoteCommitmentBu
 }
 
 
+public struct VoteRecord {
+    public var proposalId: String
+    public var choice: UInt32
+    public var submitted: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(proposalId: String, choice: UInt32, submitted: Bool) {
+        self.proposalId = proposalId
+        self.choice = choice
+        self.submitted = submitted
+    }
+}
+
+#if compiler(>=6)
+extension VoteRecord: Sendable {}
+#endif
+
+
+extension VoteRecord: Equatable, Hashable {
+    public static func ==(lhs: VoteRecord, rhs: VoteRecord) -> Bool {
+        if lhs.proposalId != rhs.proposalId {
+            return false
+        }
+        if lhs.choice != rhs.choice {
+            return false
+        }
+        if lhs.submitted != rhs.submitted {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(proposalId)
+        hasher.combine(choice)
+        hasher.combine(submitted)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVoteRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VoteRecord {
+        return
+            try VoteRecord(
+                proposalId: FfiConverterString.read(from: &buf), 
+                choice: FfiConverterUInt32.read(from: &buf), 
+                submitted: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VoteRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.proposalId, into: &buf)
+        FfiConverterUInt32.write(value.choice, into: &buf)
+        FfiConverterBool.write(value.submitted, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVoteRecord_lift(_ buf: RustBuffer) throws -> VoteRecord {
+    return try FfiConverterTypeVoteRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVoteRecord_lower(_ value: VoteRecord) -> RustBuffer {
+    return FfiConverterTypeVoteRecord.lower(value)
+}
+
+
 public struct VotingHotkey {
     public var secretKey: Data
     public var publicKey: Data
@@ -2298,6 +2386,31 @@ fileprivate struct FfiConverterSequenceTypeSharePayload: FfiConverterRustBuffer 
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeVoteRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [VoteRecord]
+
+    public static func write(_ value: [VoteRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeVoteRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [VoteRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [VoteRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeVoteRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
 public func buildDelegationWitness(action: DelegationAction, inclusionProofs: [Data], exclusionProofs: [Data])throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_func_build_delegation_witness(
@@ -2448,6 +2561,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_get_round_state() != 4975) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_get_votes() != 19701) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_init_round() != 11012) {
