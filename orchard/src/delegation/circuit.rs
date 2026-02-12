@@ -183,15 +183,14 @@ pub struct Config {
     merkle_config_2: MerkleConfig<OrchardHashDomains, OrchardCommitDomains, OrchardFixedBases>,
     // Per-note custom gate selector (conditions 10, 13, 15).
     // Enforces: is_note_real is boolean, padded notes have v=0,
-    // real notes' Merkle root matches nc_root, IMT root matches nf_imt_root,
-    // and IMT leaf position is even (paired-leaf model).
+    // real notes' Merkle root matches nc_root, IMT root matches nf_imt_root.
     q_per_note: Selector,
     // IMT conditional swap gate selector (condition 13).
-    // At each of the 32 IMT Merkle levels, swaps (current, sibling) into (left, right)
+    // At each of the 31 IMT Merkle levels, swaps (current, sibling) into (left, right)
     // based on the position bit before Poseidon hashing.
     q_imt_swap: Selector,
     // Interval check gate selector (condition 13).
-    // Proves nf_start <= real_nf <= nf_end by constraining x and x_shifted
+    // Proves low <= real_nf <= high by constraining x and x_shifted
     // values that are then range-checked to [0, 2^250).
     q_interval: Selector,
     // Gov null pairwise distinctness gate selector (condition 16).
@@ -281,7 +280,8 @@ pub struct NoteSlotWitness {
     pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
     pub(crate) pos: Value<u32>,
     pub(crate) is_note_real: Value<bool>,
-    pub(crate) imt_nf_start: Value<pallas::Base>,
+    pub(crate) imt_low: Value<pallas::Base>,
+    pub(crate) imt_high: Value<pallas::Base>,
     pub(crate) imt_leaf_pos: Value<u32>,
     pub(crate) imt_path: Value<[pallas::Base; IMT_DEPTH]>,
 }
@@ -404,7 +404,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             let anchor = meta.query_advice(advices[3], Rotation::cur());
             let imt_root = meta.query_advice(advices[4], Rotation::cur());
             let nf_imt_root = meta.query_advice(advices[5], Rotation::cur());
-            let pos_bit_0 = meta.query_advice(advices[6], Rotation::cur());
 
             let one = Expression::Constant(pallas::Base::one());
 
@@ -427,9 +426,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     // Cond 13: IMT root from non-membership proof must match public
                     // nf_imt_root. Not gated — padded notes check too (§1.3.5).
                     ("imt_root = nf_imt_root", imt_root - nf_imt_root),
-                    // Cond 13: IMT leaf must be at an even position (paired-leaf model).
-                    // This ensures the level-0 Merkle sibling is nf_end.
-                    ("even pos", pos_bit_0),
                 ],
             )
         });
@@ -466,11 +462,11 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )
         });
 
-        // Interval check gate (condition 13, paired-leaf model).
-        // Proves nf_start <= real_nf <= nf_end by constraining:
-        //   x = real_nf - nf_start  (range-checked to [0, 2^250) outside)
+        // Interval check gate (condition 13, (low, high) leaf model).
+        // Proves low <= real_nf <= high by constraining:
+        //   x = real_nf - low  (range-checked to [0, 2^250) outside)
         //   x_shifted = 2^250 - y + x - 1  (range-checked to [0, 2^250) outside)
-        // where y = nf_end - nf_start (the interval width).
+        // where y = high - low (the interval width).
         //
         // NOTE: The 250-bit range checks are only sound when every IMT bracket
         // has width < 2^250. The IMT MUST be initialized with ~17 sentinel
@@ -480,8 +476,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let q_interval = meta.selector();
         meta.create_gate("Interval check", |meta| {
             let q = meta.query_selector(q_interval);
-            let nf_start = meta.query_advice(advices[0], Rotation::cur());
-            let nf_end = meta.query_advice(advices[1], Rotation::cur());
+            let low = meta.query_advice(advices[0], Rotation::cur());
+            let high = meta.query_advice(advices[1], Rotation::cur());
             let real_nf = meta.query_advice(advices[2], Rotation::cur());
             let y = meta.query_advice(advices[0], Rotation::next());
             let x = meta.query_advice(advices[1], Rotation::next());
@@ -494,17 +490,14 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 q,
                 [
                     // Interval width.
-                    (
-                        "y = nf_end - nf_start",
-                        y.clone() - (nf_end - nf_start.clone()),
-                    ),
-                    // Lower bound: x = real_nf - nf_start.
-                    // Range-checking x to [0, 2^250) proves real_nf >= nf_start,
+                    ("y = high - low", y.clone() - (high - low.clone())),
+                    // Lower bound: x = real_nf - low.
+                    // Range-checking x to [0, 2^250) proves real_nf >= low,
                     // since a negative difference wraps to a large field element.
-                    ("x = real_nf - nf_start", x.clone() - (real_nf - nf_start)),
+                    ("x = real_nf - low", x.clone() - (real_nf - low)),
                     // Upper bound: x_shifted = 2^250 - y + x - 1.
-                    // If real_nf <= nf_end then x <= y, so x_shifted <= 2^250 - 1 (passes).
-                    // If real_nf > nf_end then x > y, so x_shifted >= 2^250 (fails range check).
+                    // If real_nf <= high then x <= y, so x_shifted <= 2^250 - 1 (passes).
+                    // If real_nf > high then x > y, so x_shifted >= 2^250 (fails range check).
                     (
                         "x_shifted = 2^250 - y + x - 1",
                         x_shifted - (two_250 - y + x - one),
@@ -1654,30 +1647,42 @@ fn synthesize_note_slot(
     // ---------------------------------------------------------------
 
     // Proves the note's real nullifier (from cond 12) has NOT been spent on
-    // mainchain. Uses a paired-leaf Indexed Merkle Tree where adjacent
-    // even/odd leaves define intervals [nf_start, nf_end].
+    // mainchain. Uses a (low, high) leaf Indexed Merkle Tree where each leaf
+    // stores an explicit interval [low, high].
     //
     // The proof has three parts:
-    //   1. Merkle path: starting from nf_start (the even leaf), walk up
-    //      32 levels to the root. The level-0 sibling is nf_end.
-    //   2. Interval check: nf_start <= real_nf <= nf_end, proved by
+    //   1. Leaf hash: Poseidon2(low, high)
+    //   2. Merkle path: 31 levels from the leaf hash to the root.
+    //   3. Interval check: low <= real_nf <= high, proved by
     //      range-checking x and x_shifted to [0, 2^250).
-    //   3. Even position: pos_bit_0 = 0 enforces the leaf is at an even
-    //      position, ensuring the sibling is nf_end (not nf_start).
     //
-    // Witness the even-position leaf (nf_start).
-    let nf_start = assign_free_advice(
-        layouter.namespace(|| format!("note {s} imt_nf_start")),
+    // Witness low and high explicitly.
+    let imt_low = assign_free_advice(
+        layouter.namespace(|| format!("note {s} imt_low")),
         config.advices[0],
-        note.imt_nf_start,
+        note.imt_low,
     )?;
 
-    // Poseidon2 Merkle path from nf_start directly (no leaf hash).
+    let imt_high = assign_free_advice(
+        layouter.namespace(|| format!("note {s} imt_high")),
+        config.advices[0],
+        note.imt_high,
+    )?;
+
+    // Compute leaf hash: Poseidon2(low, high).
+    let leaf_hash = {
+        let poseidon2 = config.poseidon2_chip();
+        poseidon2.hash(
+            &mut layouter.namespace(|| format!("note {s} Poseidon2(low, high)")),
+            &[imt_low.clone(), imt_high.clone()],
+            &POSEIDON2_PARAMS,
+        )?
+    };
+
+    // Poseidon2 Merkle path from leaf_hash, 31 levels.
     // At each level, q_imt_swap orders (current, sibling) by position bit,
     // then Poseidon2(left, right) computes the parent.
-    let mut current = nf_start.clone();
-    let mut pos_bit_0_cell: Option<AssignedCell<pallas::Base, pallas::Base>> = None;
-    let mut nf_end_cell: Option<AssignedCell<pallas::Base, pallas::Base>> = None;
+    let mut current = leaf_hash;
 
     for i in 0..IMT_DEPTH {
         let pos_bit = assign_free_advice(
@@ -1692,12 +1697,6 @@ fn synthesize_note_slot(
             config.advices[0],
             note.imt_path.map(|path| path[i]),
         )?;
-
-        // Capture level-0 values for interval check and even-position constraint.
-        if i == 0 {
-            pos_bit_0_cell = Some(pos_bit.clone());
-            nf_end_cell = Some(sibling.clone());
-        }
 
         let (left, right) = layouter.assign_region(
             || format!("note {s} imt swap level {i}"),
@@ -1762,10 +1761,8 @@ fn synthesize_note_slot(
     // The computed root is checked against the public nf_imt_root in the
     // q_per_note gate below.
     let imt_root = current;
-    let pos_bit_0_cell = pos_bit_0_cell.unwrap();
-    let nf_end_cell = nf_end_cell.unwrap();
 
-    // Interval check: prove nf_start <= real_nf <= nf_end.
+    // Interval check: prove low <= real_nf <= high.
     // The q_interval gate constrains y, x, x_shifted from the witnessed values.
     // Range checks on x and x_shifted enforce the interval inclusion.
     let (x, x_shifted) = layouter.assign_region(
@@ -1773,9 +1770,9 @@ fn synthesize_note_slot(
         |mut region| {
             config.q_interval.enable(&mut region, 0)?;
 
-            // Row 0: nf_start, nf_end, real_nf
-            nf_start.copy_advice(|| "nf_start", &mut region, config.advices[0], 0)?;
-            nf_end_cell.copy_advice(|| "nf_end", &mut region, config.advices[1], 0)?;
+            // Row 0: low, high, real_nf
+            imt_low.copy_advice(|| "low", &mut region, config.advices[0], 0)?;
+            imt_high.copy_advice(|| "high", &mut region, config.advices[1], 0)?;
             real_nf
                 .inner()
                 .copy_advice(|| "real_nf", &mut region, config.advices[2], 0)?;
@@ -1784,20 +1781,20 @@ fn synthesize_note_slot(
             // y = interval width, x = lower bound offset, x_shifted = upper bound check.
             // x and x_shifted are range-checked to [0, 2^250) after this region.
             let y = region.assign_advice(
-                || "y = nf_end - nf_start",
+                || "y = high - low",
                 config.advices[0],
                 1,
                 || {
-                    nf_end_cell
+                    imt_high
                         .value()
                         .copied()
-                        .zip(nf_start.value().copied())
+                        .zip(imt_low.value().copied())
                         .map(|(e, s)| e - s)
                 },
             )?;
 
             let x = region.assign_advice(
-                || "x = real_nf - nf_start",
+                || "x = real_nf - low",
                 config.advices[1],
                 1,
                 || {
@@ -1805,7 +1802,7 @@ fn synthesize_note_slot(
                         .inner()
                         .value()
                         .copied()
-                        .zip(nf_start.value().copied())
+                        .zip(imt_low.value().copied())
                         .map(|(nf, s)| nf - s)
                 },
             )?;
@@ -1828,8 +1825,8 @@ fn synthesize_note_slot(
     )?;
 
     // Range checks enforce the interval inclusion.
-    // x in [0, 2^250) proves nf_start <= real_nf.
-    // x_shifted in [0, 2^250) proves real_nf <= nf_end.
+    // x in [0, 2^250) proves low <= real_nf.
+    // x_shifted in [0, 2^250) proves real_nf <= high.
     // 25 limbs × 10 bits = 250-bit range.
     config.ecc_config.lookup_config.copy_check(
         layouter.namespace(|| format!("note {s} x < 2^250")),
@@ -1854,9 +1851,8 @@ fn synthesize_note_slot(
     //   - Cond 15: padded notes (is_note_real=0) must have v=0
     //   - Cond 10: real notes' Merkle root must match the public nc_root
     //   - Cond 13: IMT root must match public nf_imt_root
-    //   - Cond 13: IMT leaf must be at an even position (pos_bit_0 = 0)
     //
-    // All seven values are copied from earlier regions via copy constraints,
+    // All six values are copied from earlier regions via copy constraints,
     // so the gate operates on the same cells that the upstream gadgets produced.
 
     let is_note_real = assign_free_advice(
@@ -1876,7 +1872,6 @@ fn synthesize_note_slot(
             nc_root_cell.copy_advice(|| "nc_root (anchor)", &mut region, config.advices[3], 0)?;
             imt_root.copy_advice(|| "imt_root", &mut region, config.advices[4], 0)?;
             nf_imt_root_cell.copy_advice(|| "nf_imt_root", &mut region, config.advices[5], 0)?;
-            pos_bit_0_cell.copy_advice(|| "pos_bit_0", &mut region, config.advices[6], 0)?;
 
             Ok(())
         },
@@ -2025,7 +2020,8 @@ mod tests {
             path: Value::known(merkle_path.auth_path()),
             pos: Value::known(merkle_path.position()),
             is_note_real: Value::known(is_real),
-            imt_nf_start: Value::known(imt.nf_start),
+            imt_low: Value::known(imt.low),
+            imt_high: Value::known(imt.high),
             imt_leaf_pos: Value::known(imt.leaf_pos),
             imt_path: Value::known(imt.path),
         }

@@ -136,7 +136,8 @@ pub fn build_delegation_bundle(
             path: Value::known(input.merkle_path.auth_path()),
             pos: Value::known(input.merkle_path.position()),
             is_note_real: Value::known(true),
-            imt_nf_start: Value::known(input.imt_proof.nf_start),
+            imt_low: Value::known(input.imt_proof.low),
+            imt_high: Value::known(input.imt_proof.high),
             imt_leaf_pos: Value::known(input.imt_proof.leaf_pos),
             imt_path: Value::known(input.imt_proof.path),
         };
@@ -185,7 +186,8 @@ pub fn build_delegation_bundle(
             path: Value::known(merkle_path.auth_path()),
             pos: Value::known(merkle_path.position()),
             is_note_real: Value::known(false),
-            imt_nf_start: Value::known(imt_proof.nf_start),
+            imt_low: Value::known(imt_proof.low),
+            imt_high: Value::known(imt_proof.high),
             imt_leaf_pos: Value::known(imt_proof.leaf_pos),
             imt_path: Value::known(imt_proof.path),
         };

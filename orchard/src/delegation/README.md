@@ -46,9 +46,10 @@ A single circuit proving all 16 conditions of the delegation ZKP at K=16 (65,536
    * **path**: Sinsemilla-based Merkle authentication path (32 siblings).
    * **pos**: leaf position in the note commitment tree.
    * **is_note_real**: boolean flag — 1 for real notes, 0 for padded notes.
-   * **imt_nf_start**: the even-position leaf (start of the bracketing interval).
-   * **imt_leaf_pos**: position of the even leaf in the IMT (must be even).
-   * **imt_path**: Poseidon2-based IMT Merkle authentication path (32 siblings). `path[0]` = nf_end.
+   * **imt_low**: the interval start (low bound of the bracketing leaf).
+   * **imt_high**: the interval end (high bound of the bracketing leaf).
+   * **imt_leaf_pos**: position of the leaf in the IMT.
+   * **imt_path**: Poseidon2-based IMT Merkle authentication path (31 pure siblings).
 
 - Private (governance — condition 7)
    * **gov_comm_rand**: a random blinding factor for the governance commitment.
@@ -292,29 +293,27 @@ Same `DeriveNullifier` construction as condition 2, but applied to each delegate
 
 ## 13. IMT Non-Membership (x4)
 
-Purpose: prove the note's nullifier has NOT been spent, using a Poseidon2-based Indexed Merkle Tree (depth 32) with a paired-leaf model. Adjacent even/odd leaves define intervals `[nf_start, nf_end]`.
+Purpose: prove the note's nullifier has NOT been spent, using a Poseidon2-based Indexed Merkle Tree with a (low, high) leaf model. Each leaf stores an explicit interval `[low, high]`.
 
 **Approach:**
 
-1. **Merkle path** (32 levels, starting from `nf_start`): The even-position leaf `nf_start` is the starting point. At each level, a `q_imt_swap` gate conditionally swaps `(current, sibling)` into `(left, right)` based on the position bit, then `Poseidon2(left, right)` computes the parent. At level 0, the sibling is `nf_end`. The swap gate constrains:
+1. **Leaf hash**: `leaf_hash = Poseidon2(low, high)` — authenticates both interval bounds via the Merkle root.
+
+2. **Merkle path** (31 levels, starting from `leaf_hash`): At each level, a `q_imt_swap` gate conditionally swaps `(current, sibling)` into `(left, right)` based on the position bit, then `Poseidon2(left, right)` computes the parent. The swap gate constrains:
    - `left = current + pos_bit * (sibling - current)`
    - `left + right = current + sibling`
    - `bool_check(pos_bit)`
 
-2. **Even-position constraint**: The `q_per_note` gate constrains `pos_bit_0 = 0`, ensuring the leaf is at an even position. This guarantees the level-0 sibling is `nf_end` (the odd-position partner).
-
 3. **Root check**: The `q_per_note` gate constrains `imt_root = nf_imt_root` (the public input).
 
-4. **Interval check** (`q_interval` gate): Proves `nf_start <= real_nf <= nf_end` (fully inclusive):
-   - `y = nf_end - nf_start` (interval width)
-   - `x = real_nf - nf_start` (offset into interval)
+4. **Interval check** (`q_interval` gate): Proves `low <= real_nf <= high` (fully inclusive):
+   - `y = high - low` (interval width)
+   - `x = real_nf - low` (offset into interval)
    - `x_shifted = 2^250 - y + x - 1` (shifted for upper bound check)
-   - `x` is range-checked to `[0, 2^250)` → `real_nf >= nf_start`
-   - `x_shifted` is range-checked to `[0, 2^250)` → `real_nf <= nf_end`
+   - `x` is range-checked to `[0, 2^250)` → `real_nf >= low`
+   - `x_shifted` is range-checked to `[0, 2^250)` → `real_nf <= high`
 
-**No separate leaf hash**: Unlike the previous approach, the paired-leaf model stores raw values (not hashes) at the leaves. The Poseidon2 hash `Poseidon2(nf_start, nf_end)` is computed as part of the first Merkle level, saving one hash call per note slot.
-
-**No separate nf_end witness**: `nf_end` is the Merkle sibling at level 0 (`path[0]`). The Merkle root check authenticates it — a fake `nf_end` would produce the wrong root.
+**Leaf authentication**: `high` is authenticated via `Poseidon2(low, high) → Merkle root` — a forged `high` produces the wrong root. No parity constraint needed; if the prover swaps (low, high), the interval check fails because `nf - low` wraps to a large field element.
 
 **250-bit range bound assumption:** The 250-bit range check constrains bracket intervals to `< 2^250`. Since the Pallas field has order `p ≈ 2^254.9`, the IMT operator must pre-populate sentinel leaves at intervals of at most `2^250` to ensure every nullifier falls within a valid bracket. With ~17 evenly-spaced brackets (at multiples of `2^250`), the entire field is covered. The `SpacedLeafImtProvider` implements this strategy.
 
