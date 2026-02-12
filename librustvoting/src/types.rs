@@ -91,6 +91,19 @@ pub struct WitnessData {
     pub auth_path: Vec<Vec<u8>>,
 }
 
+/// Callback for proof generation progress reporting.
+/// Swift implements this trait; Rust calls it during long-running operations.
+pub trait ProofProgressReporter: Send + Sync {
+    fn on_progress(&self, progress: f64);
+}
+
+/// No-op progress reporter for contexts where progress isn't observed.
+pub struct NoopProgressReporter;
+
+impl ProofProgressReporter for NoopProgressReporter {
+    fn on_progress(&self, _progress: f64) {}
+}
+
 // --- Validation helpers ---
 
 pub fn validate_32_bytes(v: &[u8], name: &str) -> Result<(), VotingError> {

@@ -1,6 +1,8 @@
 uniffi::setup_scaffolding!();
 
+use std::sync::Arc;
 use librustvoting as voting;
+use voting::storage::VotingDb;
 
 // --- Error type ---
 
@@ -24,8 +26,94 @@ impl From<voting::VotingError> for VotingError {
     }
 }
 
-// --- UniFFI Record types ---
-// These mirror librustvoting types but with UniFFI derive macros.
+// --- Callback interface for proof progress ---
+
+#[uniffi::export(callback_interface)]
+pub trait ProofProgressReporter: Send + Sync {
+    fn on_progress(&self, progress: f64);
+}
+
+/// Bridges FFI callback → librustvoting trait.
+struct ProgressBridge {
+    inner: Box<dyn ProofProgressReporter>,
+}
+
+impl voting::ProofProgressReporter for ProgressBridge {
+    fn on_progress(&self, progress: f64) {
+        self.inner.on_progress(progress);
+    }
+}
+
+// --- UniFFI Enum/Record types ---
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum RoundPhase {
+    Initialized,
+    HotkeyGenerated,
+    DelegationConstructed,
+    WitnessBuilt,
+    DelegationProved,
+    VoteReady,
+}
+
+impl From<voting::storage::RoundPhase> for RoundPhase {
+    fn from(p: voting::storage::RoundPhase) -> Self {
+        match p {
+            voting::storage::RoundPhase::Initialized => RoundPhase::Initialized,
+            voting::storage::RoundPhase::HotkeyGenerated => RoundPhase::HotkeyGenerated,
+            voting::storage::RoundPhase::DelegationConstructed => RoundPhase::DelegationConstructed,
+            voting::storage::RoundPhase::WitnessBuilt => RoundPhase::WitnessBuilt,
+            voting::storage::RoundPhase::DelegationProved => RoundPhase::DelegationProved,
+            voting::storage::RoundPhase::VoteReady => RoundPhase::VoteReady,
+        }
+    }
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct RoundState {
+    pub round_id: String,
+    pub phase: RoundPhase,
+    pub snapshot_height: u64,
+    pub hotkey_address: Option<String>,
+    pub delegated_weight: Option<u64>,
+    pub proof_generated: bool,
+    pub votes_cast: Vec<String>,
+}
+
+impl From<voting::storage::RoundState> for RoundState {
+    fn from(s: voting::storage::RoundState) -> Self {
+        Self {
+            round_id: s.round_id,
+            phase: s.phase.into(),
+            snapshot_height: s.snapshot_height,
+            hotkey_address: s.hotkey_address,
+            delegated_weight: s.delegated_weight,
+            proof_generated: s.proof_generated,
+            votes_cast: s.votes_cast,
+        }
+    }
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct RoundSummary {
+    pub round_id: String,
+    pub phase: RoundPhase,
+    pub snapshot_height: u64,
+    pub created_at: u64,
+}
+
+impl From<voting::storage::RoundSummary> for RoundSummary {
+    fn from(s: voting::storage::RoundSummary) -> Self {
+        Self {
+            round_id: s.round_id,
+            phase: s.phase.into(),
+            snapshot_height: s.snapshot_height,
+            created_at: s.created_at,
+        }
+    }
+}
+
+// --- Existing UniFFI Record types ---
 
 #[derive(Clone, uniffi::Record)]
 pub struct VotingHotkey {
@@ -243,7 +331,121 @@ impl From<voting::WitnessData> for WitnessData {
     }
 }
 
-// --- Exported functions ---
+// =============================================================================
+// VotingDatabase — stateful UniFFI Object (new API)
+// =============================================================================
+
+#[derive(uniffi::Object)]
+pub struct VotingDatabase {
+    db: Arc<VotingDb>,
+}
+
+#[uniffi::export]
+impl VotingDatabase {
+    // --- Lifecycle ---
+
+    #[uniffi::constructor]
+    pub fn open(path: String) -> Result<Self, VotingError> {
+        let db = VotingDb::open(&path)?;
+        Ok(Self { db: Arc::new(db) })
+    }
+
+    // --- Round management ---
+
+    pub fn init_round(&self, params: VotingRoundParams, session_json: Option<String>) -> Result<(), VotingError> {
+        Ok(self.db.init_round(&params.into(), session_json.as_deref())?)
+    }
+
+    pub fn get_round_state(&self, round_id: String) -> Result<RoundState, VotingError> {
+        Ok(self.db.get_round_state(&round_id)?.into())
+    }
+
+    pub fn list_rounds(&self) -> Result<Vec<RoundSummary>, VotingError> {
+        Ok(self.db.list_rounds()?.into_iter().map(Into::into).collect())
+    }
+
+    pub fn clear_round(&self, round_id: String) -> Result<(), VotingError> {
+        Ok(self.db.clear_round(&round_id)?)
+    }
+
+    // --- Phase 1: Delegation setup ---
+
+    pub fn generate_hotkey(&self, round_id: String) -> Result<VotingHotkey, VotingError> {
+        Ok(self.db.generate_hotkey(&round_id)?.into())
+    }
+
+    pub fn construct_delegation_action(
+        &self,
+        round_id: String,
+        hotkey: VotingHotkey,
+        notes: Vec<NoteInfo>,
+    ) -> Result<DelegationAction, VotingError> {
+        let core_notes: Vec<voting::NoteInfo> = notes.into_iter().map(Into::into).collect();
+        Ok(self.db.construct_delegation_action(&round_id, &hotkey.into(), &core_notes)?.into())
+    }
+
+    pub fn store_tree_state(&self, round_id: String, tree_state_bytes: Vec<u8>) -> Result<(), VotingError> {
+        Ok(self.db.store_tree_state(&round_id, &tree_state_bytes)?)
+    }
+
+    // --- Phase 2: Delegation proof ---
+
+    pub fn build_delegation_witness(
+        &self,
+        round_id: String,
+        action: DelegationAction,
+        inclusion_proofs: Vec<Vec<u8>>,
+        exclusion_proofs: Vec<Vec<u8>>,
+    ) -> Result<Vec<u8>, VotingError> {
+        Ok(self.db.build_delegation_witness(&round_id, &action.into(), &inclusion_proofs, &exclusion_proofs)?)
+    }
+
+    pub fn generate_delegation_proof(
+        &self,
+        round_id: String,
+        progress: Box<dyn ProofProgressReporter>,
+    ) -> Result<ProofResult, VotingError> {
+        let bridge = ProgressBridge { inner: progress };
+        Ok(self.db.generate_delegation_proof(&round_id, &bridge)?.into())
+    }
+
+    // --- Phase 3: Voting ---
+
+    pub fn encrypt_shares(&self, round_id: String, shares: Vec<u64>) -> Result<Vec<EncryptedShare>, VotingError> {
+        Ok(self.db.encrypt_shares(&round_id, &shares)?.into_iter().map(Into::into).collect())
+    }
+
+    pub fn build_vote_commitment(
+        &self,
+        round_id: String,
+        proposal_id: u32,
+        choice: u32,
+        enc_shares: Vec<EncryptedShare>,
+        van_witness: Vec<u8>,
+        progress: Box<dyn ProofProgressReporter>,
+    ) -> Result<VoteCommitmentBundle, VotingError> {
+        let core_shares: Vec<voting::EncryptedShare> = enc_shares.into_iter().map(Into::into).collect();
+        let bridge = ProgressBridge { inner: progress };
+        Ok(self.db.build_vote_commitment(&round_id, proposal_id, choice, &core_shares, &van_witness, &bridge)?.into())
+    }
+
+    pub fn build_share_payloads(
+        &self,
+        enc_shares: Vec<EncryptedShare>,
+        commitment: VoteCommitmentBundle,
+    ) -> Result<Vec<SharePayload>, VotingError> {
+        let core_shares: Vec<voting::EncryptedShare> = enc_shares.into_iter().map(Into::into).collect();
+        Ok(self.db.build_share_payloads(&core_shares, &commitment.into())?.into_iter().map(Into::into).collect())
+    }
+
+    pub fn mark_vote_submitted(&self, round_id: String, proposal_id: u32) -> Result<(), VotingError> {
+        Ok(self.db.mark_vote_submitted(&round_id, proposal_id)?)
+    }
+}
+
+// =============================================================================
+// Legacy free functions (kept for backward compat during Swift migration)
+// =============================================================================
 
 #[uniffi::export]
 pub fn generate_hotkey() -> Result<VotingHotkey, VotingError> {
@@ -293,7 +495,8 @@ pub fn build_delegation_witness(
 
 #[uniffi::export]
 pub fn generate_delegation_proof(witness: Vec<u8>) -> Result<ProofResult, VotingError> {
-    Ok(voting::zkp1::generate_delegation_proof(&witness)?.into())
+    let reporter = voting::NoopProgressReporter;
+    Ok(voting::zkp1::generate_delegation_proof(&witness, &reporter)?.into())
 }
 
 #[uniffi::export]
@@ -304,7 +507,8 @@ pub fn build_vote_commitment(
     van_witness: Vec<u8>,
 ) -> Result<VoteCommitmentBundle, VotingError> {
     let core_shares: Vec<voting::EncryptedShare> = enc_shares.into_iter().map(Into::into).collect();
-    Ok(voting::zkp2::build_vote_commitment(&proposal_id, choice, &core_shares, &van_witness)?.into())
+    let reporter = voting::NoopProgressReporter;
+    Ok(voting::zkp2::build_vote_commitment(&proposal_id, choice, &core_shares, &van_witness, &reporter)?.into())
 }
 
 #[uniffi::export]
