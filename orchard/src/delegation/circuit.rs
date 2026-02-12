@@ -1195,14 +1195,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // ---------------------------------------------------------------
         // Condition 7: Gov commitment integrity.
-        // gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
-        //                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+        // gov_comm_core = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+        //                          vote_round_id, MAX_PROPOSAL_AUTHORITY)
+        // gov_comm = Poseidon(gov_comm_core, gov_comm_rand)
         // ---------------------------------------------------------------
 
         // Gov commitment integrity (condition 7).
         //
-        // gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
-        //                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+        // gov_comm_core = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+        //                          vote_round_id, MAX_PROPOSAL_AUTHORITY)
+        // gov_comm = Poseidon(gov_comm_core, gov_comm_rand)
         //
         // Proves that the governance commitment (public input) is correctly derived
         // from the domain tag, the output note's voting hotkey address, the total
@@ -1210,10 +1212,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // proposal authority bitmask (MAX_PROPOSAL_AUTHORITY = 65535 for full
         // authority).
         //
-        // Uses ConstantLength<7>: the spec's 6 semantic inputs
-        // (DOMAIN_VAN, vpk, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY,
-        // gov_comm_rand) expand to 7 because vpk is a diversified address tuple
-        // represented as two x-coordinates (g_d_new_x, pk_d_new_x).
+        // Uses two Poseidon invocations over even arities (6 then 2).
         let v_total = {
             let gov_comm_rand = assign_free_advice(
                 layouter.namespace(|| "witness gov_comm_rand"),
@@ -1266,34 +1265,51 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 },
             )?;
 
-            // Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
-            //          vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
-            let derived_gov_comm = {
-                let poseidon_message = [
+            // Poseidon core over the 6 structural fields.
+            let gov_comm_core = {
+                let core_message = [
                     domain_van,
                     g_d_new_x,
                     pk_d_new_x,
                     v_total.clone(),
                     vote_round_id_cell,
                     max_proposal_authority,
-                    gov_comm_rand,
                 ];
                 let poseidon_hasher = PoseidonHash::<
                     pallas::Base,
                     _,
                     poseidon::P128Pow5T3,
-                    ConstantLength<7>,
+                    ConstantLength<6>,
                     3,
                     2,
                 >::init(
                     config.poseidon_chip(),
-                    layouter.namespace(|| "gov_comm Poseidon init"),
+                    layouter.namespace(|| "gov_comm_core Poseidon init"),
                 )?;
                 poseidon_hasher.hash(
                     layouter.namespace(|| {
-                        "Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, round, authority, rand)"
+                        "Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, round, authority)"
                     }),
-                    poseidon_message,
+                    core_message,
+                )?
+            };
+
+            // Finalize with blinding randomness.
+            let derived_gov_comm = {
+                let poseidon_hasher = PoseidonHash::<
+                    pallas::Base,
+                    _,
+                    poseidon::P128Pow5T3,
+                    ConstantLength<2>,
+                    3,
+                    2,
+                >::init(
+                    config.poseidon_chip(),
+                    layouter.namespace(|| "gov_comm finalize Poseidon init"),
+                )?;
+                poseidon_hasher.hash(
+                    layouter.namespace(|| "Poseidon(gov_comm_core, gov_comm_rand)"),
+                    [gov_comm_core, gov_comm_rand],
                 )?
             };
 
@@ -1371,7 +1387,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 true, // strict: running sum terminates at 0
             )?;
         }
-
         Ok(())
     }
 }

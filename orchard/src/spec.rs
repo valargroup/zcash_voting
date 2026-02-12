@@ -5,14 +5,10 @@ use core::ops::Deref;
 
 use ff::{Field, FromUniformBytes, PrimeField, PrimeFieldBits};
 use group::{Curve, Group, GroupEncoding, WnafBase, WnafScalar};
-#[cfg(feature = "circuit")]
 use halo2_gadgets::{poseidon::primitives as poseidon, sinsemilla::primitives as sinsemilla};
-#[cfg(feature = "std")]
+use halo2_proofs::arithmetic::{CurveAffine, CurveExt};
 use memuse::DynamicUsage;
-use pasta_curves::{
-    arithmetic::{CurveAffine, CurveExt},
-    pallas,
-};
+use pasta_curves::pallas;
 use subtle::{ConditionallySelectable, CtOption};
 
 use crate::constants::{
@@ -20,11 +16,12 @@ use crate::constants::{
     KEY_DIVERSIFICATION_PERSONALIZATION, L_ORCHARD_BASE,
 };
 
-pub(crate) use zcash_spec::PrfExpand;
+mod prf_expand;
+pub(crate) use prf_expand::PrfExpand;
 
 /// A Pallas point that is guaranteed to not be the identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct NonIdentityPallasPoint(pallas::Point);
+pub struct NonIdentityPallasPoint(pallas::Point);
 
 impl Default for NonIdentityPallasPoint {
     fn default() -> Self {
@@ -95,7 +92,7 @@ impl NonZeroPallasBase {
 
 /// An integer in [1..r_P].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct NonZeroPallasScalar(pallas::Scalar);
+pub struct NonZeroPallasScalar(pallas::Scalar);
 
 impl Default for NonZeroPallasScalar {
     fn default() -> Self {
@@ -157,7 +154,6 @@ impl PreparedNonIdentityBase {
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedNonZeroScalar(WnafScalar<pallas::Scalar, PREPARED_WINDOW_SIZE>);
 
-#[cfg(feature = "std")]
 impl DynamicUsage for PreparedNonZeroScalar {
     fn dynamic_usage(&self) -> usize {
         self.0.dynamic_usage()
@@ -224,10 +220,10 @@ pub(crate) fn commit_ivk(
 /// [concretediversifyhash]: https://zips.z.cash/protocol/nu5.pdf#concretediversifyhash
 pub(crate) fn diversify_hash(d: &[u8; 11]) -> NonIdentityPallasPoint {
     let hasher = pallas::Point::hash_to_curve(KEY_DIVERSIFICATION_PERSONALIZATION);
-    let g_d = hasher(d);
+    let pk_d = hasher(d);
     // If the identity occurs, we replace it with a different fixed point.
     // TODO: Replace the unwrap_or_else with a cached fixed point.
-    NonIdentityPallasPoint(CtOption::new(g_d, !g_d.is_identity()).unwrap_or_else(|| hasher(&[])))
+    NonIdentityPallasPoint(CtOption::new(pk_d, !pk_d.is_identity()).unwrap_or_else(|| hasher(&[])))
 }
 
 /// $PRF^\mathsf{nfOrchard}(nk, \rho) := Poseidon(nk, \rho)$
@@ -275,20 +271,20 @@ pub(crate) const MAX_PROPOSAL_AUTHORITY: u64 = 65535;
 /// Governance commitment hash for the delegation circuit (condition 7).
 ///
 /// ```text
-/// gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
-///                     vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+/// gov_comm_core = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total,
+///                          vote_round_id, MAX_PROPOSAL_AUTHORITY)
+/// gov_comm = Poseidon(gov_comm_core, gov_comm_rand)
 /// ```
 ///
 /// Binds the governance commitment to the domain tag, the output note's
 /// voting hotkey address, the total voting weight, the vote round, a blinding
 /// factor, and the proposal authority bitmask.
 ///
-/// # Parameter layout — `ConstantLength<7>`
+/// # Parameter layout
 ///
-/// The spec defines 6 semantic fields: `(DOMAIN_VAN, vpk, v_total,
-/// vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)`.  Because `vpk` is
-/// a diversified address tuple represented as two x-coordinates, the Poseidon
-/// input naturally expands to 7 elements.
+/// We hash the 6 structural fields first, then finalize with the blinding
+/// factor as a second hash. This preserves the binding structure while using
+/// only even arities for in-circuit Poseidon hashing.
 ///
 /// `DOMAIN_VAN` and `MAX_PROPOSAL_AUTHORITY` are fixed constants, baked into
 /// the delegation circuit's verification key via `assign_advice_from_constant`,
@@ -300,16 +296,20 @@ pub(crate) fn gov_commitment_hash(
     vote_round_id: pallas::Base,
     gov_comm_rand: pallas::Base,
 ) -> pallas::Base {
-    poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<7>, 3, 2>::init()
-        .hash([
-            pallas::Base::from(DOMAIN_VAN),
-            g_d_new_x,
-            pk_d_new_x,
-            v_total,
-            vote_round_id,
-            pallas::Base::from(MAX_PROPOSAL_AUTHORITY),
-            gov_comm_rand,
-        ])
+    let gov_comm_core =
+        poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<6>, 3, 2>::init()
+            .hash([
+                pallas::Base::from(DOMAIN_VAN),
+                g_d_new_x,
+                pk_d_new_x,
+                v_total,
+                vote_round_id,
+                pallas::Base::from(MAX_PROPOSAL_AUTHORITY),
+            ]);
+    poseidon::Hash::<_, poseidon::P128Pow5T3, poseidon::ConstantLength<2>, 3, 2>::init().hash([
+        gov_comm_core,
+        gov_comm_rand,
+    ])
 }
 
 /// Defined in [Zcash Protocol Spec § 5.4.5.5: Orchard Key Agreement][concreteorchardkeyagreement].
@@ -390,15 +390,13 @@ pub fn i2lebsp<const NUM_BITS: usize>(int: u64) -> [bool; NUM_BITS] {
 mod tests {
     use super::{i2lebsp, lebs2ip};
 
+    use group::Group;
+    use halo2_proofs::arithmetic::CurveExt;
+    use pasta_curves::pallas;
     use rand::{rngs::OsRng, RngCore};
 
     #[test]
-    #[cfg(feature = "circuit")]
     fn diversify_hash_substitution() {
-        use group::Group;
-        use halo2_proofs::arithmetic::CurveExt;
-        use pasta_curves::pallas;
-
         assert!(!bool::from(
             pallas::Point::hash_to_curve("z.cash:Orchard-gd")(&[]).is_identity()
         ));

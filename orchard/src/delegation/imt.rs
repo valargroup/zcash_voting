@@ -89,14 +89,12 @@ pub trait ImtProvider {
 // Test-only
 // ================================================================
 
-#[cfg(test)]
 use ff::Field;
 
 /// Precomputed empty subtree hashes for the IMT (Poseidon2-based).
 ///
 /// `empty[0] = Poseidon2(0, 0)` (hash of an empty (low=0, high=0) leaf),
 /// `empty[i] = Poseidon2(empty[i-1], empty[i-1])` for i >= 1.
-#[cfg(test)]
 pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
     let empty_leaf = poseidon2_hash_2(pallas::Base::zero(), pallas::Base::zero());
     let mut hashes = vec![empty_leaf];
@@ -113,7 +111,6 @@ pub(crate) fn empty_imt_hashes() -> Vec<pallas::Base> {
 /// (p ~= 16.something x 2^250). Each bracket k has low = k*step + 1 and
 /// high = (k+1)*step - 1, stored as (low, high) leaves at positions 0..16 in
 /// a 32-leaf subtree. Any hash-derived nullifier will fall within one bracket.
-#[cfg(test)]
 #[derive(Debug)]
 pub struct SpacedLeafImtProvider {
     /// The root of the IMT.
@@ -126,7 +123,6 @@ pub struct SpacedLeafImtProvider {
     subtree_levels: Vec<Vec<pallas::Base>>,
 }
 
-#[cfg(test)]
 impl SpacedLeafImtProvider {
     /// Create a new spaced-leaf IMT provider ((low, high) leaf model).
     ///
@@ -180,7 +176,6 @@ impl SpacedLeafImtProvider {
     }
 }
 
-#[cfg(test)]
 impl ImtProvider for SpacedLeafImtProvider {
     fn root(&self) -> pallas::Base {
         self.root

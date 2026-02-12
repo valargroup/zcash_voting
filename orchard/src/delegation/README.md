@@ -201,7 +201,8 @@ Where:
 Purpose: prove that the governance commitment (a public input) is correctly derived from the domain tag, the output note's voting hotkey address, the total voting weight, the vote round identifier, a blinding factor, and the proposal authority bitmask. Binds the delegated weight, voting hotkey, and authority scope into a single public commitment that ZKP #2 (vote proof) can open. The domain tag provides domain separation from Vote Commitments in the shared vote commitment tree.
 
 ```
-gov_comm = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY, gov_comm_rand)
+gov_comm_core = Poseidon(DOMAIN_VAN, g_d_new_x, pk_d_new_x, v_total, vote_round_id, MAX_PROPOSAL_AUTHORITY)
+gov_comm = Poseidon(gov_comm_core, gov_comm_rand)
 ```
 
 Where:
@@ -212,6 +213,10 @@ Where:
 - **vote_round_id**: the vote round identifier (public input, same cell as condition 3).
 - **MAX_PROPOSAL_AUTHORITY**: `2^16 - 1 = 65535`. A 16-bit bitmask authorizing voting on all 16 proposals. Assigned via `assign_advice_from_constant` so the value is baked into the verification key.
 - **gov_comm_rand**: a random blinding factor. Prevents observers from brute-forcing the address or weight from the public `gov_comm`.
+
+**Function layout:** Two Poseidon hashes:
+- `gov_comm_core` uses `ConstantLength<6>` over the structural fields.
+- `gov_comm` finalizes with `ConstantLength<2>` over `(gov_comm_core, gov_comm_rand)`.
 
 **Constructions:** `PoseidonChip`, `AddChip`.
 
