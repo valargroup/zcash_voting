@@ -48,7 +48,7 @@ A single circuit proving all 16 conditions of the delegation ZKP at K=16 (65,536
    * **is_note_real**: boolean flag — 1 for real notes, 0 for padded notes.
    * **imt_nf_start**: the even-position leaf (start of the bracketing interval).
    * **imt_leaf_pos**: position of the even leaf in the IMT (must be even).
-   * **imt_path**: Poseidon-based IMT Merkle authentication path (32 siblings). `path[0]` = nf_end.
+   * **imt_path**: Poseidon2-based IMT Merkle authentication path (32 siblings). `path[0]` = nf_end.
 
 - Private (governance — condition 7)
    * **gov_comm_rand**: a random blinding factor for the governance commitment.
@@ -291,11 +291,11 @@ Same `DeriveNullifier` construction as condition 2, but applied to each delegate
 
 ## 13. IMT Non-Membership (x4)
 
-Purpose: prove the note's nullifier has NOT been spent, using a Poseidon-based Indexed Merkle Tree (depth 32) with a paired-leaf model. Adjacent even/odd leaves define intervals `[nf_start, nf_end]`.
+Purpose: prove the note's nullifier has NOT been spent, using a Poseidon2-based Indexed Merkle Tree (depth 32) with a paired-leaf model. Adjacent even/odd leaves define intervals `[nf_start, nf_end]`.
 
 **Approach:**
 
-1. **Merkle path** (32 levels, starting from `nf_start`): The even-position leaf `nf_start` is the starting point. At each level, a `q_imt_swap` gate conditionally swaps `(current, sibling)` into `(left, right)` based on the position bit, then `Poseidon(left, right)` computes the parent. At level 0, the sibling is `nf_end`. The swap gate constrains:
+1. **Merkle path** (32 levels, starting from `nf_start`): The even-position leaf `nf_start` is the starting point. At each level, a `q_imt_swap` gate conditionally swaps `(current, sibling)` into `(left, right)` based on the position bit, then `Poseidon2(left, right)` computes the parent. At level 0, the sibling is `nf_end`. The swap gate constrains:
    - `left = current + pos_bit * (sibling - current)`
    - `left + right = current + sibling`
    - `bool_check(pos_bit)`
@@ -311,13 +311,13 @@ Purpose: prove the note's nullifier has NOT been spent, using a Poseidon-based I
    - `x` is range-checked to `[0, 2^250)` → `real_nf >= nf_start`
    - `x_shifted` is range-checked to `[0, 2^250)` → `real_nf <= nf_end`
 
-**No separate leaf hash**: Unlike the previous approach, the paired-leaf model stores raw values (not hashes) at the leaves. The Poseidon hash `Poseidon(nf_start, nf_end)` is computed as part of the first Merkle level, saving one Poseidon call per note slot.
+**No separate leaf hash**: Unlike the previous approach, the paired-leaf model stores raw values (not hashes) at the leaves. The Poseidon2 hash `Poseidon2(nf_start, nf_end)` is computed as part of the first Merkle level, saving one hash call per note slot.
 
 **No separate nf_end witness**: `nf_end` is the Merkle sibling at level 0 (`path[0]`). The Merkle root check authenticates it — a fake `nf_end` would produce the wrong root.
 
 **250-bit range bound assumption:** The 250-bit range check constrains bracket intervals to `< 2^250`. Since the Pallas field has order `p ≈ 2^254.9`, the IMT operator must pre-populate sentinel leaves at intervals of at most `2^250` to ensure every nullifier falls within a valid bracket. With ~17 evenly-spaced brackets (at multiples of `2^250`), the entire field is covered. The `SpacedLeafImtProvider` implements this strategy.
 
-**Constructions:** `PoseidonChip`, `LookupRangeCheckConfig`, `q_imt_swap`, `q_interval`, `q_per_note`.
+**Constructions:** `Poseidon2Chip`, `LookupRangeCheckConfig`, `q_imt_swap`, `q_interval`, `q_per_note`.
 
 ## 14. Governance Nullifier Publication (x4)
 
@@ -373,7 +373,8 @@ Gate layout: a single region with 6 rows (one per pair from C(4,2) = 6), each us
 | Chip / Gadget                     | Source             | Conditions               |
 | --------------------------------- | ------------------ | ------------------------ |
 | EccChip                           | halo2_gadgets      | 1, 2, 4, 5, 6, 9, 11, 12 |
-| PoseidonChip                      | halo2_gadgets      | 2, 3, 7, 12, 13, 14      |
+| PoseidonChip                      | halo2_gadgets      | 2, 3, 7, 12, 14          |
+| Poseidon2Chip                     | vendored           | 13                       |
 | SinsemillaChip (config 1)         | halo2_gadgets      | 1, 5, 9, 10              |
 | SinsemillaChip (config 2)         | halo2_gadgets      | 6, 10                    |
 | MerkleChip (configs 1+2)          | halo2_gadgets      | 10                       |
@@ -399,6 +400,3 @@ Gate layout: a single region with 6 rows (one per pair from C(4,2) = 6), each us
 
 - **"Why do padded notes use the real ivk?"** — Padded notes must pass condition 11 (`pk_d = [ivk] * g_d`) using the same ivk derived in condition 5. The builder creates padded notes with `fvk.address_at(...)` so their addresses are valid under the real ivk. This is safe because padded notes have `v = 0` (enforced by condition 15) and `is_note_real = 0` (so condition 10 skips the Merkle root check). They contribute nothing to the vote weight but their governance nullifiers are still published (condition 14), which is harmless — the consuming protocol can ignore nullifiers for zero-value notes or treat them as no-ops.
 
-## Remaining Questions
-
-- **IMT hash choice for v1:** IMT remains on Poseidon1 (`P128Pow5T3`) for now. If we move IMT hashing to Poseidon2 in-circuit, we will need to implement (or vendor) a Poseidon2 Halo2 chip/gadget in this stack.

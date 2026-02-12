@@ -73,8 +73,15 @@ use halo2_gadgets::{
     },
     utilities::{bool_check, lookup_range_check::LookupRangeCheckConfig},
 };
+use std::sync::LazyLock;
 
 use super::imt::IMT_DEPTH;
+use super::poseidon2::Poseidon2Params;
+use super::poseidon2_chip::{Poseidon2Chip, Poseidon2Config};
+
+// Parsed once and reused to avoid per-note constant parsing in condition 13.
+static POSEIDON2_PARAMS: LazyLock<Poseidon2Params<pallas::Base>> =
+    LazyLock::new(Poseidon2Params::new);
 
 // ================================================================
 // Public input offsets (12 field elements).
@@ -185,6 +192,8 @@ pub struct Config {
     // For each of the 6 pairs (i,j), constrains (gov_null_i - gov_null_j) * inv = 1,
     // which is unsatisfiable when two gov nullifiers are equal.
     q_gov_null_distinct: Selector,
+    // Poseidon2 chip config — used for IMT Merkle hashing (condition 13).
+    poseidon2_config: Poseidon2Config<pallas::Base>,
 }
 
 impl Config {
@@ -242,6 +251,10 @@ impl Config {
 
     fn range_check_config(&self) -> LookupRangeCheckConfig<pallas::Base, 10> {
         self.range_check
+    }
+
+    fn poseidon2_chip(&self) -> Poseidon2Chip<pallas::Base> {
+        Poseidon2Chip::construct(self.poseidon2_config.clone())
     }
 }
 
@@ -611,6 +624,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let new_note_commit_config =
             NoteCommitChip::configure(meta, advices, sinsemilla_config_2.clone());
 
+        // Poseidon2 chip for IMT Merkle hashing (condition 13).
+        let poseidon2_config = Poseidon2Chip::<pallas::Base>::configure(meta);
+
         Config {
             primary,
             advices,
@@ -629,6 +645,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             q_imt_swap,
             q_interval,
             q_gov_null_distinct,
+            poseidon2_config,
         }
     }
 
@@ -1628,9 +1645,6 @@ fn synthesize_note_slot(
     //   3. Even position: pos_bit_0 = 0 enforces the leaf is at an even
     //      position, ensuring the sibling is nf_end (not nf_start).
     //
-    // TODO: IMT hashing currently uses Poseidon1 (P128Pow5T3). If the IMT
-    // moves to Poseidon2, we'll need a Poseidon2 Halo2 chip/gadget here.
-
     // Witness the even-position leaf (nf_start).
     let nf_start = assign_free_advice(
         layouter.namespace(|| format!("note {s} imt_nf_start")),
@@ -1638,9 +1652,9 @@ fn synthesize_note_slot(
         note.imt_nf_start,
     )?;
 
-    // Poseidon Merkle path from nf_start directly (no leaf hash).
+    // Poseidon2 Merkle path from nf_start directly (no leaf hash).
     // At each level, q_imt_swap orders (current, sibling) by position bit,
-    // then Poseidon(left, right) computes the parent.
+    // then Poseidon2(left, right) computes the parent.
     let mut current = nf_start.clone();
     let mut pos_bit_0_cell: Option<AssignedCell<pallas::Base, pallas::Base>> = None;
     let mut nf_end_cell: Option<AssignedCell<pallas::Base, pallas::Base>> = None;
@@ -1716,20 +1730,11 @@ fn synthesize_note_slot(
         )?;
 
         let parent = {
-            let poseidon_hasher = PoseidonHash::<
-                pallas::Base,
-                _,
-                poseidon::P128Pow5T3,
-                ConstantLength<2>,
-                3,
-                2,
-            >::init(
-                config.poseidon_chip(),
-                layouter.namespace(|| format!("note {s} IMT level {i} hash init")),
-            )?;
-            poseidon_hasher.hash(
-                layouter.namespace(|| format!("note {s} Poseidon(left, right) level {i}")),
-                [left, right],
+            let poseidon2 = config.poseidon2_chip();
+            poseidon2.hash(
+                &mut layouter.namespace(|| format!("note {s} Poseidon2(left, right) level {i}")),
+                &[left, right],
+                &POSEIDON2_PARAMS,
             )?
         };
         current = parent;
