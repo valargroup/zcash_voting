@@ -1,8 +1,8 @@
 [package]
 name = "orchard"
-version = "0.12.0"
+version = "0.11.0"
 authors = [
-    "Sean Bowe",
+    "Sean Bowe <sean@electriccoin.co>",
     "Jack Grigg <jack@electriccoin.co>",
     "Daira-Emma Hopwood <daira@jacaranda.org>",
     "Ying Tong Lai",
@@ -30,18 +30,17 @@ ff = { version = "0.13", default-features = false }
 fpe = { version = "0.6", default-features = false, features = ["alloc"] }
 group = "0.13"
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
-lazy_static = { version = "1", features = ["spin_no_std"] }
+lazy_static = "1"
 memuse = { version = "0.2.2", default-features = false }
 pasta_curves = "0.5"
-proptest = { version = ">=1.0.0, <1.7.0", optional = true }
+proptest = { version = "1.0.0", optional = true }
 rand = { version = "0.8", default-features = false }
-rand_core = { version = "0.6", default-features = false }
 reddsa = { version = "0.5", default-features = false }
 nonempty = { version = "0.11", default-features = false }
 poseidon = { package = "halo2_poseidon", version = "0.1" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 sinsemilla = "0.1"
-subtle = { version = "2.6", default-features = false }
+subtle = { version = "2.3", default-features = false }
 zcash_note_encryption = "0.4"
 incrementalmerkletree = "0.8.1"
 zcash_spec = "0.2.1"
@@ -49,7 +48,7 @@ zip32 = { version = "0.2.0", default-features = false }
 visibility = "0.1.1"
 
 # Circuit
-halo2_gadgets = { version = "0.4", optional = true, default-features = false }
+halo2_gadgets = { version = "0.3", optional = true }
 halo2_proofs = { version = "0.3", optional = true, default-features = false, features = ["batch", "floor-planner-v1-legacy-pdqsort"] }
 
 # Boilerplate
@@ -67,9 +66,9 @@ plotters = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.4" # 0.5 depends on clap 4 which has MSRV 1.70
-halo2_gadgets = { version = "0.4", features = ["test-dependencies"] }
+halo2_gadgets = { version = "0.3", features = ["test-dependencies"] }
 hex = "0.4"
-proptest = ">=1.0.0, <1.7.0"
+proptest = "1.0.0"
 zcash_note_encryption = { version = "0.4", features = ["pre-zip-212"] }
 incrementalmerkletree = { version = "0.8.1", features = ["test-dependencies"] }
 shardtree = "0.6"
@@ -88,7 +87,7 @@ circuit = ["dep:halo2_gadgets", "dep:halo2_proofs", "std"]
 unstable-frost = []
 multicore = ["halo2_proofs?/multicore"]
 dev-graph = ["halo2_proofs?/dev-graph", "image", "plotters"]
-test-dependencies = ["proptest", "rand/std"]
+test-dependencies = ["proptest"]
 delegation = ["circuit", "std"]
 
 [[bench]]

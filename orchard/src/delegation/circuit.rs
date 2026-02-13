@@ -74,7 +74,7 @@ use halo2_gadgets::{
     },
     utilities::{
         bool_check,
-        lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig},
+        lookup_range_check::LookupRangeCheckConfig,
     },
 };
 use lazy_static::lazy_static;
@@ -630,7 +630,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[0],
                 lookup,
                 range_check,
-                false,
             );
             let merkle_config_1 = MerkleChip::configure(meta, sinsemilla_config_1.clone());
             (sinsemilla_config_1, merkle_config_1)
@@ -648,7 +647,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[1],
                 lookup,
                 range_check,
-                false,
             );
             let merkle_config_2 = MerkleChip::configure(meta, sinsemilla_config_2.clone());
             (sinsemilla_config_2, merkle_config_2)

@@ -71,29 +71,18 @@ pub const MAX_NOTE_VALUE: u64 = u64::MAX;
 pub const VALUE_SUM_RANGE: RangeInclusive<i128> =
     -(MAX_NOTE_VALUE as i128)..=MAX_NOTE_VALUE as i128;
 
-/// A type for balance violations in amount addition and subtraction
-/// (overflow and underflow of allowed ranges).
+/// A value operation overflowed.
 #[derive(Debug)]
-#[non_exhaustive]
-pub enum BalanceError {
-    /// Two values were added or subtracted, and the result overflowed the valid range for
-    /// the value.
-    ///
-    /// Normally this range is [`VALUE_SUM_RANGE`], but when interacting with value
-    /// balances it may be `i64`.
-    Overflow,
-}
+pub struct OverflowError;
 
-impl fmt::Display for BalanceError {
+impl fmt::Display for OverflowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Overflow => write!(f, "Orchard value operation overflowed"),
-        }
+        write!(f, "Orchard value operation overflowed")
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for BalanceError {}
+impl std::error::Error for OverflowError {}
 
 /// The non-negative value of an individual Orchard note.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -223,25 +212,25 @@ impl Add for ValueSum {
     }
 }
 
-impl<'a> Sum<&'a ValueSum> for Result<ValueSum, BalanceError> {
+impl<'a> Sum<&'a ValueSum> for Result<ValueSum, OverflowError> {
     fn sum<I: Iterator<Item = &'a ValueSum>>(mut iter: I) -> Self {
         iter.try_fold(ValueSum(0), |acc, v| acc + *v)
-            .ok_or(BalanceError::Overflow)
+            .ok_or(OverflowError)
     }
 }
 
-impl Sum<ValueSum> for Result<ValueSum, BalanceError> {
+impl Sum<ValueSum> for Result<ValueSum, OverflowError> {
     fn sum<I: Iterator<Item = ValueSum>>(mut iter: I) -> Self {
         iter.try_fold(ValueSum(0), |acc, v| acc + v)
-            .ok_or(BalanceError::Overflow)
+            .ok_or(OverflowError)
     }
 }
 
 impl TryFrom<ValueSum> for i64 {
-    type Error = BalanceError;
+    type Error = OverflowError;
 
     fn try_from(v: ValueSum) -> Result<i64, Self::Error> {
-        i64::try_from(v.0).map_err(|_| BalanceError::Overflow)
+        i64::try_from(v.0).map_err(|_| OverflowError)
     }
 }
 
@@ -475,7 +464,7 @@ mod tests {
 
     use super::{
         testing::{arb_note_value_bounded, arb_trapdoor, arb_value_sum_bounded},
-        BalanceError, ValueCommitTrapdoor, ValueCommitment, ValueSum, MAX_NOTE_VALUE,
+        OverflowError, ValueCommitTrapdoor, ValueCommitment, ValueSum, MAX_NOTE_VALUE,
     };
     use crate::primitives::redpallas;
 
@@ -491,7 +480,7 @@ mod tests {
             let value_balance = values
                 .iter()
                 .map(|(value, _)| value)
-                .sum::<Result<ValueSum, BalanceError>>()
+                .sum::<Result<ValueSum, OverflowError>>()
                 .expect("we generate values that won't overflow");
 
             let bsk = values

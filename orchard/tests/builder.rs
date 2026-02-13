@@ -1,5 +1,3 @@
-#![cfg(feature = "circuit")]
-
 use incrementalmerkletree::{Hashable, Marking, Retention};
 use orchard::{
     builder::{Builder, BundleType},

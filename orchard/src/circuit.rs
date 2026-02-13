@@ -55,15 +55,15 @@ use halo2_gadgets::{
             MerklePath,
         },
     },
-    utilities::lookup_range_check::{LookupRangeCheck, LookupRangeCheckConfig},
+    utilities::lookup_range_check::LookupRangeCheckConfig,
 };
 
 mod commit_ivk;
-pub mod gadget;
-mod note_commit;
 #[cfg(feature = "delegation")]
 #[path = "delegation/mod.rs"]
 pub mod delegation;
+pub mod gadget;
+mod note_commit;
 
 pub use crate::Proof;
 
@@ -330,7 +330,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[0],
                 lookup,
                 range_check,
-                false,
             );
             let merkle_config_1 = MerkleChip::configure(meta, sinsemilla_config_1.clone());
 
@@ -349,7 +348,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 lagrange_coeffs[1],
                 lookup,
                 range_check,
-                false,
             );
             let merkle_config_2 = MerkleChip::configure(meta, sinsemilla_config_2.clone());
 

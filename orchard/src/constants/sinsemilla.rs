@@ -132,7 +132,7 @@ impl CommitDomains<pallas::Affine, OrchardFixedBases, OrchardHashDomains> for Or
     }
 }
 
-#[cfg(all(test, feature = "circuit"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::{

@@ -5,9 +5,6 @@ use core::ops::Deref;
 
 use ff::{Field, FromUniformBytes, PrimeField, PrimeFieldBits};
 use group::{Curve, Group, GroupEncoding, WnafBase, WnafScalar};
-// When `circuit` is enabled, prefer halo2_gadgets re-exports for type consistency
-// with in-circuit code. When disabled, `poseidon::*` and `sinsemilla::*` resolve to
-// the standalone crates (halo2_poseidon, sinsemilla) via Rust 2018 extern prelude.
 #[cfg(feature = "circuit")]
 use halo2_gadgets::{poseidon::primitives as poseidon, sinsemilla::primitives as sinsemilla};
 #[cfg(feature = "std")]
@@ -321,15 +318,13 @@ pub fn i2lebsp<const NUM_BITS: usize>(int: u64) -> [bool; NUM_BITS] {
 mod tests {
     use super::{i2lebsp, lebs2ip};
 
+    use group::Group;
+    use halo2_proofs::arithmetic::CurveExt;
+    use pasta_curves::pallas;
     use rand::{rngs::OsRng, RngCore};
 
     #[test]
-    #[cfg(feature = "circuit")]
     fn diversify_hash_substitution() {
-        use group::Group;
-        use halo2_proofs::arithmetic::CurveExt;
-        use pasta_curves::pallas;
-
         assert!(!bool::from(
             pallas::Point::hash_to_curve("z.cash:Orchard-gd")(&[]).is_identity()
         ));

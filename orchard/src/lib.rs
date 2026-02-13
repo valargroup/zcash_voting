@@ -40,13 +40,13 @@ pub mod primitives;
 mod spec;
 pub mod tree;
 pub mod value;
-#[cfg(feature = "delegation")]
-pub use crate::circuit::delegation;
 pub mod zip32;
 
 #[cfg(test)]
 mod test_vectors;
 
+#[cfg(feature = "delegation")]
+pub use crate::circuit::delegation;
 pub use action::Action;
 pub use address::Address;
 pub use bundle::Bundle;
