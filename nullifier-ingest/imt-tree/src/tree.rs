@@ -5,7 +5,6 @@ use anyhow::Result;
 use ff::{Field, PrimeField as _};
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3, Spec};
 use pasta_curves::Fp;
-use rusqlite::Connection;
 
 /// Depth of the nullifier range Merkle tree.
 ///
@@ -55,28 +54,6 @@ pub const TREE_DEPTH: usize = 29;
 /// regardless of the tree capacity — adding more empty slots doesn't change
 /// the root because they all reduce to the same empty subtree hashes.
 pub type Range = [Fp; 2];
-
-/// Load all nullifiers from the database, sort them, and build the gap ranges.
-pub fn list_nf_ranges(connection: &Connection) -> Result<Vec<Range>> {
-    let mut s = connection.prepare("SELECT nullifier FROM nullifiers")?;
-    let rows = s.query_map([], |r| {
-        let v = r.get::<_, [u8; 32]>(0)?;
-        let v = Fp::from_repr(v).unwrap();
-        Ok(v)
-    })?;
-    let mut nfs = rows.collect::<Result<Vec<_>, _>>()?;
-    nfs.sort();
-    Ok(build_nf_ranges(nfs))
-}
-
-/// Compute the Merkle root over the nullifier gap-range tree.
-pub fn compute_nf_root(connection: &Connection) -> Result<Fp> {
-    let ranges = list_nf_ranges(connection)?;
-    let leaves = commit_ranges(&ranges);
-    let empty = precompute_empty_hashes();
-    let (root, _) = build_levels(&leaves, &empty);
-    Ok(root)
-}
 
 /// Build gap ranges from a sorted nullifier set.
 ///
@@ -392,12 +369,6 @@ impl NullifierTree {
         Self::from_ranges(ranges)
     }
 
-    /// Build a tree from nullifiers stored in the database.
-    pub fn from_db(connection: &Connection) -> Result<Self> {
-        let ranges = list_nf_ranges(connection)?;
-        Ok(Self::from_ranges(ranges))
-    }
-
     /// Load a tree from a binary file written by [`save`](NullifierTree::save).
     pub fn load(path: &Path) -> Result<Self> {
         let ranges = load_tree(path)?;
@@ -405,7 +376,7 @@ impl NullifierTree {
     }
 
     /// Build a tree from pre-computed gap ranges.
-    fn from_ranges(ranges: Vec<Range>) -> Self {
+    pub fn from_ranges(ranges: Vec<Range>) -> Self {
         let leaves = commit_ranges(&ranges);
         let empty_hashes = precompute_empty_hashes();
         let (root, levels) = build_levels(&leaves, &empty_hashes);
@@ -702,9 +673,7 @@ mod tests {
         let root = tree.root();
 
         let proof = tree.prove(fp(15)).unwrap();
-        // A value outside the range should fail verification
         assert!(!proof.verify(fp(5), root));
-        // A nullifier itself should also fail (outside range bounds)
         assert!(!proof.verify(fp(10), root));
     }
 
@@ -738,7 +707,7 @@ mod tests {
     #[test]
     fn test_save_load_round_trip() {
         let tree = NullifierTree::build(four_nullifiers());
-        let dir = std::env::temp_dir().join("nullifier_tree_test");
+        let dir = std::env::temp_dir().join("imt_tree_test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("ranges.bin");
 
@@ -761,10 +730,8 @@ mod tests {
     fn test_precompute_empty_hashes_chain() {
         let empty = precompute_empty_hashes();
 
-        // Level 0 is poseidon_hash(0, 0) — the commitment of an empty (low=0, high=0) leaf.
         assert_eq!(empty[0], poseidon_hash(Fp::zero(), Fp::zero()));
 
-        // Each subsequent level is the self-hash of the level below.
         for i in 1..TREE_DEPTH {
             let expected = poseidon_hash(empty[i - 1], empty[i - 1]);
             assert_eq!(
@@ -779,7 +746,6 @@ mod tests {
     fn test_build_levels_consistency() {
         let tree = NullifierTree::build(four_nullifiers());
 
-        // Verify that each level is correctly derived from the level below.
         for i in 0..TREE_DEPTH - 1 {
             let prev = &tree.levels[i];
             let next = &tree.levels[i + 1];
@@ -794,7 +760,6 @@ mod tests {
             }
         }
 
-        // Root should be the hash of the top-level pair.
         let top = &tree.levels[TREE_DEPTH - 1];
         let expected_root = poseidon_hash(top[0], top[1]);
         assert_eq!(tree.root(), expected_root);
@@ -804,8 +769,7 @@ mod tests {
     fn test_leaves_accessor() {
         let tree = NullifierTree::build(four_nullifiers());
         let leaves = tree.leaves();
-        assert_eq!(leaves.len(), 5); // 4 nullifiers → 5 ranges
-        // Verify leaves match commit_ranges output.
+        assert_eq!(leaves.len(), 5);
         let expected = commit_ranges(tree.ranges());
         assert_eq!(leaves, expected.as_slice());
     }
@@ -819,13 +783,12 @@ mod tests {
 
     #[test]
     fn test_find_range_single_range() {
-        // Single nullifier at 100 produces two ranges: [0, 99] and [101, MAX]
         let ranges = build_nf_ranges(vec![fp(100)]);
         assert_eq!(ranges.len(), 2);
 
         assert_eq!(find_range_for_value(&ranges, fp(0)), Some(0));
         assert_eq!(find_range_for_value(&ranges, fp(99)), Some(0));
-        assert_eq!(find_range_for_value(&ranges, fp(100)), None); // nullifier
+        assert_eq!(find_range_for_value(&ranges, fp(100)), None);
         assert_eq!(find_range_for_value(&ranges, fp(101)), Some(1));
         assert_eq!(find_range_for_value(&ranges, fp(999)), Some(1));
     }
@@ -833,14 +796,12 @@ mod tests {
     #[test]
     fn test_find_range_exact_boundaries() {
         let ranges = build_nf_ranges(four_nullifiers());
-        // Exact low boundaries
         assert_eq!(find_range_for_value(&ranges, fp(0)), Some(0));
         assert_eq!(find_range_for_value(&ranges, fp(11)), Some(1));
         assert_eq!(find_range_for_value(&ranges, fp(21)), Some(2));
         assert_eq!(find_range_for_value(&ranges, fp(31)), Some(3));
         assert_eq!(find_range_for_value(&ranges, fp(41)), Some(4));
 
-        // Exact high boundaries
         assert_eq!(find_range_for_value(&ranges, fp(9)), Some(0));
         assert_eq!(find_range_for_value(&ranges, fp(19)), Some(1));
         assert_eq!(find_range_for_value(&ranges, fp(29)), Some(2));
@@ -849,9 +810,7 @@ mod tests {
 
     #[test]
     fn test_find_range_consecutive_nullifiers() {
-        // Consecutive nullifiers: 10, 11, 12 produce no gap between them
         let ranges = build_nf_ranges(vec![fp(10), fp(11), fp(12)]);
-        // [0, 9], [13, MAX]
         assert_eq!(ranges.len(), 2);
 
         assert_eq!(find_range_for_value(&ranges, fp(5)), Some(0));
@@ -864,19 +823,15 @@ mod tests {
 
     #[test]
     fn test_find_range_binary_search_large_set() {
-        // Build a large set of evenly-spaced nullifiers and verify the binary
-        // search returns the same results as a naive linear scan.
         let nullifiers: Vec<Fp> = (0..10_000u64).map(|i| fp(i * 3 + 1)).collect();
         let ranges = build_nf_ranges(nullifiers.clone());
 
-        // Verify every nullifier is excluded
         for nf in &nullifiers {
             assert!(find_range_for_value(&ranges, *nf).is_none());
         }
 
-        // Verify mid-gap values are found in the correct range
         for (i, window) in nullifiers.windows(2).enumerate() {
-            let mid = window[0] + Fp::one(); // one above the nullifier
+            let mid = window[0] + Fp::one();
             let result = find_range_for_value(&ranges, mid);
             assert!(
                 result.is_some(),
@@ -896,7 +851,6 @@ mod tests {
 
     #[test]
     fn test_find_range_agrees_with_linear_scan() {
-        // Reference linear implementation for cross-checking
         fn linear_find(ranges: &[Range], value: Fp) -> Option<usize> {
             for (i, [low, high]) in ranges.iter().enumerate() {
                 if value >= *low && value <= *high {
@@ -909,7 +863,6 @@ mod tests {
         let nullifiers: Vec<Fp> = (0..500u64).map(|i| fp(i * 7 + 3)).collect();
         let ranges = build_nf_ranges(nullifiers);
 
-        // Test a sweep of values including nullifiers, boundaries, and gaps
         for v in 0..4000u64 {
             let val = fp(v);
             assert_eq!(
@@ -930,7 +883,6 @@ mod tests {
         let value = fp(15);
         let mut proof = tree.prove(value).unwrap();
 
-        // Flip the lowest sibling hash — the recomputed root will diverge.
         proof.auth_path[0] = proof.auth_path[0] + Fp::one();
         assert!(
             !proof.verify(value, root),
@@ -945,7 +897,6 @@ mod tests {
         let value = fp(15);
         let mut proof = tree.prove(value).unwrap();
 
-        // Tamper with a sibling hash in the middle of the tree.
         let mid = TREE_DEPTH / 2;
         proof.auth_path[mid] = Fp::zero();
         assert!(
@@ -962,8 +913,6 @@ mod tests {
         let value = fp(15);
         let mut proof = tree.prove(value).unwrap();
 
-        // Replace the leaf commitment with garbage — the leaf-recomputation
-        // check inside verify should catch this before walking the path.
         proof.leaf = Fp::from(999u64);
         assert!(
             !proof.verify(value, root),
@@ -977,27 +926,16 @@ mod tests {
         let root = tree.root();
         let value = fp(15);
         let mut proof = tree.prove(value).unwrap();
-        assert_eq!(proof.position, 1); // correct position for range [11, 19]
+        assert_eq!(proof.position, 1);
 
-        // Wrong position flips the left/right ordering at each level,
-        // producing a different root hash.
         proof.position = 0;
-        assert!(
-            !proof.verify(value, root),
-            "position 0 (wrong) should fail verification"
-        );
+        assert!(!proof.verify(value, root), "position 0 (wrong) should fail");
 
         proof.position = 2;
-        assert!(
-            !proof.verify(value, root),
-            "position 2 (wrong) should fail verification"
-        );
+        assert!(!proof.verify(value, root), "position 2 (wrong) should fail");
 
         proof.position = u32::MAX;
-        assert!(
-            !proof.verify(value, root),
-            "position MAX (wrong) should fail verification"
-        );
+        assert!(!proof.verify(value, root), "position MAX (wrong) should fail");
     }
 
     #[test]
@@ -1007,8 +945,6 @@ mod tests {
         let value = fp(15);
         let mut proof = tree.prove(value).unwrap();
 
-        // Swap [low=11, high=19] -> [19, 11].
-        // The range check `value < low` catches this (15 < 19).
         let [low, high] = proof.range;
         proof.range = [high, low];
         assert!(
@@ -1022,7 +958,6 @@ mod tests {
     #[test]
     fn test_single_nullifier_tree() {
         let tree = NullifierTree::build(vec![fp(100)]);
-        // One nullifier -> two gap ranges: [0, 99] and [101, MAX]
         assert_eq!(tree.len(), 2);
 
         let ranges = tree.ranges();
@@ -1032,7 +967,6 @@ mod tests {
 
         let root = tree.root();
 
-        // Prove values in each range
         let proof_low = tree.prove(fp(50)).unwrap();
         assert_eq!(proof_low.position, 0);
         assert!(proof_low.verify(fp(50), root));
@@ -1041,42 +975,32 @@ mod tests {
         assert_eq!(proof_high.position, 1);
         assert!(proof_high.verify(fp(200), root));
 
-        // The nullifier itself has no proof
         assert!(tree.prove(fp(100)).is_none());
     }
 
     #[test]
     fn test_consecutive_nullifiers_collapse_gap() {
-        // Three consecutive values [5, 6, 7] leave no gap between them.
         let tree = NullifierTree::build(vec![fp(5), fp(6), fp(7)]);
 
-        // Only two ranges survive: [0, 4] and [8, MAX]
         assert_eq!(tree.len(), 2);
         assert_eq!(tree.ranges()[0], [fp(0), fp(4)]);
         assert_eq!(tree.ranges()[1][0], fp(8));
 
         let root = tree.root();
 
-        // Values in each surviving gap verify correctly
         assert!(tree.prove(fp(2)).unwrap().verify(fp(2), root));
         assert!(tree.prove(fp(100)).unwrap().verify(fp(100), root));
 
-        // All three consecutive nullifiers are excluded
         for nf in [5u64, 6, 7] {
-            assert!(
-                tree.prove(fp(nf)).is_none(),
-                "nullifier {} should have no proof",
-                nf
-            );
+            assert!(tree.prove(fp(nf)).is_none(), "nullifier {} should have no proof", nf);
         }
     }
 
     #[test]
     fn test_adjacent_nullifiers_differ_by_one() {
-        // [5, 6] — directly adjacent, no room for a gap between them.
         let tree = NullifierTree::build(vec![fp(5), fp(6)]);
 
-        assert_eq!(tree.len(), 2); // [0, 4] and [7, MAX]
+        assert_eq!(tree.len(), 2);
         assert_eq!(tree.ranges()[0], [fp(0), fp(4)]);
         assert_eq!(tree.ranges()[1][0], fp(7));
 
@@ -1089,8 +1013,6 @@ mod tests {
 
     #[test]
     fn test_nullifier_at_zero() {
-        // Nullifier at Fp::zero(): the first range [0, nf-1] is skipped
-        // because prev(=0) < nf(=0) is false, leaving only [1, MAX].
         let tree = NullifierTree::build(vec![Fp::zero()]);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree.ranges()[0][0], fp(1));
@@ -1104,9 +1026,8 @@ mod tests {
 
     #[test]
     fn test_nullifier_at_zero_and_one() {
-        // Both 0 and 1 are nullifiers — the first gap starts at 2.
         let tree = NullifierTree::build(vec![Fp::zero(), fp(1)]);
-        assert_eq!(tree.len(), 1); // [2, MAX]
+        assert_eq!(tree.len(), 1);
         assert_eq!(tree.ranges()[0][0], fp(2));
 
         let root = tree.root();
@@ -1117,31 +1038,22 @@ mod tests {
 
     #[test]
     fn test_larger_tree_200_nullifiers() {
-        // 200 evenly-spaced nullifiers exercise multi-level padding and
-        // proofs at higher leaf indices where empty subtree hashes dominate.
         let nullifiers: Vec<Fp> = (1..=200u64).map(|i| fp(i * 1000)).collect();
         let tree = NullifierTree::build(nullifiers.clone());
 
-        // 200 nullifiers -> 201 gap ranges
         assert_eq!(tree.len(), 201);
 
         let root = tree.root();
 
-        // Verify proofs at various positions: first, middle, and last leaves.
         let test_indices = [0usize, 1, 50, 100, 150, 199, 200];
         for &idx in &test_indices {
             let range = tree.ranges()[idx];
-            let value = range[0]; // use the range's low bound
+            let value = range[0];
             let proof = tree.prove(value).unwrap();
             assert_eq!(proof.position, idx as u32);
-            assert!(
-                proof.verify(value, root),
-                "proof at leaf index {} does not verify",
-                idx
-            );
+            assert!(proof.verify(value, root), "proof at leaf index {} does not verify", idx);
         }
 
-        // Every nullifier is correctly excluded
         for nf in &nullifiers {
             assert!(tree.prove(*nf).is_none());
         }
@@ -1151,17 +1063,11 @@ mod tests {
     fn test_larger_tree_different_sizes_have_different_roots() {
         let tree_100 = NullifierTree::build((1..=100u64).map(fp));
         let tree_200 = NullifierTree::build((1..=200u64).map(fp));
-        assert_ne!(
-            tree_100.root(),
-            tree_200.root(),
-            "trees with different nullifier sets must have different roots"
-        );
+        assert_ne!(tree_100.root(), tree_200.root());
     }
 
     #[test]
     fn test_duplicate_nullifiers_produce_same_tree() {
-        // Duplicates in the input should be harmless — the resulting tree
-        // should be identical to one built from the deduplicated set.
         let with_dups = NullifierTree::build(vec![fp(10), fp(10), fp(20), fp(20), fp(30)]);
         let without_dups = NullifierTree::build(vec![fp(10), fp(20), fp(30)]);
         assert_eq!(with_dups.root(), without_dups.root());
@@ -1174,62 +1080,44 @@ mod tests {
 
     #[test]
     fn test_sentinel_tree_all_ranges_under_2_250() {
-        // Build tree with only sentinel nullifiers (no extras).
         let tree = build_sentinel_tree(&[]);
 
-        // 17 sentinel nullifiers at k * 2^250 for k=0..=16 produce 18 ranges.
-        // The sentinels themselves are boundaries, so we get gaps between them.
-        // But sentinel at 0 means the first range starts at 1 (low=1).
         let two_250 = Fp::from(2u64).pow([250, 0, 0, 0]);
 
         for (i, [low, high]) in tree.ranges().iter().enumerate() {
-            // Width = high - low. Must be < 2^250.
-            // In the field, high - low wraps, but for valid ranges high >= low.
             let width = *high - *low;
-
-            // Check that the width is strictly less than 2^250.
-            // We do this by verifying that 2^250 - 1 - width is non-negative
-            // (i.e., representable as a field element whose LE repr is < p/2).
             let max_width = two_250 - Fp::one();
             let check = max_width - width;
             let repr = check.to_repr();
-            // If check is in [0, (p-1)/2], the top bit of the 32-byte LE repr is 0.
             assert!(
                 repr.as_ref()[31] < 0x40,
                 "range {} has width >= 2^250: low={:?}, high={:?}",
-                i,
-                low,
-                high
+                i, low, high
             );
         }
     }
 
     #[test]
     fn test_sentinel_tree_with_extra_nullifiers() {
-        // Add some extra nullifiers in different ranges.
         let extras = vec![fp(42), fp(1000000), fp(999999999)];
         let tree = build_sentinel_tree(&extras);
 
-        // Extras are excluded (no proof possible for a nullifier).
         for nf in &extras {
             assert!(tree.prove(*nf).is_none(), "nullifier should be excluded");
         }
 
-        // Values adjacent to extras should have proofs.
         let proof = tree.prove(fp(43)).unwrap();
         assert!(proof.verify(fp(43), tree.root()));
     }
 
     #[test]
     fn test_imt_proof_data_round_trip() {
-        // Build a sentinel tree and generate a proof.
         let tree = build_sentinel_tree(&[fp(42), fp(100)]);
-        let value = fp(50); // between 42 and 100
+        let value = fp(50);
 
         let proof = tree.prove(value).expect("value should be in a gap");
         assert!(proof.verify(value, tree.root()));
 
-        // Convert to circuit-compatible format.
         let imt = proof.to_imt_proof_data(tree.root());
         assert_eq!(imt.root, tree.root());
         assert_eq!(imt.low, proof.range[0]);
@@ -1237,11 +1125,7 @@ mod tests {
         assert_eq!(imt.leaf_pos, proof.position);
         assert_eq!(imt.path.len(), TREE_DEPTH);
 
-        // Verify the ImtProofData directly.
-        assert!(
-            imt.verify(value),
-            "ImtProofData should verify the same value"
-        );
+        assert!(imt.verify(value), "ImtProofData should verify the same value");
     }
 
     #[test]
@@ -1251,52 +1135,38 @@ mod tests {
         let proof = tree.prove(value).expect("value should be in a gap");
         let imt = proof.to_imt_proof_data(tree.root());
 
-        // Value outside the range should fail.
         assert!(!imt.verify(fp(42)), "nullifier should not verify");
         assert!(!imt.verify(fp(100)), "nullifier should not verify");
     }
 
     #[test]
     fn test_e2e_sentinel_tree_proof_gen_and_verify() {
-        // End-to-end: build sentinel tree, pick arbitrary value,
-        // generate exclusion proof, convert to circuit format, verify.
         let extra_nfs = vec![fp(12345), fp(67890), fp(111111)];
         let tree = build_sentinel_tree(&extra_nfs);
 
-        // Pick a value that is NOT a nullifier and NOT a sentinel.
         let test_value = fp(50000);
-        assert!(
-            tree.prove(test_value).is_some(),
-            "test value should be in a gap range"
-        );
+        assert!(tree.prove(test_value).is_some(), "test value should be in a gap range");
 
         let proof = tree.prove(test_value).unwrap();
 
-        // 1. Off-chain ExclusionProof verifies.
         assert!(proof.verify(test_value, tree.root()));
 
-        // 2. Converted ImtProofData verifies.
         let imt = proof.to_imt_proof_data(tree.root());
         assert!(imt.verify(test_value));
 
-        // 3. The proof path has correct depth.
         assert_eq!(imt.path.len(), TREE_DEPTH);
         assert_eq!(proof.auth_path.len(), TREE_DEPTH);
 
-        // 4. Sentinel tree root is deterministic.
         let tree2 = build_sentinel_tree(&extra_nfs);
         assert_eq!(tree.root(), tree2.root());
     }
 
     #[test]
     fn test_empty_hashes_match_circuit_convention() {
-        // The off-chain tree and the circuit must agree on empty subtree hashes.
-        // empty[0] = poseidon_hash(0, 0) — not a magic constant.
         let empty = precompute_empty_hashes();
         let expected_leaf = poseidon_hash(Fp::zero(), Fp::zero());
         assert_eq!(empty[0], expected_leaf);
 
-        // Verify the chain property for all levels.
         for i in 1..TREE_DEPTH {
             assert_eq!(empty[i], poseidon_hash(empty[i - 1], empty[i - 1]));
         }
@@ -1304,26 +1174,20 @@ mod tests {
 
     #[test]
     fn test_poseidon_hasher_equivalence() {
-        // Verify that PoseidonHasher produces identical results to
-        // poseidon_hash (which uses the upstream halo2_gadgets API).
         let hasher = PoseidonHasher::new();
 
-        // Zero inputs.
         assert_eq!(
             hasher.hash(Fp::zero(), Fp::zero()),
             poseidon_hash(Fp::zero(), Fp::zero()),
         );
 
-        // Small constants.
         assert_eq!(hasher.hash(fp(1), fp(2)), poseidon_hash(fp(1), fp(2)));
         assert_eq!(hasher.hash(fp(42), fp(0)), poseidon_hash(fp(42), fp(0)));
 
-        // Larger values.
         let a = fp(0xDEAD_BEEF);
         let b = fp(0xCAFE_BABE);
         assert_eq!(hasher.hash(a, b), poseidon_hash(a, b));
 
-        // The field's additive identity edge case.
         assert_eq!(
             hasher.hash(Fp::one().neg(), Fp::one()),
             poseidon_hash(Fp::one().neg(), Fp::one()),
