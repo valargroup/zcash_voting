@@ -21,7 +21,7 @@ use crate::{
 
 use super::{
     circuit::{self, gov_commitment_hash, rho_binding_hash, NoteSlotWitness},
-    imt::{gov_null_hash, ImtProofData, ImtProvider},
+    imt::{gov_null_hash, ImtProofData, ImtProvider, IMT_DEPTH},
 };
 
 /// Input for a single real note in the delegation.
@@ -134,7 +134,7 @@ pub fn build_delegation_bundle(
             psi: Value::known(psi),
             rcm: Value::known(rcm),
             cm: Value::known(cm),
-            path: Value::known(input.merkle_path.auth_path()),
+            path: Value::known(input.merkle_path.auth_path()[..IMT_DEPTH].try_into().unwrap()),
             pos: Value::known(input.merkle_path.position()),
             is_note_real: Value::known(true),
             imt_low: Value::known(input.imt_proof.low),
@@ -189,7 +189,7 @@ pub fn build_delegation_bundle(
             psi: Value::known(psi),
             rcm: Value::known(rcm),
             cm: Value::known(cm),
-            path: Value::known(merkle_path.auth_path()),
+            path: Value::known(merkle_path.auth_path()[..IMT_DEPTH].try_into().unwrap()),
             pos: Value::known(merkle_path.position()),
             is_note_real: Value::known(false),
             imt_low: Value::known(imt_proof.low),

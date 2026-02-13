@@ -40,7 +40,6 @@ use crate::{
     },
     constants::{
         OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains,
-        MERKLE_DEPTH_ORCHARD,
     },
     keys::{
         CommitIvkRandomness, DiversifiedTransmissionKey, FullViewingKey, NullifierDerivingKey,
@@ -302,7 +301,7 @@ pub struct NoteSlotWitness {
     pub(crate) psi: Value<pallas::Base>,
     pub(crate) rcm: Value<NoteCommitTrapdoor>,
     pub(crate) cm: Value<NoteCommitment>,
-    pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
+    pub(crate) path: Value<[MerkleHashOrchard; IMT_DEPTH]>,
     pub(crate) pos: Value<u32>,
     pub(crate) is_note_real: Value<bool>,
     pub(crate) imt_low: Value<pallas::Base>,
@@ -2026,7 +2025,6 @@ mod tests {
         delegation::imt::{gov_null_hash, ImtProofData, ImtProvider, SpacedLeafImtProvider},
         keys::{FullViewingKey, Scope, SpendValidatingKey, SpendingKey},
         note::{commitment::ExtractedNoteCommitment, Note, Rho},
-        tree::MerklePath as OrchardMerklePath,
     };
     use ff::Field;
     use halo2_proofs::dev::MockProver;
@@ -2043,7 +2041,8 @@ mod tests {
     /// Helper: build a NoteSlotWitness for a note with a Merkle path and IMT proof.
     fn make_note_slot(
         note: &Note,
-        merkle_path: &OrchardMerklePath,
+        auth_path: &[MerkleHashOrchard; IMT_DEPTH],
+        pos: u32,
         imt: &ImtProofData,
         is_real: bool,
     ) -> NoteSlotWitness {
@@ -2063,8 +2062,8 @@ mod tests {
             psi: Value::known(psi),
             rcm: Value::known(rcm),
             cm: Value::known(cm),
-            path: Value::known(merkle_path.auth_path()),
-            pos: Value::known(merkle_path.position()),
+            path: Value::known(*auth_path),
+            pos: Value::known(pos),
             is_note_real: Value::known(is_real),
             imt_low: Value::known(imt.low),
             imt_high: Value::known(imt.high),
@@ -2124,34 +2123,31 @@ mod tests {
         let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
         let mut current = l2_0;
-        for level in 2..MERKLE_DEPTH_ORCHARD {
+        for level in 2..IMT_DEPTH {
             let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
             current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
         }
         let nc_root = current.inner();
 
-        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
+        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
         auth_path_0[0] = leaves[1];
         auth_path_0[1] = l1_1;
-        for level in 2..MERKLE_DEPTH_ORCHARD {
+        for level in 2..IMT_DEPTH {
             auth_path_0[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
         }
-        let merkle_path_0 = OrchardMerklePath::from_parts(0u32, auth_path_0);
-
         // IMT proof for real note (from shared provider).
         let real_nf = real_note.nullifier(&fvk);
         let imt_0 = imt_provider.non_membership_proof(real_nf.0);
         let gov_null_0 = gov_null_hash(nk_val, vote_round_id, real_nf.0);
 
-        let slot_0 = make_note_slot(&real_note, &merkle_path_0, &imt_0, true);
+        let slot_0 = make_note_slot(&real_note, &auth_path_0, 0u32, &imt_0, true);
 
         // Padded notes (slots 1-3): zero-value notes with addresses from the real ivk.
         let mut note_slots = vec![slot_0];
         let mut cmx_values = vec![cmx_real];
         let mut gov_nulls = vec![gov_null_0];
 
-        let dummy_merkle_path =
-            OrchardMerklePath::new(0u32, [pallas::Base::zero(); MERKLE_DEPTH_ORCHARD]);
+        let dummy_auth_path = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
 
         for i in 1..4u32 {
             // Use fvk.address_at() so pk_d = [ivk] * g_d with the REAL ivk.
@@ -2171,7 +2167,8 @@ mod tests {
 
             note_slots.push(make_note_slot(
                 &pad_note,
-                &dummy_merkle_path,
+                &dummy_auth_path,
+                0u32,
                 &pad_imt,
                 false,
             ));
@@ -2419,28 +2416,25 @@ mod tests {
         let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
         let mut current = l2_0;
-        for level in 2..MERKLE_DEPTH_ORCHARD {
+        for level in 2..IMT_DEPTH {
             let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
             current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
         }
         let nc_root = current.inner();
 
-        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
+        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
         auth_path_0[0] = leaves[1];
         auth_path_0[1] = l1_1;
-        for level in 2..MERKLE_DEPTH_ORCHARD {
+        for level in 2..IMT_DEPTH {
             auth_path_0[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
         }
-        let merkle_path_0 = OrchardMerklePath::from_parts(0u32, auth_path_0);
-
-        let slot_real = make_note_slot(&real_note, &merkle_path_0, &imt_0, true);
+        let slot_real = make_note_slot(&real_note, &auth_path_0, 0u32, &imt_0, true);
 
         // DUPLICATE: slot 1 uses the exact same note as slot 0.
         let slot_dup = slot_real.clone();
 
         // Padded notes for slots 2-3.
-        let dummy_merkle_path =
-            OrchardMerklePath::new(0u32, [pallas::Base::zero(); MERKLE_DEPTH_ORCHARD]);
+        let dummy_auth_path = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
         let mut note_slots = vec![slot_real, slot_dup];
         let mut cmx_values = vec![cmx_real, cmx_real];
         let mut gov_nulls = vec![gov_null_real, gov_null_real];
@@ -2462,7 +2456,8 @@ mod tests {
 
             note_slots.push(make_note_slot(
                 &pad_note,
-                &dummy_merkle_path,
+                &dummy_auth_path,
+                0u32,
                 &pad_imt,
                 false,
             ));
