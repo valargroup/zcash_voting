@@ -109,7 +109,7 @@ struct DelegationSigningView: View {
                 .zFont(.medium, size: 14, style: Design.Text.tertiary)
 
             HStack {
-                Text("Authorizing \(store.votingWeightZECString) ZEC voting power for \(store.votingRound.title)")
+                Text("Delegating \(store.votingWeightZECString) ZEC of eligible notes to vote in \(store.votingRound.title)")
                     .zFont(.medium, size: 14, style: Design.Inputs.Filled.text)
                 Spacer(minLength: 0)
             }
@@ -207,7 +207,7 @@ struct DelegationSigningView: View {
                         Text("<internal-address>")
                             .font(.system(size: 11))
                             .foregroundStyle(keystoneCyan)
-                        Text("Memo: Authorizing \(store.votingWeightZECString) ZEC voting power")
+                        Text("Memo: Delegating \(store.votingWeightZECString) ZEC of eligible notes")
                             .font(.system(size: 10))
                             .foregroundStyle(.white.opacity(0.6))
                     }
