@@ -1118,10 +1118,13 @@ let package = Package(
             dependencies: [
                 "DatabaseFiles",
                 "Generated",
+                "MnemonicClient",
+                "Pasteboard",
                 "UIComponents",
                 "VotingAPIClient",
                 "VotingCryptoClient",
                 "VotingModels",
+                "WalletStorage",
                 "ZcashSDKEnvironment",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ],

@@ -32,7 +32,7 @@ public struct VotingCryptoClient {
     ) async throws -> [NoteInfo]
 
     // --- Crypto operations ---
-    public var generateHotkey: @Sendable (_ roundId: String) async throws -> VotingHotkey
+    public var generateHotkey: @Sendable (_ roundId: String, _ seed: [UInt8]) async throws -> VotingHotkey
     public var constructDelegationAction: @Sendable (
         _ roundId: String,
         _ hotkey: VotingHotkey,

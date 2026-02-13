@@ -2,10 +2,6 @@ import Foundation
 import VotingModels
 
 public enum MockVotingService {
-    public static let votingWeight: UInt64 = 0 // replaced at runtime from wallet notes
-
-    public static let hotkeyAddress = "zs1voting7qk4hs9xd3nfw8yj6m2r0ekrl...a8e2"
-
     public static let votingRound = VotingRound(
         id: "nu7-sentiment-0xab3f7c91e2d4",
         title: "NU7 Sentiment Poll",
@@ -30,9 +26,4 @@ public enum MockVotingService {
         Proposal(id: 9, title: "Consensus accounts", description: "Introduce consensus-level account abstractions to support more complex on-chain logic and state management.", forumURL: URL(string: "https://forum.zcashcommunity.com/t/consensus-accounts")),
         Proposal(id: 10, title: "Orchard quantum recoverability", description: "Add quantum-resistant key recovery mechanisms to the Orchard shielded pool, future-proofing funds against quantum attacks.", forumURL: URL(string: "https://forum.zcashcommunity.com/t/quantum-recovery")),
     ]
-
-    public static var votingWeightZECString: String {
-        let zec = Double(votingWeight) / 100_000_000.0
-        return String(format: "%.2f", zec)
-    }
 }
