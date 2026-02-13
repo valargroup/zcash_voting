@@ -4,8 +4,6 @@ API contract for `VotingCryptoClient` and `VotingAPIClient` — the two TCA depe
 
 This document covers **what to call, with what, and what comes back**. For system architecture and data flow, see [mobile-voting-architecture.md](mobile-voting-architecture.md). For on-chain message definitions, see [cosmos-sdk-messages-spec.md](cosmos-sdk-messages-spec.md).
 
-Audience: mobile developers integrating with the voting stack.
-
 ---
 
 ## Implementation Status
