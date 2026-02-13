@@ -108,7 +108,7 @@ public struct Voting {
 
         public init(
             votingRound: VotingRound = MockVotingService.votingRound,
-            votingWeight: UInt64 = MockVotingService.votingWeight,
+            votingWeight: UInt64 = 0,
             isKeystoneUser: Bool = false,
             roundId: String = "0101010101010101010101010101010101010101010101010101010101010101"
         ) {
