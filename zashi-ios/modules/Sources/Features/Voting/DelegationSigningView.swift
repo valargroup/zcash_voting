@@ -57,6 +57,7 @@ struct DelegationSigningView: View {
             detailSection(label: "Voting hotkey") {
                 Text(store.hotkeyAddress ?? "")
                     .zFont(addressFont: true, size: 12, style: Design.Text.primary)
+                    .textSelection(.enabled)
             }
 
             // Round
