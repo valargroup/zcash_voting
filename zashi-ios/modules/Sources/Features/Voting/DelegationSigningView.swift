@@ -55,7 +55,7 @@ struct DelegationSigningView: View {
 
             // Hotkey address
             detailSection(label: "Voting hotkey") {
-                Text(MockVotingService.hotkeyAddress)
+                Text(store.hotkeyAddress ?? "")
                     .zFont(addressFont: true, size: 12, style: Design.Text.primary)
             }
 
@@ -220,7 +220,7 @@ struct DelegationSigningView: View {
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(keystoneYellow)
                         }
-                        Text(MockVotingService.hotkeyAddress)
+                        Text(store.hotkeyAddress ?? "")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(keystoneCyan)
                             .lineLimit(3)

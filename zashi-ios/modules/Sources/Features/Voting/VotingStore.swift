@@ -41,6 +41,9 @@ public struct Voting {
         /// Cached wallet notes from the snapshot query, used by delegation proof.
         public var walletNotes: [NoteInfo] = []
 
+        /// Hotkey address derived from keychain mnemonic, shown on delegation signing screen.
+        public var hotkeyAddress: String?
+
         public var selectedProposalId: UInt32?
 
         // Vote awaiting user confirmation in detail view
@@ -123,10 +126,11 @@ public struct Voting {
         case dismissFlow
         case goBack
 
-        // Wallet notes / voting weight
+        // Wallet notes / voting weight / hotkey
         case fetchVotingWeight
         case votingWeightLoaded(UInt64, [NoteInfo])
         case votingWeightFailed(String)
+        case hotkeyLoaded(String)
 
         // DB state stream (single source of truth)
         case votingDbStateChanged(VotingDbState)
@@ -177,10 +181,11 @@ public struct Voting {
 
             case .fetchVotingWeight:
                 let snapshotHeight = state.votingRound.snapshotHeight
+                let roundId = state.roundId
                 let network = zcashSDKEnvironment.network
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
-                return .run { [votingCrypto] send in
+                return .run { [votingCrypto, mnemonic, walletStorage] send in
                     // Open the voting database (needed for FFI method)
                     let dbPath = FileManager.default
                         .urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -193,6 +198,23 @@ public struct Voting {
                     let totalWeight = notes.reduce(UInt64(0)) { $0 + $1.value }
                     print("[Voting] Loaded \(notes.count) notes at height \(snapshotHeight), total weight: \(totalWeight)")
                     await send(.votingWeightLoaded(totalWeight, notes))
+
+                    // Load or generate voting hotkey mnemonic, derive address for UI
+                    do {
+                        let phrase: String
+                        if let stored = try? walletStorage.exportVotingHotkey() {
+                            phrase = stored.seedPhrase.value()
+                        } else {
+                            phrase = try mnemonic.randomMnemonic()
+                            try walletStorage.importVotingHotkey(phrase)
+                        }
+                        let seed = try mnemonic.toSeed(phrase)
+                        let hotkey = try await votingCrypto.generateHotkey(roundId, seed)
+                        print("[Voting] Hotkey address: \(hotkey.address)")
+                        await send(.hotkeyLoaded(hotkey.address))
+                    } catch {
+                        print("[Voting] Failed to generate hotkey: \(error)")
+                    }
                 } catch: { error, send in
                     print("[Voting] Failed to load wallet notes: \(error)")
                     await send(.votingWeightFailed(error.localizedDescription))
@@ -207,6 +229,10 @@ public struct Voting {
                 print("[Voting] Wallet notes error: \(error)")
                 return .none
 
+            case .hotkeyLoaded(let address):
+                state.hotkeyAddress = address
+                return .none
+
             // MARK: - DB State Stream
 
             case .votingDbStateChanged(let dbState):
@@ -215,6 +241,10 @@ public struct Voting {
                 // Proof status: if DB says proof succeeded and we're not actively generating, sync it
                 if dbState.roundState.proofGenerated && state.delegationProofStatus != .complete {
                     state.delegationProofStatus = .complete
+                }
+                // Sync hotkey address from DB if available
+                if let addr = dbState.roundState.hotkeyAddress {
+                    state.hotkeyAddress = addr
                 }
                 print("[Voting] DB state: phase=\(dbState.roundState.phase), \(dbState.votes.count) votes")
                 return .none
@@ -258,14 +288,8 @@ public struct Voting {
                         )
                         try await votingCrypto.initRound(params, nil)
 
-                        // Load or generate voting hotkey mnemonic
-                        let phrase: String
-                        if let stored = try? walletStorage.exportVotingHotkey() {
-                            phrase = stored.seedPhrase.value()
-                        } else {
-                            phrase = try mnemonic.randomMnemonic()
-                            try walletStorage.importVotingHotkey(phrase)
-                        }
+                        // Reload hotkey from keychain (generated during fetchVotingWeight)
+                        let phrase = try walletStorage.exportVotingHotkey().seedPhrase.value()
                         let seed = try mnemonic.toSeed(phrase)
                         let hotkey = try await votingCrypto.generateHotkey(roundId, seed)
                         // Mock nk/g_d/pk_d — real derivation comes in a later step
