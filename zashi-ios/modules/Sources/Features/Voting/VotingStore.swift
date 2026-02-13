@@ -2,16 +2,20 @@ import Combine
 import Foundation
 import ComposableArchitecture
 import DatabaseFiles
+import MnemonicClient
 import VotingAPIClient
 import VotingCryptoClient
 import VotingModels
+import WalletStorage
 import ZcashSDKEnvironment
 
 @Reducer
 public struct Voting {
     @Dependency(\.databaseFiles) var databaseFiles
+    @Dependency(\.mnemonic) var mnemonic
     @Dependency(\.votingAPI) var votingAPI
     @Dependency(\.votingCrypto) var votingCrypto
+    @Dependency(\.walletStorage) var walletStorage
     @Dependency(\.zcashSDKEnvironment) var zcashSDKEnvironment
     @ObservableState
     public struct State: Equatable {
@@ -240,7 +244,7 @@ public struct Voting {
                     }
                     .cancellable(id: cancelStateStreamId, cancelInFlight: true),
                     // Run delegation proof pipeline
-                    .run { [votingCrypto] send in
+                    .run { [votingCrypto, mnemonic, walletStorage] send in
                         // DB already opened by fetchVotingWeight
 
                         // Clear any previous data for this round, then initialize
@@ -254,8 +258,16 @@ public struct Voting {
                         )
                         try await votingCrypto.initRound(params, nil)
 
-                        // Use cached wallet notes from fetchVotingWeight
-                        let hotkey = try await votingCrypto.generateHotkey(roundId)
+                        // Load or generate voting hotkey mnemonic
+                        let phrase: String
+                        if let stored = try? walletStorage.exportVotingHotkey() {
+                            phrase = stored.seedPhrase.value()
+                        } else {
+                            phrase = try mnemonic.randomMnemonic()
+                            try walletStorage.importVotingHotkey(phrase)
+                        }
+                        let seed = try mnemonic.toSeed(phrase)
+                        let hotkey = try await votingCrypto.generateHotkey(roundId, seed)
                         // Mock nk/g_d/pk_d — real derivation comes in a later step
                         let mockNk = Data(repeating: 0x11, count: 32)
                         let mockGd = Data(repeating: 0x22, count: 32)

@@ -113,9 +113,9 @@ extension VotingCryptoClient: DependencyKey {
                     )
                 }
             },
-            generateHotkey: { roundId in
+            generateHotkey: { roundId, seed in
                 let db = try await dbActor.database()
-                let hotkey = try db.generateHotkey(roundId: roundId)
+                let hotkey = try db.generateHotkey(roundId: roundId, seed: Data(seed))
                 return VotingHotkey(
                     secretKey: hotkey.secretKey,
                     publicKey: hotkey.publicKey,

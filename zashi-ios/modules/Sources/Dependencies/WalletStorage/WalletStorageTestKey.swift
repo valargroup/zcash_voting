@@ -6,6 +6,8 @@
 //
 
 import ComposableArchitecture
+import Models
+import Utils
 import XCTestDynamicOverlay
 
 extension WalletStorageClient: TestDependencyKey {
@@ -16,6 +18,8 @@ extension WalletStorageClient: TestDependencyKey {
         updateBirthday: unimplemented("\(Self.self).updateBirthday", placeholder: {}()),
         markUserPassedPhraseBackupTest: unimplemented("\(Self.self).markUserPassedPhraseBackupTest", placeholder: {}()),
         resetZashi: unimplemented("\(Self.self).resetZashi", placeholder: {}()),
+        importVotingHotkey: unimplemented("\(Self.self).importVotingHotkey", placeholder: {}()),
+        exportVotingHotkey: unimplemented("\(Self.self).exportVotingHotkey", placeholder: .init(seedPhrase: .init(""), version: 0)),
         importAddressBookEncryptionKeys: unimplemented("\(Self.self).importAddressBookEncryptionKeys", placeholder: {}()),
         exportAddressBookEncryptionKeys: unimplemented("\(Self.self).exportAddressBookEncryptionKeys", placeholder: .empty),
         importUserMetadataEncryptionKeys: unimplemented("\(Self.self).importUserMetadataEncryptionKeys", placeholder: {}()),
@@ -42,6 +46,8 @@ extension WalletStorageClient {
         updateBirthday: { _ in },
         markUserPassedPhraseBackupTest: { _ in },
         resetZashi: { },
+        importVotingHotkey: { _ in },
+        exportVotingHotkey: { .init(seedPhrase: .init(""), version: 0) },
         importAddressBookEncryptionKeys: { _ in },
         exportAddressBookEncryptionKeys: { .empty },
         importUserMetadataEncryptionKeys: { _, _ in },
