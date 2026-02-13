@@ -9,6 +9,7 @@
 //! leaves are public), inserts them, and generates witnesses only for its own
 //! marked positions.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use incrementalmerkletree::{Hashable, Level, Retention};
@@ -100,6 +101,15 @@ pub struct TreeClient {
     next_position: u64,
     /// Latest synced block height.
     last_synced_height: Option<u32>,
+    /// Positions registered for witness generation.
+    ///
+    /// During [`sync`], positions in this set are inserted with `Retention::Marked`;
+    /// all other positions use `Retention::Ephemeral`. This gives ShardTree the
+    /// signal to retain the sibling hashes needed for witnesses at marked positions
+    /// while pruning everything else.
+    ///
+    /// Register positions via [`mark_position`] **before** syncing past them.
+    marked_positions: BTreeSet<u64>,
 }
 
 impl TreeClient {
@@ -109,7 +119,27 @@ impl TreeClient {
             inner: ShardTree::new(MemoryShardStore::empty(), MAX_CHECKPOINTS),
             next_position: 0,
             last_synced_height: None,
+            marked_positions: BTreeSet::new(),
         }
+    }
+
+    /// Register a leaf position for witness generation.
+    ///
+    /// When [`sync`] encounters this position, the leaf is inserted with
+    /// `Retention::Marked` so that [`witness`] can later produce a Merkle
+    /// authentication path for it. All other positions are inserted as
+    /// `Retention::Ephemeral` (prunable).
+    ///
+    /// Must be called **before** syncing past the position. This matches
+    /// the production pattern where the wallet knows its VAN index from
+    /// `MsgDelegateVote` before it syncs the block that contains it, and
+    /// the helper server knows the delegated VC index from the share
+    /// payload before it syncs.
+    ///
+    /// Calling this for a position that has already been synced has no
+    /// effect (the leaf is already in the tree as ephemeral).
+    pub fn mark_position(&mut self, position: u64) {
+        self.marked_positions.insert(position);
     }
 
     /// Sync the client tree from a [`TreeSyncApi`] source.
@@ -118,14 +148,17 @@ impl TreeClient {
     /// synced height) and inserts them into the local tree. Each block's leaves
     /// are checkpointed at the block's height.
     ///
+    /// **Retention**: Positions registered via [`mark_position`] are inserted
+    /// with `Retention::Marked` so witnesses can be generated for them.
+    /// All other positions use `Retention::Ephemeral`, allowing `ShardTree`
+    /// to prune their subtree data once it's no longer needed. This keeps
+    /// the client tree sparse — only the subtrees touching marked positions
+    /// are fully materialized.
+    ///
     /// **Safety checks** (these catch corrupted data or protocol mismatches):
     /// - Each block's `start_index` must match the client's expected next position.
     /// - After checkpointing each block, the client's root is verified against the
     ///   server's root at that height (the consistency check described in the README).
-    ///
-    /// In the POC, all leaves are inserted with `Retention::Marked` so witnesses
-    /// can be generated for any position. In production, only the client's own
-    /// positions would be marked; all others would use `Retention::Ephemeral`.
     pub fn sync<A: TreeSyncApi>(&mut self, api: &A) -> Result<(), SyncError<A::Error>> {
         let state = api.get_tree_state()?;
         let from_height = self.last_synced_height.map(|h| h + 1).unwrap_or(1);
@@ -150,11 +183,16 @@ impl TreeClient {
             }
 
             for leaf in &block.leaves {
-                // POC: mark all leaves so witnesses work for any position.
-                // TODO(production): use Retention::Marked only for the client's
-                // own positions; use Retention::Ephemeral for all others.
+                // Use Marked retention for positions the client registered
+                // interest in; Ephemeral for everything else. This gives
+                // ShardTree the signal to retain witness data only where needed.
+                let retention = if self.marked_positions.contains(&self.next_position) {
+                    Retention::Marked
+                } else {
+                    Retention::Ephemeral
+                };
                 self.inner
-                    .append(*leaf, Retention::Marked)
+                    .append(*leaf, retention)
                     .expect("append must succeed (tree not full)");
                 self.next_position += 1;
             }

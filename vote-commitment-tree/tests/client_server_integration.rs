@@ -9,6 +9,8 @@
 //! - Sync detects root mismatches and start_index discontinuities
 
 use pasta_curves::Fp;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use vote_commitment_tree::{MerklePath, TreeClient, TreeServer, TreeSyncApi};
 
 fn fp(x: u64) -> Fp {
@@ -43,8 +45,10 @@ fn server_append_client_sync_witness_roundtrip() {
 
     // ---------------------------------------------------------------
     // 3. Client syncs from server (gets block 1)
+    //    Mark VAN position before sync so it gets Retention::Marked.
     //    Root consistency is now verified inside sync().
     // ---------------------------------------------------------------
+    client.mark_position(van_idx);
     client.sync(&server).unwrap();
 
     assert_eq!(client.size(), 1, "client should have 1 leaf after sync");
@@ -89,7 +93,10 @@ fn server_append_client_sync_witness_roundtrip() {
 
     // ---------------------------------------------------------------
     // 5. Client syncs block 2 (incremental — only new data)
+    //    Mark new VAN and VC positions before syncing block 2.
     // ---------------------------------------------------------------
+    client.mark_position(cast_idx);     // new VAN at position 1
+    client.mark_position(cast_idx + 1); // VC at position 2
     client.sync(&server).unwrap();
 
     assert_eq!(client.size(), 3, "client should have 3 leaves after second sync");
@@ -166,8 +173,9 @@ fn historical_witness_survives_growth() {
     server.append(fp(4));
     server.checkpoint(3);
 
-    // Client syncs the full history.
+    // Client syncs the full history. Mark position 0 before sync.
     let mut client = TreeClient::empty();
+    client.mark_position(0);
     client.sync(&server).unwrap();
     assert_eq!(client.size(), 4);
 
@@ -229,13 +237,18 @@ fn full_sync_from_genesis() {
         server.checkpoint(h);
     }
 
+    // Mark specific positions before syncing.
+    let witness_positions = [0u64, 5, 10, 19];
     let mut client = TreeClient::empty();
+    for &pos in &witness_positions {
+        client.mark_position(pos);
+    }
     client.sync(&server).unwrap();
 
     assert_eq!(client.size(), 20);
     assert_eq!(client.last_synced_height(), Some(10));
 
-    // Every checkpoint root matches.
+    // Every checkpoint root matches (roots are independent of retention).
     for h in 1..=10u32 {
         assert_eq!(
             client.root_at_height(h),
@@ -245,23 +258,62 @@ fn full_sync_from_genesis() {
         );
     }
 
-    // Witnesses for a few positions verify.
-    for pos in [0u64, 5, 10, 19] {
+    // Witnesses for marked positions verify.
+    for pos in witness_positions {
         let leaf_val = if pos % 2 == 0 {
             fp((pos / 2 + 1) * 10)
         } else {
             fp((pos / 2 + 1) * 10 + 1)
         };
-        let _anchor_h = (pos / 2 + 1) as u32; // Block that contains this leaf.
         let witness = client
             .witness(pos, 10) // witness at latest anchor
-            .unwrap_or_else(|| panic!("witness for position {}", pos));
+            .unwrap_or_else(|| panic!("witness for marked position {}", pos));
         assert!(
             witness.verify(leaf_val, server.root_at_height(10).unwrap()),
             "witness for position {} must verify",
             pos
         );
     }
+}
+
+/// Unmarked positions return `None` from `witness()`; marked positions work.
+///
+/// This validates the sparse-witness property: a client that marks only its
+/// own VAN cannot generate witnesses for other participants' leaves.
+#[test]
+fn unmarked_position_returns_none() {
+    let mut server = TreeServer::empty();
+    server.append(fp(10)); // position 0
+    server.append(fp(20)); // position 1
+    server.append(fp(30)); // position 2
+    server.checkpoint(1);
+
+    // Client marks only position 1 (its own VAN).
+    let mut client = TreeClient::empty();
+    client.mark_position(1);
+    client.sync(&server).unwrap();
+    assert_eq!(client.size(), 3);
+
+    // Roots are correct regardless of marking (roots are computed from all leaves).
+    assert_eq!(
+        client.root_at_height(1),
+        server.root_at_height(1),
+        "roots must match even with sparse marking"
+    );
+
+    // Marked position: witness succeeds.
+    let witness = client.witness(1, 1).expect("marked position must produce witness");
+    assert!(witness.verify(fp(20), server.root_at_height(1).unwrap()));
+
+    // Unmarked positions: witness returns None.
+    assert!(
+        client.witness(0, 1).is_none(),
+        "unmarked position 0 must return None"
+    );
+    assert!(
+        client.witness(2, 1).is_none(),
+        "unmarked position 2 must return None"
+    );
 }
 
 /// Test idempotent sync — calling sync when already up-to-date is a no-op.
@@ -290,6 +342,7 @@ fn server_and_client_paths_are_identical() {
     server.checkpoint(1);
 
     let mut client = TreeClient::empty();
+    client.mark_position(0);
     client.sync(&server).unwrap();
 
     let server_path = server.path(0, 1).unwrap();
@@ -336,10 +389,13 @@ fn two_clients_wallet_and_helper_server() {
 
     // =====================================================================
     // Wallet client: Alice's phone
-    // Syncs all blocks, needs VAN witness at position 0 for ZKP #2.
+    // Syncs all blocks, needs VAN witness at position 0 for ZKP #2
+    // and new VAN witness at position 2 for a potential second vote.
     // Uses anchor height 2 (the root before she voted).
     // =====================================================================
     let mut wallet = TreeClient::empty();
+    wallet.mark_position(0); // Alice's original VAN
+    wallet.mark_position(2); // Alice's new VAN (for potential second vote)
     wallet.sync(&server).unwrap();
     assert_eq!(wallet.size(), 6);
 
@@ -354,10 +410,12 @@ fn two_clients_wallet_and_helper_server() {
 
     // =====================================================================
     // Helper server: independent process
-    // Syncs all blocks, needs VC witness at position 3 for ZKP #3.
+    // Syncs all blocks, needs VC witnesses for delegated share payloads.
     // Uses anchor height 3 (the root right after Alice's vote).
     // =====================================================================
     let mut helper = TreeClient::empty();
+    helper.mark_position(3); // Alice's VC (from delegated_voting_share_payload)
+    helper.mark_position(5); // Bob's VC (from delegated_voting_share_payload)
     helper.sync(&server).unwrap();
     assert_eq!(helper.size(), 6);
 
@@ -424,8 +482,11 @@ fn shard_boundary_crossing() {
 
     assert_eq!(server.size(), 40);
 
-    // Client syncs all 10 blocks.
+    // Client syncs all 10 blocks. Mark positions at shard boundaries.
     let mut client = TreeClient::empty();
+    for &pos in &[0u64, 15, 16, 31, 32, 39] {
+        client.mark_position(pos);
+    }
     client.sync(&server).unwrap();
     assert_eq!(client.size(), 40);
     assert_eq!(client.last_synced_height(), Some(10));
@@ -514,4 +575,229 @@ fn merkle_path_serialization_roundtrip() {
     // Restored path still verifies.
     let root = server.root_at_height(1).unwrap();
     assert!(restored.verify(fp(20), root));
+}
+
+// ---------------------------------------------------------------------------
+// Stress test: heavy server spam + persistent client + flaky client
+// ---------------------------------------------------------------------------
+
+/// Stress test: server is heavily spammed with random appends while two clients
+/// sync concurrently — one persistent (incremental sync) and one flaky (keeps
+/// dropping state and re-syncing from genesis).
+///
+/// After many blocks with ~100+ total leaves (crossing shard boundaries):
+/// - Both clients have identical roots at every checkpointed height
+/// - Both produce valid witnesses for pre-registered marked positions
+/// - Both produce byte-identical paths to the server
+///
+/// This simulates:
+/// - Wallet that stays online and syncs incrementally after each wave
+/// - Helper server that crashes/restarts and must resync from scratch
+///
+/// Positions to witness are pre-sampled using a separate RNG and registered
+/// on both clients before syncing, matching the production pattern where the
+/// wallet knows its VAN index before syncing the block that contains it.
+///
+/// Deterministic via seeded RNG for reproducibility.
+#[test]
+fn stress_persistent_vs_flaky_client() {
+    let mut rng = StdRng::seed_from_u64(0x2A11_0000_0001);
+
+    let mut server = TreeServer::empty();
+
+    let num_waves = 10;
+    let blocks_per_wave = 5;
+    let max_possible_leaves = (num_waves * blocks_per_wave * 5) as u64; // upper bound
+
+    // Pre-sample witness positions using a separate RNG (deterministic).
+    // These are registered on clients before syncing, matching the production
+    // pattern: wallet knows its VAN/VC indices before syncing.
+    let mut mark_rng = StdRng::seed_from_u64(0x2A11_0000_FFFF);
+    let witness_positions: Vec<u64> = (0..20)
+        .map(|_| mark_rng.gen_range(0..max_possible_leaves))
+        .collect();
+    let final_check_pos = mark_rng.gen_range(0..max_possible_leaves);
+
+    // Helper: register all witness positions on a client.
+    fn register_marks(client: &mut TreeClient, positions: &[u64], extra: u64) {
+        for &pos in positions {
+            client.mark_position(pos);
+        }
+        client.mark_position(extra);
+    }
+
+    // Persistent client: stays alive, syncs incrementally after each wave.
+    let mut persistent = TreeClient::empty();
+    register_marks(&mut persistent, &witness_positions, final_check_pos);
+
+    // Flaky client: periodically drops all state and re-syncs from genesis.
+    let mut flaky = TreeClient::empty();
+    register_marks(&mut flaky, &witness_positions, final_check_pos);
+
+    // Track all leaf values so we can verify witnesses at the end.
+    // leaf_values[position] = Fp value at that position.
+    let mut leaf_values: Vec<Fp> = Vec::new();
+
+    let mut next_height = 1u32;
+
+    for wave in 0..num_waves {
+        // -- Server produces a wave of blocks --
+        for _ in 0..blocks_per_wave {
+            // Random number of leaves per block: 0 to 5.
+            // This includes empty blocks (0 leaves) which test that edge case.
+            let num_leaves: u32 = rng.gen_range(0..=5);
+
+            for _ in 0..num_leaves {
+                let val = fp(rng.gen::<u64>());
+                server.append(val);
+                leaf_values.push(val);
+            }
+
+            server.checkpoint(next_height);
+            next_height += 1;
+        }
+
+        // -- Persistent client: incremental sync --
+        persistent.sync(&server).unwrap();
+
+        assert_eq!(
+            persistent.size(),
+            server.size(),
+            "persistent client size mismatch after wave {}",
+            wave
+        );
+
+        // -- Flaky client: 40% chance of "crash" (drop + fresh resync) --
+        if rng.gen_bool(0.4) {
+            // Simulate crash: drop all state, re-register marks.
+            flaky = TreeClient::empty();
+            register_marks(&mut flaky, &witness_positions, final_check_pos);
+        }
+
+        // Sync (either incremental from last position, or full from genesis).
+        flaky.sync(&server).unwrap();
+
+        assert_eq!(
+            flaky.size(),
+            server.size(),
+            "flaky client size mismatch after wave {} (was reset: {})",
+            wave,
+            flaky.last_synced_height().is_none() || flaky.size() == server.size()
+        );
+
+        // Both clients must agree on the current root.
+        assert_eq!(
+            persistent.root(),
+            flaky.root(),
+            "persistent and flaky roots diverge after wave {}",
+            wave
+        );
+    }
+
+    // -- Final state --
+    let final_height = next_height - 1;
+    let total_leaves = leaf_values.len() as u64;
+
+    assert_eq!(server.size(), total_leaves);
+    assert_eq!(persistent.size(), total_leaves);
+    assert_eq!(flaky.size(), total_leaves);
+    assert_eq!(persistent.last_synced_height(), Some(final_height));
+    assert_eq!(flaky.last_synced_height(), Some(final_height));
+
+    eprintln!(
+        "stress test: {} blocks, {} leaves, {} shard boundaries crossed",
+        final_height,
+        total_leaves,
+        total_leaves / 16
+    );
+
+    // -- Verify all checkpoint roots match across all three --
+    for h in 1..=final_height {
+        let sr = server.root_at_height(h);
+        let pr = persistent.root_at_height(h);
+        let fr = flaky.root_at_height(h);
+        assert_eq!(sr, pr, "server/persistent root mismatch at height {}", h);
+        assert_eq!(sr, fr, "server/flaky root mismatch at height {}", h);
+    }
+
+    // -- Verify witnesses for pre-registered positions that are in range --
+    if total_leaves == 0 {
+        return; // edge case: no leaves at all (extremely unlikely with this RNG)
+    }
+
+    let final_root = server.root_at_height(final_height).unwrap();
+
+    for &pos in &witness_positions {
+        if pos >= total_leaves {
+            continue; // Pre-sampled position beyond actual tree size; skip.
+        }
+        let leaf_val = leaf_values[pos as usize];
+
+        // Server path (server marks all leaves, always has paths)
+        let server_path = server
+            .path(pos, final_height)
+            .unwrap_or_else(|| panic!("server: no path for position {}", pos));
+        assert!(
+            server_path.verify(leaf_val, final_root),
+            "server path for position {} does not verify",
+            pos
+        );
+
+        // Persistent client witness
+        let persistent_witness = persistent
+            .witness(pos, final_height)
+            .unwrap_or_else(|| panic!("persistent: no witness for position {}", pos));
+        assert!(
+            persistent_witness.verify(leaf_val, final_root),
+            "persistent witness for position {} does not verify",
+            pos
+        );
+
+        // Flaky client witness
+        let flaky_witness = flaky
+            .witness(pos, final_height)
+            .unwrap_or_else(|| panic!("flaky: no witness for position {}", pos));
+        assert!(
+            flaky_witness.verify(leaf_val, final_root),
+            "flaky witness for position {} does not verify",
+            pos
+        );
+
+        // All three paths must be byte-identical.
+        assert_eq!(
+            server_path, persistent_witness,
+            "server/persistent path mismatch at position {}",
+            pos
+        );
+        assert_eq!(
+            server_path, flaky_witness,
+            "server/flaky path mismatch at position {}",
+            pos
+        );
+    }
+
+    // -- One more flaky reset + full resync to prove it still works --
+    flaky = TreeClient::empty();
+    register_marks(&mut flaky, &witness_positions, final_check_pos);
+    flaky.sync(&server).unwrap();
+    assert_eq!(flaky.size(), total_leaves);
+    assert_eq!(flaky.root(), persistent.root());
+
+    // Verify the final check position after full resync.
+    if final_check_pos < total_leaves {
+        let check_val = leaf_values[final_check_pos as usize];
+        let w = flaky
+            .witness(final_check_pos, final_height)
+            .unwrap_or_else(|| {
+                panic!(
+                    "final flaky: no witness for position {}",
+                    final_check_pos
+                )
+            });
+        assert!(
+            w.verify(check_val, final_root),
+            "final flaky witness for position {} does not verify after full resync",
+            final_check_pos
+        );
+    }
 }
