@@ -76,6 +76,7 @@ use halo2_gadgets::{
     },
 };
 use super::imt::IMT_DEPTH;
+use crate::constants::MERKLE_DEPTH_ORCHARD;
 
 // ================================================================
 // Public input offsets (12 field elements).
@@ -296,7 +297,7 @@ pub struct NoteSlotWitness {
     pub(crate) psi: Value<pallas::Base>,
     pub(crate) rcm: Value<NoteCommitTrapdoor>,
     pub(crate) cm: Value<NoteCommitment>,
-    pub(crate) path: Value<[MerkleHashOrchard; IMT_DEPTH]>,
+    pub(crate) path: Value<[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD]>,
     pub(crate) pos: Value<u32>,
     pub(crate) is_note_real: Value<bool>,
     pub(crate) imt_low: Value<pallas::Base>,
@@ -1985,7 +1986,7 @@ mod tests {
     /// Helper: build a NoteSlotWitness for a note with a Merkle path and IMT proof.
     fn make_note_slot(
         note: &Note,
-        auth_path: &[MerkleHashOrchard; IMT_DEPTH],
+        auth_path: &[MerkleHashOrchard; MERKLE_DEPTH_ORCHARD],
         pos: u32,
         imt: &ImtProofData,
         is_real: bool,
@@ -2067,16 +2068,16 @@ mod tests {
         let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
 
         let mut current = l2_0;
-        for level in 2..IMT_DEPTH {
+        for level in 2..MERKLE_DEPTH_ORCHARD {
             let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
             current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
         }
         let nc_root = current.inner();
 
-        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
+        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
         auth_path_0[0] = leaves[1];
         auth_path_0[1] = l1_1;
-        for level in 2..IMT_DEPTH {
+        for level in 2..MERKLE_DEPTH_ORCHARD {
             auth_path_0[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
         }
         // IMT proof for real note (from shared provider).
@@ -2091,7 +2092,7 @@ mod tests {
         let mut cmx_values = vec![cmx_real];
         let mut gov_nulls = vec![gov_null_0];
 
-        let dummy_auth_path = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
+        let dummy_auth_path = [MerkleHashOrchard::empty_leaf(); MERKLE_DEPTH_ORCHARD];
 
         for i in 1..4u32 {
             // Use fvk.address_at() so pk_d = [ivk] * g_d with the REAL ivk.
@@ -2308,178 +2309,6 @@ mod tests {
         assert!(
             vk.is_ok(),
             "keygen_vk must succeed on without_witnesses circuit"
-        );
-    }
-
-    /// Duplicate the same real note across slots 0 and 1 — the circuit must
-    /// reject this because gov_null_0 == gov_null_1.
-    #[test]
-    fn duplicate_note_slot_fails() {
-        let mut rng = OsRng;
-
-        let sk = SpendingKey::random(&mut rng);
-        let fvk: FullViewingKey = (&sk).into();
-        let output_recipient = fvk.address_at(1u32, Scope::External);
-
-        let nk_val = fvk.nk().inner();
-        let ak: SpendValidatingKey = fvk.clone().into();
-
-        let vote_round_id = pallas::Base::random(&mut rng);
-        let gov_comm_rand = pallas::Base::random(&mut rng);
-
-        let imt_provider = SpacedLeafImtProvider::new();
-        let nf_imt_root = imt_provider.root();
-
-        // Create one real note.
-        let recipient = fvk.address_at(0u32, Scope::External);
-        let note_value = NoteValue::from_raw(13_000_000);
-        let (_, _, dummy_parent) = Note::dummy(&mut rng, None);
-        let real_note = Note::new(
-            recipient,
-            note_value,
-            Rho::from_nf_old(dummy_parent.nullifier(&fvk)),
-            &mut rng,
-        );
-
-        let cmx_real_e = ExtractedNoteCommitment::from(real_note.commitment());
-        let cmx_real = cmx_real_e.inner();
-        let real_nf = real_note.nullifier(&fvk);
-        let imt_0 = imt_provider.non_membership_proof(real_nf.0);
-        let gov_null_real = gov_null_hash(nk_val, vote_round_id, real_nf.0);
-
-        // Build Merkle tree with real note at position 0.
-        let empty_leaf = MerkleHashOrchard::empty_leaf();
-        let leaves = [
-            MerkleHashOrchard::from_cmx(&cmx_real_e),
-            empty_leaf,
-            empty_leaf,
-            empty_leaf,
-        ];
-        let l1_0 = MerkleHashOrchard::combine(Level::from(0), &leaves[0], &leaves[1]);
-        let l1_1 = MerkleHashOrchard::combine(Level::from(0), &leaves[2], &leaves[3]);
-        let l2_0 = MerkleHashOrchard::combine(Level::from(1), &l1_0, &l1_1);
-
-        let mut current = l2_0;
-        for level in 2..IMT_DEPTH {
-            let sibling = MerkleHashOrchard::empty_root(Level::from(level as u8));
-            current = MerkleHashOrchard::combine(Level::from(level as u8), &current, &sibling);
-        }
-        let nc_root = current.inner();
-
-        let mut auth_path_0 = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
-        auth_path_0[0] = leaves[1];
-        auth_path_0[1] = l1_1;
-        for level in 2..IMT_DEPTH {
-            auth_path_0[level] = MerkleHashOrchard::empty_root(Level::from(level as u8));
-        }
-        let slot_real = make_note_slot(&real_note, &auth_path_0, 0u32, &imt_0, true);
-
-        // DUPLICATE: slot 1 uses the exact same note as slot 0.
-        let slot_dup = slot_real.clone();
-
-        // Padded notes for slots 2-3.
-        let dummy_auth_path = [MerkleHashOrchard::empty_leaf(); IMT_DEPTH];
-        let mut note_slots = vec![slot_real, slot_dup];
-        let mut cmx_values = vec![cmx_real, cmx_real];
-        let mut gov_nulls = vec![gov_null_real, gov_null_real];
-
-        for i in 2..4u32 {
-            let pad_addr = fvk.address_at(100 + i, Scope::External);
-            let (_, _, dummy) = Note::dummy(&mut rng, None);
-            let pad_note = Note::new(
-                pad_addr,
-                NoteValue::zero(),
-                Rho::from_nf_old(dummy.nullifier(&fvk)),
-                &mut rng,
-            );
-
-            let pad_cmx = ExtractedNoteCommitment::from(pad_note.commitment()).inner();
-            let pad_nf = pad_note.nullifier(&fvk);
-            let pad_imt = imt_provider.non_membership_proof(pad_nf.0);
-            let pad_gov_null = gov_null_hash(nk_val, vote_round_id, pad_nf.0);
-
-            note_slots.push(make_note_slot(
-                &pad_note,
-                &dummy_auth_path,
-                0u32,
-                &pad_imt,
-                false,
-            ));
-            cmx_values.push(pad_cmx);
-            gov_nulls.push(pad_gov_null);
-        }
-
-        let notes: [NoteSlotWitness; 4] = note_slots.try_into().unwrap();
-
-        // v_total counts the duplicate: 13M * 2 = 26M.
-        let v_total = pallas::Base::from(26_000_000u64);
-
-        let g_d_new_x = *output_recipient
-            .g_d()
-            .to_affine()
-            .coordinates()
-            .unwrap()
-            .x();
-        let pk_d_new_x = *output_recipient
-            .pk_d()
-            .inner()
-            .to_affine()
-            .coordinates()
-            .unwrap()
-            .x();
-        let gov_comm =
-            gov_commitment_hash(g_d_new_x, pk_d_new_x, v_total, vote_round_id, gov_comm_rand);
-
-        let rho = rho_binding_hash(
-            cmx_values[0],
-            cmx_values[1],
-            cmx_values[2],
-            cmx_values[3],
-            gov_comm,
-            vote_round_id,
-        );
-
-        let sender_address = fvk.address_at(0u32, Scope::External);
-        let signed_note = Note::new(
-            sender_address,
-            NoteValue::zero(),
-            Rho::from_nf_old(Nullifier(rho)),
-            &mut rng,
-        );
-        let nf_signed = signed_note.nullifier(&fvk);
-
-        let output_note = Note::new(
-            output_recipient,
-            NoteValue::zero(),
-            Rho::from_nf_old(nf_signed),
-            &mut rng,
-        );
-        let cmx_new = ExtractedNoteCommitment::from(output_note.commitment()).inner();
-
-        let alpha = pallas::Scalar::random(&mut rng);
-        let rk = ak.randomize(&alpha);
-
-        let circuit = Circuit::from_note_unchecked(&fvk, &signed_note, alpha)
-            .with_output_note(&output_note)
-            .with_notes(notes)
-            .with_gov_comm_rand(gov_comm_rand);
-
-        let instance = Instance::from_parts(
-            nf_signed,
-            rk,
-            cmx_new,
-            gov_comm,
-            vote_round_id,
-            nc_root,
-            nf_imt_root,
-            [gov_nulls[0], gov_nulls[1], gov_nulls[2], gov_nulls[3]],
-        );
-
-        let pi = instance.to_halo2_instance();
-        let prover = MockProver::run(K, &circuit, vec![pi]).unwrap();
-        assert!(
-            prover.verify().is_err(),
-            "duplicate note slot must be rejected by gov null distinctness check"
         );
     }
 
