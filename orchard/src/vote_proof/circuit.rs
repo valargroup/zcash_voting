@@ -8,8 +8,9 @@
 //! - **Condition 4**: VAN Nullifier Integrity (nested Poseidon, `constrain_instance`).
 //! - **Condition 5**: Proposal Authority Decrement (AddChip + range check).
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
+//! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
 //!
-//! Remaining conditions (3, 7–11) are stubbed with witness fields and
+//! Remaining conditions (3, 8–11) are stubbed with witness fields and
 //! public input slots; constraint logic will be added incrementally.
 //!
 //! ## Conditions overview
@@ -32,6 +33,7 @@
 //!
 //! Vote commitment construction:
 //! - **Condition 7**: Shares Sum Correctness — `sum(shares_1..4) = total_note_value`.
+//!   *(implemented)*
 //! - **Condition 8**: Shares Range — each `shares_j` in `[0, 2^24)`.
 //! - **Condition 9**: Shares Hash Integrity — `shares_hash = H(enc_share_1..4)`.
 //! - **Condition 10**: Encryption Integrity — each `enc_share_i = ElGamal(shares_i, r_i, ea_pk)`.
@@ -212,9 +214,9 @@ pub fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
 /// Configuration for the Vote Proof circuit.
 ///
 /// Holds chip configs for Poseidon (conditions 1, 2, 4, 6), AddChip
-/// (condition 5), LookupRangeCheck (condition 5), and the Merkle swap
-/// gate (condition 1). Will be extended with ECC and custom gates as
-/// conditions 3, 7–11 are added.
+/// (conditions 5, 7), LookupRangeCheck (condition 5), and the Merkle
+/// swap gate (condition 1). Will be extended with ECC and custom gates
+/// as conditions 3, 8–11 are added.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Public input column (7 field elements).
@@ -238,7 +240,8 @@ pub struct Config {
     ///
     /// Uses advices[7] (a), advices[8] (b), advices[6] (c), matching
     /// the delegation circuit's column assignment.
-    /// Used in condition 5 (proposal authority decrement).
+    /// Used in conditions 5 (proposal authority decrement) and 7
+    /// (shares sum correctness).
     add_config: AddConfig,
     /// 10-bit lookup range check configuration.
     ///
@@ -291,8 +294,9 @@ impl Config {
 /// revealing which VAN they hold. Contains witness fields for all
 /// 11 conditions; constraint logic is added incrementally.
 ///
-/// Currently constrained: conditions 1, 2, 4, 5, 6 (VAN membership,
-/// VAN integrity, nullifier, authority decrement, new VAN integrity).
+/// Currently constrained: conditions 1, 2, 4, 5, 6, 7 (VAN membership,
+/// VAN integrity, nullifier, authority decrement, new VAN integrity,
+/// shares sum correctness).
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
     // === VAN ownership and spending (conditions 1–4) ===
@@ -650,11 +654,13 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // - voting_hotkey_pk, total_note_value, voting_round_id,
         //   proposal_authority_old, gov_comm_rand, domain_van: also used
         //   in condition 6 (new VAN integrity).
+        // - total_note_value: also used in condition 7 (shares sum check).
         let vote_authority_note_old_cond1 = vote_authority_note_old.clone();
         let voting_round_id_cond4 = voting_round_id.clone();
         let domain_van_cond6 = domain_van.clone();
         let voting_hotkey_pk_cond6 = voting_hotkey_pk.clone();
         let total_note_value_cond6 = total_note_value.clone();
+        let total_note_value_cond7 = total_note_value.clone();
         let voting_round_id_cond6 = voting_round_id.clone();
         let proposal_authority_old_cond5 = proposal_authority_old.clone();
         let gov_comm_rand_cond6 = gov_comm_rand.clone();
@@ -1031,6 +1037,70 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             VOTE_AUTHORITY_NOTE_NEW,
         )?;
 
+        // ---------------------------------------------------------------
+        // Condition 7: Shares Sum Correctness.
+        //
+        // sum(share_0, share_1, share_2, share_3) = total_note_value
+        //
+        // Proves the voting share decomposition is consistent with the
+        // total delegated weight. Uses three chained AddChip additions:
+        //   partial_1 = share_0 + share_1
+        //   partial_2 = partial_1 + share_2
+        //   sum       = partial_2 + share_3
+        // Then constrains sum == total_note_value (from condition 2).
+        // ---------------------------------------------------------------
+
+        // Witness the 4 plaintext shares. These cells will also be used
+        // by condition 8 (range check) and condition 10 (El Gamal
+        // encryption inputs) when those conditions are implemented.
+        let share_0 = assign_free_advice(
+            layouter.namespace(|| "witness share_0"),
+            config.advices[0],
+            self.shares[0],
+        )?;
+        let share_1 = assign_free_advice(
+            layouter.namespace(|| "witness share_1"),
+            config.advices[0],
+            self.shares[1],
+        )?;
+        let share_2 = assign_free_advice(
+            layouter.namespace(|| "witness share_2"),
+            config.advices[0],
+            self.shares[2],
+        )?;
+        let share_3 = assign_free_advice(
+            layouter.namespace(|| "witness share_3"),
+            config.advices[0],
+            self.shares[3],
+        )?;
+
+        // Chain 3 additions: share_0 + share_1 + share_2 + share_3.
+        let partial_1 = config.add_chip().add(
+            layouter.namespace(|| "share_0 + share_1"),
+            &share_0,
+            &share_1,
+        )?;
+        let partial_2 = config.add_chip().add(
+            layouter.namespace(|| "partial_1 + share_2"),
+            &partial_1,
+            &share_2,
+        )?;
+        let shares_sum = config.add_chip().add(
+            layouter.namespace(|| "partial_2 + share_3"),
+            &partial_2,
+            &share_3,
+        )?;
+
+        // Constrain: shares_sum == total_note_value.
+        // This ensures the 4 shares decompose the voter's total delegated
+        // weight without creating or destroying value.
+        layouter.assign_region(
+            || "shares sum == total_note_value",
+            |mut region| {
+                region.constrain_equal(shares_sum.cell(), total_note_value_cond7.cell())
+            },
+        )?;
+
         Ok(())
     }
 }
@@ -1113,12 +1183,13 @@ mod tests {
     use pasta_curves::pallas;
     use rand::rngs::OsRng;
 
-    /// Build valid test data for conditions 2, 4, 5, and 6.
+    /// Build valid test data for conditions 1, 2, 4, 5, 6, and 7.
     ///
-    /// Returns a circuit with correctly-hashed VAN witnesses and a
-    /// matching instance. `proposal_authority_old` is set to a small
-    /// positive value (5) so conditions 5 and 6 can decrement it.
-    /// Conditions not yet constrained use placeholder values (zero).
+    /// Returns a circuit with correctly-hashed VAN witnesses, valid
+    /// shares summing to `total_note_value`, and a matching instance.
+    /// `proposal_authority_old` is set to a small positive value (5) so
+    /// conditions 5 and 6 can decrement it. Conditions not yet
+    /// constrained use placeholder values (zero).
     fn build_single_leaf_merkle_path(
         leaf: pallas::Base,
     ) -> ([pallas::Base; VOTE_COMM_TREE_DEPTH], u32, pallas::Base) {
@@ -1165,7 +1236,15 @@ mod tests {
             gov_comm_rand,
         );
 
-        let circuit = Circuit::with_van_witnesses(
+        // Create shares that sum to total_note_value (condition 7).
+        // The first 3 are small constants; the 4th absorbs the remainder
+        // so the field-arithmetic sum is exact.
+        let s0 = pallas::Base::from(100u64);
+        let s1 = pallas::Base::from(200u64);
+        let s2 = pallas::Base::from(300u64);
+        let s3 = total_note_value - s0 - s1 - s2;
+
+        let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
             Value::known(position),
             Value::known(voting_hotkey_pk),
@@ -1175,6 +1254,12 @@ mod tests {
             Value::known(vote_authority_note_old),
             Value::known(vsk_nk),
         );
+        circuit.shares = [
+            Value::known(s0),
+            Value::known(s1),
+            Value::known(s2),
+            Value::known(s3),
+        ];
 
         let instance = Instance::from_parts(
             van_nullifier,
@@ -1215,17 +1300,29 @@ mod tests {
         let (auth_path, position, root) = build_single_leaf_merkle_path(wrong_van);
         instance.vote_comm_tree_root = root;
 
-        let circuit = Circuit::with_van_witnesses(
+        // Use random witnesses that DON'T hash to wrong_van.
+        let total_note_value = pallas::Base::random(&mut OsRng);
+        let s0 = pallas::Base::from(100u64);
+        let s1 = pallas::Base::from(200u64);
+        let s2 = pallas::Base::from(300u64);
+        let s3 = total_note_value - s0 - s1 - s2;
+
+        let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
             Value::known(position),
-            // Use random witnesses that DON'T hash to wrong_van.
             Value::known(pallas::Base::random(&mut OsRng)),
-            Value::known(pallas::Base::random(&mut OsRng)),
+            Value::known(total_note_value),
             Value::known(pallas::Base::from(5u64)),
             Value::known(pallas::Base::random(&mut OsRng)),
             Value::known(wrong_van),
             Value::known(pallas::Base::random(&mut OsRng)),
         );
+        circuit.shares = [
+            Value::known(s0),
+            Value::known(s1),
+            Value::known(s2),
+            Value::known(s3),
+        ];
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         // Should fail: derived hash ≠ witnessed vote_authority_note_old.
@@ -1312,12 +1409,24 @@ mod tests {
         // Use a DIFFERENT vsk_nk in the circuit.
         let wrong_vsk_nk = pallas::Base::random(&mut rng);
 
-        let circuit = Circuit::with_van_witnesses(
+        // Shares that sum to total_note_value (condition 7).
+        let s0 = pallas::Base::from(100u64);
+        let s1 = pallas::Base::from(200u64);
+        let s2 = pallas::Base::from(300u64);
+        let s3 = total_note_value - s0 - s1 - s2;
+
+        let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
             Value::known(voting_hotkey_pk), Value::known(total_note_value),
             Value::known(proposal_authority_old), Value::known(gov_comm_rand),
             Value::known(vote_authority_note_old), Value::known(wrong_vsk_nk),
         );
+        circuit.shares = [
+            Value::known(s0),
+            Value::known(s1),
+            Value::known(s2),
+            Value::known(s3),
+        ];
 
         let instance = Instance::from_parts(
             van_nullifier, vote_authority_note_new, pallas::Base::zero(),
@@ -1473,12 +1582,24 @@ mod tests {
             proposal_authority_new, gov_comm_rand,
         );
 
-        let circuit = Circuit::with_van_witnesses(
+        // Shares that sum to total_note_value (condition 7).
+        let s0 = pallas::Base::from(100u64);
+        let s1 = pallas::Base::from(200u64);
+        let s2 = pallas::Base::from(300u64);
+        let s3 = total_note_value - s0 - s1 - s2;
+
+        let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
             Value::known(voting_hotkey_pk), Value::known(total_note_value),
             Value::known(proposal_authority_old), Value::known(gov_comm_rand),
             Value::known(vote_authority_note_old), Value::known(vsk_nk),
         );
+        circuit.shares = [
+            Value::known(s0),
+            Value::known(s1),
+            Value::known(s2),
+            Value::known(s3),
+        ];
 
         let instance = Instance::from_parts(
             van_nullifier, vote_authority_note_new, pallas::Base::zero(),
@@ -1500,6 +1621,23 @@ mod tests {
         assert_eq!(poseidon_hash_2(a, b), poseidon_hash_2(a, b));
         // Non-commutative.
         assert_ne!(poseidon_hash_2(a, b), poseidon_hash_2(b, a));
+    }
+
+    // ================================================================
+    // Condition 7 (Shares Sum Correctness) tests
+    // ================================================================
+
+    /// Shares that do NOT sum to total_note_value should fail condition 7.
+    #[test]
+    fn shares_sum_wrong_total_fails() {
+        let (mut circuit, instance) = make_test_data();
+
+        // Corrupt shares[3] so the sum no longer equals total_note_value.
+        circuit.shares[3] = Value::known(pallas::Base::from(999_999u64));
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        // Should fail: shares sum ≠ total_note_value.
+        assert!(prover.verify().is_err());
     }
 
     // ================================================================

@@ -10,6 +10,7 @@
 //! - **Condition 4**: VAN Nullifier Integrity (nested Poseidon, `constrain_instance`).
 //! - **Condition 5**: Proposal Authority Decrement (AddChip + range check).
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
+//! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
 
 pub mod circuit;
 

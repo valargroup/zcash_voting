@@ -166,15 +166,26 @@ Where:
 
 **Constructions:** `PoseidonChip`.
 
-## Condition 7: Shares Sum Correctness (TODO)
+## Condition 7: Shares Sum Correctness ✅
 
 Purpose: voting shares decomposition is consistent with the total delegated weight.
 
 ```
-sum(shares_1, ..., shares_4) = total_note_value
+sum(share_0, share_1, share_2, share_3) = total_note_value
 ```
 
-**Constructions:** `AddChip`.
+Where:
+- **share_0..share_3**: the 4 plaintext voting shares (private witnesses). Each share represents a portion of the voter's delegated weight allocated to one of the 4 vote options. These cells will also be used by condition 8 (range check) and condition 10 (El Gamal encryption inputs).
+- **total_note_value**: the voter's total delegated weight. Cell-equality-linked to the same witness cell used in condition 2 (VAN integrity), binding the shares decomposition to the authenticated VAN.
+
+**Structure:** Three chained `AddChip` additions (3 rows):
+- `partial_1 = share_0 + share_1`
+- `partial_2 = partial_1 + share_2`
+- `shares_sum = partial_2 + share_3`
+
+**Constraint:** `constrain_equal(shares_sum, total_note_value)` — the sum of all 4 shares must exactly equal the voter's total delegated weight. This prevents the voter from creating or destroying voting power during the share decomposition.
+
+**Constructions:** `AddChip` (reused from condition 5).
 
 ## Condition 8: Shares Range (TODO)
 
