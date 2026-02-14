@@ -27,14 +27,14 @@ todos:
     content: "Phase 2c: Write chain integration tests (EndBlocker roots, query responses)"
     status: completed
   - id: http-sync-api
-    content: "Phase 3a: Create vote-tree-remote-client crate with HttpTreeSyncApi implementing TreeSyncApi over HTTP"
-    status: pending
+    content: "Phase 3a: Create vote-commitment-tree-client crate with HttpTreeSyncApi implementing TreeSyncApi over HTTP"
+    status: completed
   - id: cli-binary
     content: "Phase 3b: Build vote-tree-cli binary with sync/witness/verify/status commands"
-    status: pending
+    status: completed
   - id: network-tests
     content: "Phase 3c: Write mock server tests + E2E tests (feature-gated)"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -179,10 +179,10 @@ sequenceDiagram
 
 
 
-### New crate: `vote-tree-remote-client`
+### New crate: `vote-commitment-tree-client`
 
 ```
-vote-tree-remote-client/
+vote-commitment-tree-client/
   Cargo.toml         # depends on vote-commitment-tree, reqwest, serde, clap
   src/
     main.rs          # CLI: sync, witness, verify, status commands
@@ -258,7 +258,7 @@ These validate the Go keeper uses the FFI correctly:
 
 These validate the HTTP TreeSyncApi:
 
-**a. Mock server tests** (in `vote-tree-remote-client/tests/`):
+**a. Mock server tests** (in `vote-commitment-tree-client/tests/`):
 
 - `test_http_sync_api_full_sync` -- start a mock HTTP server serving `TreeSyncApi` responses, create `HttpTreeSyncApi`, create `TreeClient`, sync, verify roots and witnesses
 - `test_http_sync_api_incremental_sync` -- two rounds of sync, second round only fetches new blocks
