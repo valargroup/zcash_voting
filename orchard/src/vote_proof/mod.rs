@@ -5,6 +5,7 @@
 //! conditions; constraint logic is added incrementally.
 //!
 //! Currently implemented:
+//! - **Condition 1**: VAN Membership (Poseidon Merkle path, `constrain_instance`).
 //! - **Condition 2**: VAN Integrity (Poseidon hash).
 //! - **Condition 4**: VAN Nullifier Integrity (nested Poseidon, `constrain_instance`).
 //! - **Condition 5**: Proposal Authority Decrement (AddChip + range check).
@@ -13,6 +14,6 @@
 pub mod circuit;
 
 pub use circuit::{
-    domain_van_nullifier, van_integrity_hash, van_nullifier_hash, Circuit, Config, Instance, K,
-    DOMAIN_VAN, VOTE_COMM_TREE_DEPTH,
+    domain_van_nullifier, poseidon_hash_2, van_integrity_hash, van_nullifier_hash, Circuit, Config,
+    Instance, K, DOMAIN_VAN, VOTE_COMM_TREE_DEPTH,
 };

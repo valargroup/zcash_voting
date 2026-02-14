@@ -64,7 +64,7 @@ Where:
 
 **Constructions:** `PoseidonChip`.
 
-## Condition 1: VAN Membership (TODO)
+## Condition 1: VAN Membership ✅
 
 Purpose: prove the voter's VAN is registered in the vote commitment tree, without revealing which one.
 
@@ -72,9 +72,26 @@ Purpose: prove the voter's VAN is registered in the vote commitment tree, withou
 MerklePath(vote_authority_note_old, vote_comm_tree_position, vote_comm_tree_path) = vote_comm_tree_root
 ```
 
-Poseidon-based Merkle path verification (32 levels). Analogous to ZKP 1 condition 10.
+Where:
+- **vote_authority_note_old**: the Merkle leaf. Cell-equality-linked to condition 2's derived VAN hash, binding the membership proof to the same commitment.
+- **vote_comm_tree_position**: leaf position in the tree (private witness). At each level, the position bit determines child ordering.
+- **vote_comm_tree_path**: 24 sibling hashes along the authentication path (private witness).
+- **vote_comm_tree_root**: the public tree anchor (public input at offset 3).
 
-**Constructions:** `PoseidonChip`, custom swap gate.
+**Function:** Poseidon-based Merkle path verification (24 levels). At each level, a conditional swap gate orders (current, sibling) into (left, right) based on the position bit, then `Poseidon(left, right)` computes the parent. The hash function matches `vote_commitment_tree::MerkleHashVote::combine` — `Poseidon(left, right)` with no level tag.
+
+**Structure:** 24 swap regions (1 row each) + 24 Poseidon `ConstantLength<2>` hashes (~1,560 total rows). The swap gate (`q_merkle_swap`) constrains:
+- `left = current + pos_bit * (sibling - current)` — selects current or sibling
+- `left + right = current + sibling` — conservation
+- `pos_bit ∈ {0, 1}` — boolean check
+
+Identical to the delegation circuit's `q_imt_swap` gate.
+
+**Constraint:** The circuit computes the Merkle root from the leaf and path, then enforces `constrain_instance(computed_root, VOTE_COMM_TREE_ROOT)` — binding the derived root to the public input at offset 3.
+
+**Out-of-circuit helper:** `poseidon_hash_2()` computes `Poseidon(a, b)` outside the circuit for builder and test use.
+
+**Constructions:** `PoseidonChip`, `q_merkle_swap` selector.
 
 ## Condition 3: Spend Authority (TODO)
 

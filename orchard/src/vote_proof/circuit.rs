@@ -3,12 +3,13 @@
 //! Proves that a registered voter is casting a valid vote, without
 //! revealing which VAN they hold. Currently implements:
 //!
+//! - **Condition 1**: VAN Membership (Poseidon Merkle path, `constrain_instance`).
 //! - **Condition 2**: VAN Integrity (Poseidon hash).
 //! - **Condition 4**: VAN Nullifier Integrity (nested Poseidon, `constrain_instance`).
 //! - **Condition 5**: Proposal Authority Decrement (AddChip + range check).
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
 //!
-//! Remaining conditions (1, 3, 7–11) are stubbed with witness fields and
+//! Remaining conditions (3, 7–11) are stubbed with witness fields and
 //! public input slots; constraint logic will be added incrementally.
 //!
 //! ## Conditions overview
@@ -41,7 +42,11 @@ use alloc::vec::Vec;
 
 use halo2_proofs::{
     circuit::{floor_planner, AssignedCell, Layouter, Value},
-    plonk::{self, Advice, Column, ConstraintSystem, Fixed, Instance as InstanceColumn, TableColumn},
+    plonk::{
+        self, Advice, Column, Constraints, ConstraintSystem, Fixed,
+        Instance as InstanceColumn, Selector, TableColumn,
+    },
+    poly::Rotation,
 };
 use pasta_curves::{pallas, vesta};
 
@@ -50,7 +55,7 @@ use halo2_gadgets::{
         primitives::{self as poseidon, ConstantLength},
         Hash as PoseidonHash, Pow5Chip as PoseidonChip, Pow5Config as PoseidonConfig,
     },
-    utilities::lookup_range_check::LookupRangeCheckConfig,
+    utilities::{bool_check, lookup_range_check::LookupRangeCheckConfig},
 };
 use crate::circuit::gadget::{
     add_chip::{AddChip, AddConfig},
@@ -73,10 +78,10 @@ pub const VOTE_COMM_TREE_DEPTH: usize = 24;
 
 /// Circuit size (2^K rows).
 ///
-/// K=12 (4,096 rows). Conditions 2, 4, 5, 6 use ~4 Poseidon hashes
-/// (~1,000 rows), plus the AddChip and range-check running sum.
-/// The 10-bit lookup table requires 1,024 rows in the table column.
-/// K=12 provides comfortable headroom for both.
+/// K=12 (4,096 rows). Conditions 1, 2, 4, 5, 6 use ~28 Poseidon
+/// hashes (~2,200 rows), plus the AddChip, range-check running sum,
+/// and 24 Merkle swap regions. The 10-bit lookup table requires
+/// 1,024 rows in the table column. K=12 provides headroom for both.
 pub const K: u32 = 12;
 
 /// Domain tag for Vote Authority Notes.
@@ -107,9 +112,8 @@ const VOTING_ROUND_ID: usize = 6;
 
 // Suppress dead-code warnings for public input offsets that are
 // defined but not yet used by any condition's constraint logic.
-// These will be used as conditions 1, 3, 7–11 are implemented.
+// These will be used as conditions 3, 7–11 are implemented.
 const _: usize = VOTE_COMMITMENT;
-const _: usize = VOTE_COMM_TREE_ROOT;
 const _: usize = VOTE_COMM_TREE_ANCHOR_HEIGHT;
 const _: usize = PROPOSAL_ID;
 
@@ -192,16 +196,25 @@ pub fn van_nullifier_hash(
         .hash([vsk_nk, step2])
 }
 
+/// Out-of-circuit Poseidon hash of two field elements.
+///
+/// `Poseidon(a, b)` with P128Pow5T3, ConstantLength<2>, width 3, rate 2.
+/// Used for Merkle path computation (condition 1) and tests. This is the
+/// same hash function used by `vote_commitment_tree::MerkleHashVote::combine`.
+pub fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash([a, b])
+}
+
 // ================================================================
 // Config
 // ================================================================
 
 /// Configuration for the Vote Proof circuit.
 ///
-/// Holds chip configs for Poseidon (conditions 2, 4, 6), AddChip
-/// (condition 5), and LookupRangeCheck (condition 5). Will be
-/// extended with ECC and custom gates as conditions 1, 3, 7–11 are
-/// added.
+/// Holds chip configs for Poseidon (conditions 1, 2, 4, 6), AddChip
+/// (condition 5), LookupRangeCheck (condition 5), and the Merkle swap
+/// gate (condition 1). Will be extended with ECC and custom gates as
+/// conditions 3, 7–11 are added.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Public input column (7 field elements).
@@ -209,7 +222,7 @@ pub struct Config {
     /// 10 advice columns for private witness data.
     ///
     /// Column layout follows the delegation circuit for consistency:
-    /// - `advices[0..5]`: general witness assignment (future: Sinsemilla/Merkle).
+    /// - `advices[0..5]`: general witness assignment + Merkle swap gate.
     /// - `advices[5]`: Poseidon partial S-box column.
     /// - `advices[6..9]`: Poseidon state columns + AddChip output.
     /// - `advices[9]`: range check running sum.
@@ -239,6 +252,13 @@ pub struct Config {
     /// the vote proof circuit doesn't use Sinsemilla (which would
     /// normally load this table as a side effect).
     table_idx: TableColumn,
+    /// Selector for the Merkle conditional swap gate (condition 1).
+    ///
+    /// At each of the 24 Merkle tree levels, conditionally swaps
+    /// (current, sibling) into (left, right) based on the position bit.
+    /// Uses advices[0..5]: pos_bit, current, sibling, left, right.
+    /// Identical to the delegation circuit's `q_imt_swap` gate.
+    q_merkle_swap: Selector,
 }
 
 impl Config {
@@ -271,8 +291,8 @@ impl Config {
 /// revealing which VAN they hold. Contains witness fields for all
 /// 11 conditions; constraint logic is added incrementally.
 ///
-/// Currently constrained: conditions 2, 4, 5, 6 (VAN integrity,
-/// nullifier, authority decrement, new VAN integrity).
+/// Currently constrained: conditions 1, 2, 4, 5, 6 (VAN membership,
+/// VAN integrity, nullifier, authority decrement, new VAN integrity).
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
     // === VAN ownership and spending (conditions 1–4) ===
@@ -324,17 +344,23 @@ pub struct Circuit {
 }
 
 impl Circuit {
-    /// Creates a circuit with conditions 2, 4, 5, and 6 witnesses populated.
+    /// Creates a circuit with conditions 1, 2, 4, 5, and 6 witnesses populated.
     ///
     /// All other witness fields are set to `Value::unknown()`.
-    /// Conditions 4, 5, and 6 share witness cells with condition 2:
+    /// - Condition 1 uses `vote_authority_note_old` as the Merkle leaf,
+    ///   with `vote_comm_tree_path` and `vote_comm_tree_position` for
+    ///   the authentication path.
+    /// - Condition 2 binds `vote_authority_note_old` to the Poseidon hash
+    ///   of its components.
     /// - Condition 4 reuses `vote_authority_note_old` and `voting_round_id`.
     /// - Condition 5 derives `proposal_authority_new` from
     ///   `proposal_authority_old`.
     /// - Condition 6 reuses all condition 2 witnesses except
     ///   `proposal_authority_old`, which is replaced by the
     ///   in-circuit `proposal_authority_new` from condition 5.
-    pub fn with_van_integrity_witnesses(
+    pub fn with_van_witnesses(
+        vote_comm_tree_path: Value<[pallas::Base; VOTE_COMM_TREE_DEPTH]>,
+        vote_comm_tree_position: Value<u32>,
         voting_hotkey_pk: Value<pallas::Base>,
         total_note_value: Value<pallas::Base>,
         proposal_authority_old: Value<pallas::Base>,
@@ -343,6 +369,8 @@ impl Circuit {
         vsk_nk: Value<pallas::Base>,
     ) -> Self {
         Circuit {
+            vote_comm_tree_path,
+            vote_comm_tree_position,
             voting_hotkey_pk,
             total_note_value,
             proposal_authority_old,
@@ -473,6 +501,42 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             rc_b,
         );
 
+        // Merkle conditional swap gate (condition 1).
+        // At each level of the Poseidon Merkle path, we need to place
+        // (current, sibling) into (left, right) based on the position bit.
+        // If pos_bit=0, current is the left child; if pos_bit=1, they swap.
+        // Identical to the delegation circuit's q_imt_swap gate.
+        let q_merkle_swap = meta.selector();
+        meta.create_gate("Merkle conditional swap", |meta| {
+            let q = meta.query_selector(q_merkle_swap);
+            let pos_bit = meta.query_advice(advices[0], Rotation::cur());
+            let current = meta.query_advice(advices[1], Rotation::cur());
+            let sibling = meta.query_advice(advices[2], Rotation::cur());
+            let left = meta.query_advice(advices[3], Rotation::cur());
+            let right = meta.query_advice(advices[4], Rotation::cur());
+
+            Constraints::with_selector(
+                q,
+                [
+                    // left = current + pos_bit * (sibling - current)
+                    // i.e. left = current when pos_bit=0, left = sibling when pos_bit=1.
+                    (
+                        "swap left",
+                        left.clone()
+                            - current.clone()
+                            - pos_bit.clone() * (sibling.clone() - current.clone()),
+                    ),
+                    // left + right = current + sibling (conservation: no values lost).
+                    ("swap right", left + right - current - sibling),
+                    // pos_bit must be 0 or 1.
+                    (
+                        "bool_check pos_bit",
+                        bool_check(pos_bit),
+                    ),
+                ],
+            )
+        });
+
         Config {
             primary,
             advices,
@@ -480,6 +544,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             add_config,
             range_check,
             table_idx,
+            q_merkle_swap,
         }
     }
 
@@ -580,10 +645,12 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Clone cells that are consumed by condition 2's Poseidon hash but
         // reused in later conditions:
+        // - vote_authority_note_old: also used in condition 1 (Merkle leaf).
         // - voting_round_id: also used in condition 4 (VAN nullifier).
         // - voting_hotkey_pk, total_note_value, voting_round_id,
         //   proposal_authority_old, gov_comm_rand, domain_van: also used
         //   in condition 6 (new VAN integrity).
+        let vote_authority_note_old_cond1 = vote_authority_note_old.clone();
         let voting_round_id_cond4 = voting_round_id.clone();
         let domain_van_cond6 = domain_van.clone();
         let voting_hotkey_pk_cond6 = voting_hotkey_pk.clone();
@@ -616,6 +683,143 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             || "VAN integrity check",
             |mut region| region.constrain_equal(derived_van.cell(), vote_authority_note_old.cell()),
         )?;
+
+        // ---------------------------------------------------------------
+        // Condition 1: VAN Membership.
+        //
+        // MerklePath(vote_authority_note_old, position, path) = vote_comm_tree_root
+        //
+        // Poseidon-based Merkle path verification (24 levels). At each
+        // level, the position bit determines child ordering: if bit=0,
+        // current is the left child; if bit=1, current is the right child.
+        //
+        // The leaf is vote_authority_note_old, which is already constrained
+        // to be a correct Poseidon hash by condition 2. This creates a
+        // binding: the VAN integrity check and the Merkle membership proof
+        // are tied to the same commitment.
+        //
+        // The hash function is Poseidon(left, right) with no level tag,
+        // matching vote_commitment_tree::MerkleHashVote::combine.
+        // ---------------------------------------------------------------
+        {
+            let mut current = vote_authority_note_old_cond1;
+
+            for i in 0..VOTE_COMM_TREE_DEPTH {
+                // Witness position bit for this level.
+                let pos_bit = assign_free_advice(
+                    layouter.namespace(|| alloc::format!("merkle pos_bit {i}")),
+                    config.advices[0],
+                    self.vote_comm_tree_position
+                        .map(|p| pallas::Base::from(((p >> i) & 1) as u64)),
+                )?;
+
+                // Witness sibling hash at this level.
+                let sibling = assign_free_advice(
+                    layouter.namespace(|| alloc::format!("merkle sibling {i}")),
+                    config.advices[0],
+                    self.vote_comm_tree_path.map(|path| path[i]),
+                )?;
+
+                // Conditional swap: order (current, sibling) by position bit.
+                // The q_merkle_swap gate constrains:
+                //   left  = current + pos_bit * (sibling - current)
+                //   right = current + sibling - left
+                //   pos_bit ∈ {0, 1}
+                let (left, right) = layouter.assign_region(
+                    || alloc::format!("merkle swap level {i}"),
+                    |mut region| {
+                        config.q_merkle_swap.enable(&mut region, 0)?;
+
+                        let pos_bit_cell = pos_bit.copy_advice(
+                            || "pos_bit",
+                            &mut region,
+                            config.advices[0],
+                            0,
+                        )?;
+                        let current_cell = current.copy_advice(
+                            || "current",
+                            &mut region,
+                            config.advices[1],
+                            0,
+                        )?;
+                        let sibling_cell = sibling.copy_advice(
+                            || "sibling",
+                            &mut region,
+                            config.advices[2],
+                            0,
+                        )?;
+
+                        let left = region.assign_advice(
+                            || "left",
+                            config.advices[3],
+                            0,
+                            || {
+                                pos_bit_cell
+                                    .value()
+                                    .copied()
+                                    .zip(current_cell.value().copied())
+                                    .zip(sibling_cell.value().copied())
+                                    .map(|((bit, cur), sib)| {
+                                        if bit == pallas::Base::zero() {
+                                            cur
+                                        } else {
+                                            sib
+                                        }
+                                    })
+                            },
+                        )?;
+
+                        let right = region.assign_advice(
+                            || "right",
+                            config.advices[4],
+                            0,
+                            || {
+                                current_cell
+                                    .value()
+                                    .copied()
+                                    .zip(sibling_cell.value().copied())
+                                    .zip(left.value().copied())
+                                    .map(|((cur, sib), l)| cur + sib - l)
+                            },
+                        )?;
+
+                        Ok((left, right))
+                    },
+                )?;
+
+                // Hash parent = Poseidon(left, right).
+                let parent = {
+                    let hasher = PoseidonHash::<
+                        pallas::Base,
+                        _,
+                        poseidon::P128Pow5T3,
+                        ConstantLength<2>,
+                        3, // WIDTH
+                        2, // RATE
+                    >::init(
+                        config.poseidon_chip(),
+                        layouter.namespace(|| alloc::format!("merkle hash init level {i}")),
+                    )?;
+                    hasher.hash(
+                        layouter.namespace(|| alloc::format!(
+                            "Poseidon(left, right) level {i}"
+                        )),
+                        [left, right],
+                    )?
+                };
+
+                current = parent;
+            }
+
+            // Bind the computed Merkle root to the VOTE_COMM_TREE_ROOT
+            // public input. The verifier checks that the voter's VAN is
+            // a leaf in the published vote commitment tree.
+            layouter.constrain_instance(
+                current.cell(),
+                config.primary,
+                VOTE_COMM_TREE_ROOT,
+            )?;
+        }
 
         // ---------------------------------------------------------------
         // Witness assignment for condition 4.
@@ -915,19 +1119,33 @@ mod tests {
     /// matching instance. `proposal_authority_old` is set to a small
     /// positive value (5) so conditions 5 and 6 can decrement it.
     /// Conditions not yet constrained use placeholder values (zero).
-    fn make_van_integrity_test_data() -> (Circuit, Instance) {
+    fn build_single_leaf_merkle_path(
+        leaf: pallas::Base,
+    ) -> ([pallas::Base; VOTE_COMM_TREE_DEPTH], u32, pallas::Base) {
+        let mut empty_roots = [pallas::Base::zero(); VOTE_COMM_TREE_DEPTH];
+        empty_roots[0] = poseidon_hash_2(pallas::Base::zero(), pallas::Base::zero());
+        for i in 1..VOTE_COMM_TREE_DEPTH {
+            empty_roots[i] = poseidon_hash_2(empty_roots[i - 1], empty_roots[i - 1]);
+        }
+        let auth_path = empty_roots;
+        let mut current = leaf;
+        for i in 0..VOTE_COMM_TREE_DEPTH {
+            current = poseidon_hash_2(current, auth_path[i]);
+        }
+        (auth_path, 0, current)
+    }
+
+    fn make_test_data_with_authority(
+        proposal_authority_old: pallas::Base,
+    ) -> (Circuit, Instance) {
         let mut rng = OsRng;
 
-        // Random witness values.
         let voting_hotkey_pk = pallas::Base::random(&mut rng);
         let total_note_value = pallas::Base::random(&mut rng);
         let voting_round_id = pallas::Base::random(&mut rng);
-        // Use a known small positive value so condition 5 can decrement.
-        let proposal_authority_old = pallas::Base::from(5u64);
         let gov_comm_rand = pallas::Base::random(&mut rng);
         let vsk_nk = pallas::Base::random(&mut rng);
 
-        // Compute expected VAN commitment out-of-circuit (condition 2).
         let vote_authority_note_old = van_integrity_hash(
             voting_hotkey_pk,
             total_note_value,
@@ -935,12 +1153,9 @@ mod tests {
             proposal_authority_old,
             gov_comm_rand,
         );
-
-        // Compute expected VAN nullifier out-of-circuit (condition 4).
+        let (auth_path, position, vote_comm_tree_root) =
+            build_single_leaf_merkle_path(vote_authority_note_old);
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
-
-        // Compute expected new VAN commitment out-of-circuit (condition 6).
-        // Same hash as condition 2 but with proposal_authority_old - 1.
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
             voting_hotkey_pk,
@@ -950,7 +1165,9 @@ mod tests {
             gov_comm_rand,
         );
 
-        let circuit = Circuit::with_van_integrity_witnesses(
+        let circuit = Circuit::with_van_witnesses(
+            Value::known(auth_path),
+            Value::known(position),
             Value::known(voting_hotkey_pk),
             Value::known(total_note_value),
             Value::known(proposal_authority_old),
@@ -959,20 +1176,21 @@ mod tests {
             Value::known(vsk_nk),
         );
 
-        // Conditions 2, 4, 5, 6 constrain van_nullifier,
-        // vote_authority_note_new, and voting_round_id.
-        // Other public inputs use placeholder values (zero).
         let instance = Instance::from_parts(
             van_nullifier,
-            vote_authority_note_new, // condition 6
-            pallas::Base::zero(),    // vote_commitment (condition 11)
-            pallas::Base::zero(),    // vote_comm_tree_root (condition 1)
-            pallas::Base::zero(),    // vote_comm_tree_anchor_height
-            pallas::Base::zero(),    // proposal_id (condition 11)
+            vote_authority_note_new,
+            pallas::Base::zero(),
+            vote_comm_tree_root,
+            pallas::Base::zero(),
+            pallas::Base::zero(),
             voting_round_id,
         );
 
         (circuit, instance)
+    }
+
+    fn make_test_data() -> (Circuit, Instance) {
+        make_test_data_with_authority(pallas::Base::from(5u64))
     }
 
     // ================================================================
@@ -981,7 +1199,7 @@ mod tests {
 
     #[test]
     fn van_integrity_valid_proof() {
-        let (circuit, instance) = make_van_integrity_test_data();
+        let (circuit, instance) = make_test_data();
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
 
@@ -990,118 +1208,40 @@ mod tests {
 
     #[test]
     fn van_integrity_wrong_hash_fails() {
-        let mut rng = OsRng;
+        let (_, mut instance) = make_test_data();
 
-        let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
-        let voting_round_id = pallas::Base::random(&mut rng);
-        let proposal_authority_old = pallas::Base::from(5u64);
-        let gov_comm_rand = pallas::Base::random(&mut rng);
-        let vsk_nk = pallas::Base::random(&mut rng);
+        // Deliberately wrong VAN value — condition 2 constrain_equal will fail.
+        let wrong_van = pallas::Base::random(&mut OsRng);
+        let (auth_path, position, root) = build_single_leaf_merkle_path(wrong_van);
+        instance.vote_comm_tree_root = root;
 
-        // Deliberately wrong VAN value — does not match the Poseidon hash.
-        let wrong_van = pallas::Base::random(&mut rng);
-
-        let circuit = Circuit::with_van_integrity_witnesses(
-            Value::known(voting_hotkey_pk),
-            Value::known(total_note_value),
-            Value::known(proposal_authority_old),
-            Value::known(gov_comm_rand),
+        let circuit = Circuit::with_van_witnesses(
+            Value::known(auth_path),
+            Value::known(position),
+            // Use random witnesses that DON'T hash to wrong_van.
+            Value::known(pallas::Base::random(&mut OsRng)),
+            Value::known(pallas::Base::random(&mut OsRng)),
+            Value::known(pallas::Base::from(5u64)),
+            Value::known(pallas::Base::random(&mut OsRng)),
             Value::known(wrong_van),
-            Value::known(vsk_nk),
-        );
-
-        // Compute correct values for the instance.
-        let correct_van = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old,
-            gov_comm_rand,
-        );
-        let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, correct_van);
-        let proposal_authority_new = proposal_authority_old - pallas::Base::one();
-        let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_new,
-            gov_comm_rand,
-        );
-
-        let instance = Instance::from_parts(
-            van_nullifier,
-            vote_authority_note_new,
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            voting_round_id,
+            Value::known(pallas::Base::random(&mut OsRng)),
         );
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
-
-        // Should fail: derived hash ≠ witnessed vote_authority_note_old
-        // (condition 2), and the circuit-derived nullifier ≠ instance
-        // nullifier (condition 4, since it hashes wrong_van).
+        // Should fail: derived hash ≠ witnessed vote_authority_note_old.
         assert!(prover.verify().is_err());
     }
 
     #[test]
     fn van_integrity_wrong_round_id_fails() {
-        let mut rng = OsRng;
-
-        let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
-        let voting_round_id = pallas::Base::random(&mut rng);
-        let proposal_authority_old = pallas::Base::from(5u64);
-        let gov_comm_rand = pallas::Base::random(&mut rng);
-        let vsk_nk = pallas::Base::random(&mut rng);
-
-        let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old,
-            gov_comm_rand,
-        );
-
-        let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
-        let proposal_authority_new = proposal_authority_old - pallas::Base::one();
-        let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_new,
-            gov_comm_rand,
-        );
-
-        let circuit = Circuit::with_van_integrity_witnesses(
-            Value::known(voting_hotkey_pk),
-            Value::known(total_note_value),
-            Value::known(proposal_authority_old),
-            Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old),
-            Value::known(vsk_nk),
-        );
+        let (circuit, mut instance) = make_test_data();
 
         // Supply a DIFFERENT voting_round_id in the instance.
-        let wrong_round_id = pallas::Base::random(&mut rng);
-        let instance = Instance::from_parts(
-            van_nullifier,
-            vote_authority_note_new,
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            wrong_round_id,
-        );
+        instance.voting_round_id = pallas::Base::random(&mut OsRng);
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
-
         // Should fail: the voting_round_id from the instance doesn't match
-        // the one hashed into the VAN (condition 2), and the nullifier's
-        // inner hash uses wrong_round_id (condition 4).
+        // the one hashed into the VAN (condition 2).
         assert!(prover.verify().is_err());
     }
 
@@ -1132,7 +1272,7 @@ mod tests {
     /// Wrong VAN_NULLIFIER public input should fail condition 4.
     #[test]
     fn van_nullifier_wrong_public_input_fails() {
-        let (circuit, mut instance) = make_van_integrity_test_data();
+        let (circuit, mut instance) = make_test_data();
 
         // Corrupt the VAN nullifier public input.
         instance.van_nullifier = pallas::Base::random(&mut OsRng);
@@ -1157,47 +1297,35 @@ mod tests {
         let vsk_nk = pallas::Base::random(&mut rng);
 
         let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old,
-            gov_comm_rand,
+            voting_hotkey_pk, total_note_value, voting_round_id,
+            proposal_authority_old, gov_comm_rand,
         );
-
+        let (auth_path, position, vote_comm_tree_root) =
+            build_single_leaf_merkle_path(vote_authority_note_old);
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_new,
-            gov_comm_rand,
+            voting_hotkey_pk, total_note_value, voting_round_id,
+            proposal_authority_new, gov_comm_rand,
         );
 
         // Use a DIFFERENT vsk_nk in the circuit.
         let wrong_vsk_nk = pallas::Base::random(&mut rng);
 
-        let circuit = Circuit::with_van_integrity_witnesses(
-            Value::known(voting_hotkey_pk),
-            Value::known(total_note_value),
-            Value::known(proposal_authority_old),
-            Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old),
-            Value::known(wrong_vsk_nk),
+        let circuit = Circuit::with_van_witnesses(
+            Value::known(auth_path), Value::known(position),
+            Value::known(voting_hotkey_pk), Value::known(total_note_value),
+            Value::known(proposal_authority_old), Value::known(gov_comm_rand),
+            Value::known(vote_authority_note_old), Value::known(wrong_vsk_nk),
         );
 
         let instance = Instance::from_parts(
-            van_nullifier,
-            vote_authority_note_new,
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
+            van_nullifier, vote_authority_note_new, pallas::Base::zero(),
+            vote_comm_tree_root, pallas::Base::zero(), pallas::Base::zero(),
             voting_round_id,
         );
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
-
         // Should fail: circuit computes Poseidon(wrong_vsk_nk, inner_hash)
         // which ≠ the instance van_nullifier (computed with correct vsk_nk).
         assert!(prover.verify().is_err());
@@ -1239,49 +1367,7 @@ mod tests {
     /// Proposal authority of 1 (minimum valid value) should decrement to 0.
     #[test]
     fn proposal_authority_decrement_minimum_valid() {
-        let mut rng = OsRng;
-
-        let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
-        let voting_round_id = pallas::Base::random(&mut rng);
-        let proposal_authority_old = pallas::Base::one(); // minimum: decrements to 0
-        let gov_comm_rand = pallas::Base::random(&mut rng);
-        let vsk_nk = pallas::Base::random(&mut rng);
-
-        let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old,
-            gov_comm_rand,
-        );
-        let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
-        let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            pallas::Base::zero(), // 1 - 1 = 0
-            gov_comm_rand,
-        );
-
-        let circuit = Circuit::with_van_integrity_witnesses(
-            Value::known(voting_hotkey_pk),
-            Value::known(total_note_value),
-            Value::known(proposal_authority_old),
-            Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old),
-            Value::known(vsk_nk),
-        );
-
-        let instance = Instance::from_parts(
-            van_nullifier,
-            vote_authority_note_new,
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            voting_round_id,
-        );
+        let (circuit, instance) = make_test_data_with_authority(pallas::Base::one());
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
@@ -1291,53 +1377,7 @@ mod tests {
     /// authority, so the range check on `diff = 0 - 1 ≈ p - 1` fails.
     #[test]
     fn proposal_authority_zero_fails() {
-        let mut rng = OsRng;
-
-        let voting_hotkey_pk = pallas::Base::random(&mut rng);
-        let total_note_value = pallas::Base::random(&mut rng);
-        let voting_round_id = pallas::Base::random(&mut rng);
-        let proposal_authority_old = pallas::Base::zero(); // 0 — no authority left
-        let gov_comm_rand = pallas::Base::random(&mut rng);
-        let vsk_nk = pallas::Base::random(&mut rng);
-
-        let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old,
-            gov_comm_rand,
-        );
-        let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
-
-        // The "new" VAN doesn't matter much — the circuit should fail at
-        // the range check before reaching condition 6. But we provide a
-        // plausible value to isolate the failure to condition 5.
-        let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old - pallas::Base::one(), // wraps to p - 1
-            gov_comm_rand,
-        );
-
-        let circuit = Circuit::with_van_integrity_witnesses(
-            Value::known(voting_hotkey_pk),
-            Value::known(total_note_value),
-            Value::known(proposal_authority_old),
-            Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old),
-            Value::known(vsk_nk),
-        );
-
-        let instance = Instance::from_parts(
-            van_nullifier,
-            vote_authority_note_new,
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            voting_round_id,
-        );
+        let (circuit, instance) = make_test_data_with_authority(pallas::Base::zero());
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
 
@@ -1353,7 +1393,7 @@ mod tests {
     /// Wrong vote_authority_note_new public input should fail condition 6.
     #[test]
     fn new_van_integrity_wrong_public_input_fails() {
-        let (circuit, mut instance) = make_van_integrity_test_data();
+        let (circuit, mut instance) = make_test_data();
 
         // Corrupt the new VAN public input.
         instance.vote_authority_note_new = pallas::Base::random(&mut OsRng);
@@ -1368,52 +1408,120 @@ mod tests {
     /// Ensures the range check accepts values well within the 70-bit range.
     #[test]
     fn new_van_integrity_large_authority() {
+        let (circuit, instance) =
+            make_test_data_with_authority(pallas::Base::from(1_000_000u64));
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert_eq!(prover.verify(), Ok(()));
+    }
+
+    // ================================================================
+    // Condition 1 (VAN Membership) tests
+    // ================================================================
+
+    /// Wrong vote_comm_tree_root in the instance should fail condition 1.
+    #[test]
+    fn van_membership_wrong_root_fails() {
+        let (circuit, mut instance) = make_test_data();
+
+        // Corrupt the tree root.
+        instance.vote_comm_tree_root = pallas::Base::random(&mut OsRng);
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    /// A VAN at a non-zero position in the tree should verify.
+    #[test]
+    fn van_membership_nonzero_position() {
         let mut rng = OsRng;
 
         let voting_hotkey_pk = pallas::Base::random(&mut rng);
         let total_note_value = pallas::Base::random(&mut rng);
         let voting_round_id = pallas::Base::random(&mut rng);
-        let proposal_authority_old = pallas::Base::from(1_000_000u64);
+        let proposal_authority_old = pallas::Base::from(5u64);
         let gov_comm_rand = pallas::Base::random(&mut rng);
         let vsk_nk = pallas::Base::random(&mut rng);
 
         let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_old,
-            gov_comm_rand,
+            voting_hotkey_pk, total_note_value, voting_round_id,
+            proposal_authority_old, gov_comm_rand,
         );
+
+        // Place the leaf at position 7 (binary: ...0111).
+        let position: u32 = 7;
+        let mut empty_roots = [pallas::Base::zero(); VOTE_COMM_TREE_DEPTH];
+        empty_roots[0] = poseidon_hash_2(pallas::Base::zero(), pallas::Base::zero());
+        for i in 1..VOTE_COMM_TREE_DEPTH {
+            empty_roots[i] = poseidon_hash_2(empty_roots[i - 1], empty_roots[i - 1]);
+        }
+        let auth_path = empty_roots;
+        let mut current = vote_authority_note_old;
+        for i in 0..VOTE_COMM_TREE_DEPTH {
+            if (position >> i) & 1 == 0 {
+                current = poseidon_hash_2(current, auth_path[i]);
+            } else {
+                current = poseidon_hash_2(auth_path[i], current);
+            }
+        }
+        let vote_comm_tree_root = current;
+
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
-            total_note_value,
-            voting_round_id,
-            proposal_authority_new,
-            gov_comm_rand,
+            voting_hotkey_pk, total_note_value, voting_round_id,
+            proposal_authority_new, gov_comm_rand,
         );
 
-        let circuit = Circuit::with_van_integrity_witnesses(
-            Value::known(voting_hotkey_pk),
-            Value::known(total_note_value),
-            Value::known(proposal_authority_old),
-            Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old),
-            Value::known(vsk_nk),
+        let circuit = Circuit::with_van_witnesses(
+            Value::known(auth_path), Value::known(position),
+            Value::known(voting_hotkey_pk), Value::known(total_note_value),
+            Value::known(proposal_authority_old), Value::known(gov_comm_rand),
+            Value::known(vote_authority_note_old), Value::known(vsk_nk),
         );
 
         let instance = Instance::from_parts(
-            van_nullifier,
-            vote_authority_note_new,
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
-            pallas::Base::zero(),
+            van_nullifier, vote_authority_note_new, pallas::Base::zero(),
+            vote_comm_tree_root, pallas::Base::zero(), pallas::Base::zero(),
             voting_round_id,
         );
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         assert_eq!(prover.verify(), Ok(()));
+    }
+
+    /// Poseidon hash-2 helper is deterministic.
+    #[test]
+    fn poseidon_hash_2_deterministic() {
+        let mut rng = OsRng;
+        let a = pallas::Base::random(&mut rng);
+        let b = pallas::Base::random(&mut rng);
+
+        assert_eq!(poseidon_hash_2(a, b), poseidon_hash_2(a, b));
+        // Non-commutative.
+        assert_ne!(poseidon_hash_2(a, b), poseidon_hash_2(b, a));
+    }
+
+    // ================================================================
+    // Instance and circuit sanity
+    // ================================================================
+
+    /// Instance must serialize to exactly 7 public inputs.
+    #[test]
+    fn instance_has_seven_public_inputs() {
+        let (_, instance) = make_test_data();
+        assert_eq!(instance.to_halo2_instance().len(), 7);
+    }
+
+    /// Default circuit (all witnesses unknown) must not produce a valid proof.
+    #[test]
+    fn default_circuit_with_valid_instance_fails() {
+        let (_, instance) = make_test_data();
+        let circuit = Circuit::default();
+
+        match MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]) {
+            Ok(prover) => assert!(prover.verify().is_err()),
+            Err(_) => {} // Synthesis failed — acceptable.
+        }
     }
 }
