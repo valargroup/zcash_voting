@@ -1,0 +1,74 @@
+name: ZK Circuit Security Audit
+
+on:
+  schedule:
+    # Every 3 hours
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      slack_summary:
+        description: 'Post summary to Slack'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  # Circuit source paths (relative to repo root)
+  VOTE_PROOF_DIR: orchard/src/vote_proof
+  DELEGATION_DIR: orchard/src/delegation
+  GADGET_DIR: orchard/src/circuit/gadget
+
+jobs:
+  audit:
+    name: AI Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Collect spec + code context
+        id: context
+        run: |
+          echo "::group::Collecting audit context"
+          bash scripts/ai-audit.sh collect
+          echo "::endgroup::"
+
+      - name: Run AI audit
+        id: audit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          bash scripts/ai-audit.sh audit
+
+      - name: Post to Slack
+        if: >-
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' && inputs.slack_summary == 'true'))
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          bash scripts/ai-audit.sh notify
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-report-${{ github.run_number }}
+          path: /tmp/audit-report.md
+          retention-days: 30
+
+      - name: Print summary to job log
+        if: always()
+        run: |
+          echo "## ZK Circuit Audit Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f /tmp/audit-report.md ]; then
+            cat /tmp/audit-report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "_Audit did not produce a report._" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -21,6 +21,10 @@ orchard/book/src/zkps/zkp1-delegation-proof.md
 orchard/book/src/zkps/zkp2-vote-proof.md
 orchard/book/src/zkps/zkp3-vote-reveal-proof.md
 
+# Environment files (secrets)
+.env
+**/.env
+
 **/vendor/**
 
 # Swift build artifacts
