@@ -10,5 +10,6 @@
     "vote-commitment-tree/Cargo.toml"
   ],
   "rust-analyzer.cargo.allTargets": true,
+  "rust-analyzer.cargo.allFeatures": true,
   "rust-analyzer.cargo.check.extraArgs": ["--tests"]
 }
