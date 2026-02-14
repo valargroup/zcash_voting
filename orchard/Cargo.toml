@@ -89,6 +89,7 @@ multicore = ["halo2_proofs?/multicore"]
 dev-graph = ["halo2_proofs?/dev-graph", "image", "plotters"]
 test-dependencies = ["proptest"]
 delegation = ["circuit", "std"]
+vote-proof = ["circuit", "std"]
 
 [[bench]]
 name = "note_decryption"

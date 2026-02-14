@@ -47,6 +47,10 @@ mod test_vectors;
 
 #[cfg(feature = "delegation")]
 pub use crate::circuit::delegation;
+
+#[cfg(feature = "vote-proof")]
+pub use crate::circuit::vote_proof;
+
 pub use action::Action;
 pub use address::Address;
 pub use bundle::Bundle;

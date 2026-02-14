@@ -62,6 +62,10 @@ mod commit_ivk;
 #[cfg(feature = "delegation")]
 #[path = "delegation/mod.rs"]
 pub mod delegation;
+
+#[cfg(feature = "vote-proof")]
+#[path = "vote_proof/mod.rs"]
+pub mod vote_proof;
 pub mod gadget;
 mod note_commit;
 
