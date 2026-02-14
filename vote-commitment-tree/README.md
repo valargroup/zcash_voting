@@ -1,6 +1,24 @@
 # vote-commitment-tree
 
 Append-only Poseidon Merkle tree for the **Vote Commitment Tree** in the Zally voting protocol (Gov Steps V1).
+
+## Table of contents
+
+- [Role in the protocol](#role-in-the-protocol)
+- [What is an anchor?](#what-is-an-anchor)
+- [How the note commitment tree works in ZCash](#how-the-note-commitment-tree-works-in-zcash)
+- [How we modify this for the vote commitment tree](#how-we-modify-this-for-the-vote-commitment-tree)
+- [How the tree participates in each message](#how-the-tree-participates-in-each-message)
+- [Architecture overview](#architecture-overview)
+- [Sync architecture](#sync-architecture)
+- [CLI reference (`vote-tree-cli`)](#cli-reference-vote-tree-cli)
+- [API reference](#api-reference)
+- [Integration with the Go chain](#integration-with-the-go-chain)
+- [Testing](#testing)
+- [Where things live](#where-things-live)
+
+---
+
 ## Role in the protocol
 
 - **Note commitment tree (ZCash mainnet)**: We only use its root `nc_root` at snapshot height as an anchor for ZKP #1. We do not build it in this repo.
@@ -107,22 +125,28 @@ Our vote commitment tree is structurally the same (append-only, fixed-depth Merk
 | Depth | 32 | 32 |
 | Leaf contents | Note commitments only | **Both VANs and VCs** (domain-separated) |
 | Where it lives | ZCash mainnet | **Vote chain** (Cosmos SDK) |
-| Block format | CompactBlock via lightwalletd | Vote chain blocks via Tendermint RPC / custom API |
+| Block format | CompactBlock via lightwalletd | Vote chain blocks via REST API (`/zally/v1/commitment-tree/leaves`) |
 | Who inserts | ZCash consensus (every shielded output) | Vote chain consensus (MsgDelegateVote, MsgCastVote) |
 | Who needs witnesses | Spender (for spend proofs) | **Voter** (ZKP #2) and **helper server** (ZKP #3) |
 
 ### Wallet sync for the vote chain tree
 
-The wallet needs to maintain a local copy of the vote commitment tree so it can produce Merkle paths for ZKP #2. The helper server needs the same for ZKP #3. Both use `TreeClient` (see [Client-Server Architecture](#client-server-architecture) below) which syncs incrementally via the `TreeSyncApi` trait.
+The wallet needs to maintain a local copy of the vote commitment tree so it can produce Merkle paths for ZKP #2. The helper server needs the same for ZKP #3. Both use `TreeClient` which syncs incrementally via the `TreeSyncApi` trait.
 
-**Step 1 — Connect to the vote chain.** The wallet (or helper server) creates a `TreeClient` and syncs from the chain via a `TreeSyncApi` implementation. In the POC this is in-process; in production it maps to Cosmos SDK endpoints:
+**Step 1 — Connect to the vote chain.** The wallet (or helper server) creates a `TreeClient` and syncs from the chain via a `TreeSyncApi` implementation. In the POC this is in-process; in production the `HttpTreeSyncApi` (from `vote-commitment-tree-client`) connects to the chain's REST API:
 
 ```rust
+// In-process (tests / POC)
 let mut client = TreeClient::empty();
-client.sync(&server)?; // fetches block commitments, inserts leaves, checkpoints
+client.sync(&server)?;
+
+// Over HTTP (production / CLI)
+let api = HttpTreeSyncApi::new("http://localhost:1317");
+let mut client = TreeClient::empty();
+client.sync(&api)?;
 ```
 
-Under the hood, `sync` calls `get_block_commitments(from_height, to_height)` to fetch leaves per block. For each block it inserts every leaf and calls `checkpoint(height)`. The root at each checkpoint must match the chain's stored root (consistency check).
+Under the hood, `sync` calls `get_block_commitments(from_height, to_height)` to fetch leaves per block. For each block it inserts every leaf and calls `checkpoint(height)`. The root at each checkpoint is verified against the chain's stored root (consistency check).
 
 **Step 2 — Mark your positions and generate witnesses.** The wallet knows its own VAN index from when it submitted MsgDelegateVote. It marks that position and generates a witness:
 
@@ -138,24 +162,12 @@ Similarly, when the wallet submits a MsgCastVote, it stores the VC leaf index an
 **Step 3 — Helper server sync.** The helper server runs the same sync loop with its own `TreeClient`. When it receives a share payload with a VC position, it marks that position and generates a witness for ZKP #3:
 
 ```rust
+let api = HttpTreeSyncApi::new("http://chain-node:1317");
 let mut helper_client = TreeClient::empty();
-helper_client.sync(&chain_api)?;
 helper_client.mark_position(vc_index);
+helper_client.sync(&api)?;
 let witness = helper_client.witness(vc_index, anchor_height).unwrap();
 ```
-
-### Sync API options
-
-The wallet needs an endpoint that delivers vote chain commitments. Several options:
-
-| Option | How it works | Pros | Cons |
-|---|---|---|---|
-| **Tendermint RPC** | Query `/block` per height, decode transactions, extract leaves | No new server code | Wallet must parse full Cosmos transactions |
-| **Custom compact blocks** | Vote chain serves a compact block format (just leaves per block height) | Clean, minimal bandwidth | Requires new server endpoint |
-| **Subtree root acceleration** | Serve pre-computed subtree roots (like lightwalletd) for fast-sync | Fast catch-up for late joiners | More server complexity |
-| **Direct tree state query** | `GET /commitment-tree/latest` returns serialized tree or frontier | Wallet can bootstrap from a trusted snapshot | Trust assumption on the server |
-
-The existing vote chain already has `GET /zally/v1/commitment-tree/latest` and `GET /zally/v1/commitment-tree/{height}` query endpoints (`sdk/api/query_handler.go`). These return `CommitmentTreeState` (next_index, root, height). To support wallet sync, we additionally need an endpoint that returns the **leaf values** so the wallet can build the tree locally — or a compact block format that delivers them per block.
 
 ### What we reuse from ZCash
 
@@ -276,13 +288,70 @@ EndBlocker  ──  tree relationship
 
 ---
 
-## Sequence diagrams
+## Architecture overview
 
-### Full lifecycle: Delegate → Vote → Reveal
+### Full-stack component diagram
+
+```mermaid
+graph TB
+    subgraph "vote-commitment-tree (core crate)"
+        HASH["MerkleHashVote<br/>Anchor, MerklePath<br/><i>Poseidon hash, depth 32</i>"]
+        SERVER["TreeServer<br/><i>Full tree: append, checkpoint,<br/>root, path, serves TreeSyncApi</i>"]
+        CLIENT["TreeClient<br/><i>Sparse tree: sync, mark,<br/>witness generation</i>"]
+        SYNC["TreeSyncApi (trait)<br/><i>get_block_commitments()<br/>get_root_at_height()<br/>get_tree_state()</i>"]
+
+        SERVER -->|implements| SYNC
+        SERVER --- HASH
+        CLIENT --- HASH
+        CLIENT -->|consumes| SYNC
+    end
+
+    subgraph "vote-commitment-tree-client (network crate)"
+        HTTP["HttpTreeSyncApi<br/><i>HTTP impl of TreeSyncApi<br/>reqwest + JSON/base64</i>"]
+        CLI["vote-tree-cli<br/><i>sync, witness, verify, status</i>"]
+        TYPES["types.rs<br/><i>JSON deserialization<br/>Chain → domain types</i>"]
+
+        HTTP -->|implements| SYNC
+        CLI --> HTTP
+        CLI --> CLIENT
+        HTTP --> TYPES
+    end
+
+    subgraph "sdk (Cosmos SDK chain — Go)"
+        KEEPER["x/vote/keeper<br/><i>AppendCommitment<br/>EndBlocker root snapshot</i>"]
+        FFI["crypto/votetree FFI<br/><i>Go → C → Rust</i>"]
+        REST["REST API<br/><i>/zally/v1/commitment-tree/*</i>"]
+        KV["KV Store<br/><i>Leaves: 0x02||idx<br/>Roots: 0x03||height</i>"]
+
+        KEEPER --> KV
+        KEEPER --> FFI
+        REST --> KEEPER
+    end
+
+    subgraph "sdk/circuits (Rust FFI library)"
+        VOTETREE["votetree.rs<br/><i>compute_root_from_raw()<br/>compute_path_from_raw()</i>"]
+        VOTETREE --> SERVER
+    end
+
+    FFI -->|"cgo linkage"| VOTETREE
+    HTTP -->|"HTTP GET/POST"| REST
+
+    subgraph "Consumers"
+        WALLET["Wallet / Zashi<br/><i>ZKP #2 witnesses</i>"]
+        HELPER["Helper Server<br/><i>ZKP #3 witnesses</i>"]
+        TESTS["SDK API Tests<br/><i>TypeScript + vote-tree-cli</i>"]
+    end
+
+    WALLET --> CLIENT
+    HELPER --> CLIENT
+    TESTS --> CLI
+```
+
+### Protocol flow: Delegate → Vote → Reveal
 
 ```mermaid
 sequenceDiagram
-    participant W as Wallet (Client)
+    participant W as Wallet
     participant C as Vote Chain
     participant T as Vote Commitment Tree
     participant S as Helper Server
@@ -303,7 +372,8 @@ sequenceDiagram
     C->>C: Store root R1 at block height H1
 
     Note over W,T: Phase 3 — MsgCastVote (ZKP #2)
-    W->>W: Sync vote chain, get Merkle path for VAN at index N
+    W->>W: Sync vote chain tree via TreeClient
+    W->>W: Generate Merkle witness for VAN at index N
     W->>W: Build new VAN (proposal authority decremented)
     W->>W: Build VC = Poseidon(DOMAIN_VC, shares_hash, proposal_id, decision)
     W->>W: Generate ZKP #2 (proves VAN in tree at root R1)
@@ -326,10 +396,11 @@ sequenceDiagram
     W->>S: delegated_voting_share_payload { VC position=M+1, enc_share, share_index }
 
     Note over S,T: Phase 5 — MsgRevealShare (ZKP #3)
-    S->>S: Sync vote chain, get Merkle path for VC at index M+1
+    S->>S: Sync vote chain tree via TreeClient + HttpTreeSyncApi
+    S->>S: Generate Merkle witness for VC at index M+1
     S->>S: Derive share_nullifier
     S->>S: Generate ZKP #3 (proves VC in tree at root R2)
-    S->>C: MsgRevealShare { share_nullifier, enc_share, proposal_id, decision, anchor_height=H2, proof }
+    S->>C: MsgRevealShare { share_nullifier, enc_share, anchor_height=H2, proof }
     C->>C: Look up root at H2, verify it matches R2
     C->>C: Verify ZKP #3 against root R2
     C->>C: Record share_nullifier (prevent double-count)
@@ -368,68 +439,163 @@ sequenceDiagram
 
 ---
 
-## Client-Server Architecture
+## Sync architecture
 
-The crate is split into three layers with a clear communication boundary:
+The sync system has three clearly separated layers so that server and client evolve independently and the wire format is the only contract.
 
+### Layer diagram
+
+```mermaid
+graph TB
+    subgraph "Layer 1: Server (tree authority)"
+        S1["TreeServer<br/><i>owns full ShardTree</i>"]
+        S2["append() / checkpoint()<br/>root_at_height() / path()"]
+        S1 --- S2
+    end
+
+    subgraph "Layer 2: Sync Protocol (wire contract)"
+        P1["TreeSyncApi trait"]
+        P2["get_tree_state() → TreeState"]
+        P3["get_block_commitments(from, to) → Vec&lt;BlockCommitments&gt;"]
+        P4["get_root_at_height(h) → Option&lt;Fp&gt;"]
+        P1 --- P2
+        P1 --- P3
+        P1 --- P4
+    end
+
+    subgraph "Layer 3: Client (sparse tree)"
+        C1["TreeClient<br/><i>owns sparse ShardTree</i>"]
+        C2["sync() / mark_position()<br/>witness() / root_at_height()"]
+        C1 --- C2
+    end
+
+    S1 -->|"implements (in-process)"| P1
+    HTTP["HttpTreeSyncApi<br/><i>implements over HTTP</i>"] -->|"implements (network)"| P1
+    C1 -->|"consumes"| P1
+
+    REST["Chain REST API<br/>/zally/v1/commitment-tree/*"] -.->|"called by"| HTTP
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Shared Types (hash, anchor, path)           │
-│  MerkleHashVote · Anchor · MerklePath · EMPTY_ROOTS · TREE_DEPTH│
-└─────────────────────────────────────────────────────────────────┘
-         ▲                                          ▲
-         │                                          │
-┌────────┴──────────┐   TreeSyncApi trait   ┌───────┴──────────┐
-│   TreeServer      │ ──────────────────▶   │   TreeClient     │
-│                   │                       │                  │
-│ append(leaf)      │  get_block_commits()  │ sync(api)        │
-│ append_two(a,b)   │  get_root_at_height() │ mark_position(p) │
-│ checkpoint(h)     │  get_tree_state()     │ witness(p, h)    │
-│ root_at_height(h) │                       │ root_at_height(h)│
-│ path(pos, h)      │                       │                  │
-└───────────────────┘                       └──────────────────┘
+
+### Sync sequence (client syncing from chain)
+
+```mermaid
+sequenceDiagram
+    participant CLI as vote-tree-cli
+    participant TC as TreeClient
+    participant API as HttpTreeSyncApi
+    participant CHAIN as Chain REST API
+
+    CLI->>TC: TreeClient::empty()
+    CLI->>TC: mark_position(van_index)
+    CLI->>TC: sync(&api)
+
+    TC->>API: get_tree_state()
+    API->>CHAIN: GET /zally/v1/commitment-tree/latest
+    CHAIN-->>API: { next_index, root, height }
+    API-->>TC: TreeState { height: H }
+
+    TC->>TC: Compute from_height (last_synced + 1)
+
+    TC->>API: get_block_commitments(1, H)
+    API->>CHAIN: GET /zally/v1/commitment-tree/leaves?from_height=1&to_height=H
+    CHAIN-->>API: { blocks: [{ height, start_index, leaves[] }...] }
+    API-->>TC: Vec<BlockCommitments>
+
+    loop For each block
+        TC->>TC: Verify start_index == next_position
+        TC->>TC: Insert leaves (Marked if position matches, else Ephemeral)
+        TC->>TC: checkpoint(block.height)
+
+        TC->>API: get_root_at_height(block.height)
+        API->>CHAIN: GET /zally/v1/commitment-tree/{height}
+        CHAIN-->>API: { root }
+        API-->>TC: Option<Fp>
+
+        TC->>TC: Assert local root == chain root
+    end
+
+    TC-->>CLI: Ok(()) — sync complete
+
+    CLI->>TC: witness(van_index, anchor_height)
+    TC-->>CLI: MerklePath (32 siblings + position)
 ```
 
-Built on `incrementalmerkletree` / `shardtree` — the same crates that back Orchard's note commitment tree — with two substitutions:
-- **Hash:** `Poseidon(left, right)` (no layer tagging) instead of Sinsemilla with 10-bit level prefix
-- **Empty leaf:** `poseidon_hash(0, 0)` instead of `Fp::from(2)`
+### Wire format
 
-The core type is `MerkleHashVote`, which implements `incrementalmerkletree::Hashable` with Poseidon. This plugs into `ShardTree` for checkpoint/rollback, sparse witnesses, and the same battle-tested tree logic that Zcash wallets use. Hash function is Poseidon (same as `imt-tree`) for circuit consistency with ZKP #2 and ZKP #3.
+The sync protocol uses three message types. In the POC the server implements `TreeSyncApi` directly (in-process, `Error = Infallible`). In production, `HttpTreeSyncApi` maps them to the chain's REST API:
 
-### Module layout
+| TreeSyncApi method | REST endpoint | Request | Response |
+|---|---|---|---|
+| `get_tree_state()` | `GET /zally/v1/commitment-tree/latest` | — | `{ next_index, root (base64), height }` |
+| `get_root_at_height(h)` | `GET /zally/v1/commitment-tree/{h}` | height in path | `{ root (base64), height }` |
+| `get_block_commitments(from, to)` | `GET /zally/v1/commitment-tree/leaves?from_height=X&to_height=Y` | query params | `{ blocks: [{ height, start_index, leaves[] }] }` |
 
-```
-vote-commitment-tree/src/
-  lib.rs          re-exports shared types + server + client + sync_api
-  hash.rs         MerkleHashVote, Hashable impl, EMPTY_ROOTS, constants
-  anchor.rs       Anchor type (committed tree root)
-  path.rs         MerklePath type (authentication path)
-  sync_api.rs     TreeSyncApi trait, BlockCommitments, LeafBatch, TreeState
-  server.rs       TreeServer: full tree, append, checkpoint, implements TreeSyncApi
-  client.rs       TreeClient: sparse ShardTree, sync, mark, witness
-tests/
-  client_server_integration.rs   end-to-end server→client→witness tests
-```
+Field elements are 32-byte Pallas Fp values, serialized as little-endian bytes and base64-encoded over the wire.
 
 ### Design decisions
 
 - **Server uses ShardTree internally** (not a simpler structure). This keeps the POC code path identical to production. In production, the Go keeper stores leaves in KV and the Rust FFI builds the ShardTree from them; the POC just skips the Go layer.
 - **Client also uses ShardTree.** Same crate, same types, but populated via sync rather than direct appends. This mirrors how Zcash wallets work (see `zcash_client_memory/src/wallet_commitment_trees.rs`).
-- **`TreeSyncApi` is a trait, not concrete types.** Makes it trivial to swap the in-process POC implementation for a network client (gRPC/REST) in production.
+- **`TreeSyncApi` is a trait, not concrete types.** Makes it trivial to swap the in-process POC implementation for a network client (gRPC/REST) in production — and both implementations already exist.
 - **All leaves are public.** Unlike Zcash, no trial decryption. The client inserts every leaf it receives. Position discovery is trivial (wallet knows its own VAN index from when it submitted MsgDelegateVote).
+- **Root verification during sync.** The client verifies its local root against the chain's root after each checkpoint. A `RootMismatch` error indicates either a bug in the tree implementation, corrupted data on the wire, or a chain fork.
 
-### How this maps to production targets
+### Fast sync optimization (future)
 
-| POC component | Production equivalent |
-|---|---|
-| `TreeServer` | Go keeper (`sdk/x/vote/keeper/keeper.go`) — already has `AppendCommitment`, `ComputeTreeRoot`, `GetCommitmentRootAtHeight` |
-| `TreeSyncApi` trait | Cosmos SDK REST endpoints (`sdk/api/query_handler.go`) + new compact-block endpoint for leaf batches |
-| `TreeClient` | Vote-chain equivalent of Zcash `WalletCommitmentTrees` — wallet and helper server each run one |
-| `get_block_commitments()` | Custom compact-block endpoint or Tendermint block queries |
-| `get_root_at_height()` | `GET /zally/v1/commitment-tree/{height}` (already exists) |
-| `get_tree_state()` | `GET /zally/v1/commitment-tree/latest` (already exists) |
+For clients joining late (or the helper server bootstrapping), replaying every leaf from genesis is slow. The planned optimization uses **pre-computed subtree roots** — the same approach Zcash's lightwalletd uses for wallet fast-sync (`put_orchard_subtree_roots`).
 
-## API
+Each shard covers `2^4 = 16` leaves. Once full, its root is deterministic and never changes. The server caches these and serves them via a future `get_subtree_roots()` method on `TreeSyncApi`. The client inserts subtree roots at shard-level addresses, skipping individual leaf insertion for completed shards. This gives a **16x bandwidth reduction** (subtree roots vs full leaves).
+
+---
+
+## CLI reference (`vote-tree-cli`)
+
+The `vote-commitment-tree-client` crate provides a CLI binary for interacting with the vote commitment tree on a live chain.
+
+### Commands
+
+```bash
+# Sync the full tree from a chain node, verify roots
+vote-tree-cli sync --node http://localhost:1317
+
+# Sync with marked positions (for future witness generation)
+vote-tree-cli sync --node http://localhost:1317 --mark 0,3
+
+# Generate a Merkle witness for a leaf position
+vote-tree-cli witness --node http://localhost:1317 --position 0
+
+# Generate witness at a specific anchor height
+vote-tree-cli witness --node http://localhost:1317 --position 0 --anchor-height 5
+
+# Verify a witness offline (no network)
+vote-tree-cli verify --leaf <hex> --witness <hex> --root <hex>
+
+# Check chain tree state (no local sync)
+vote-tree-cli status --node http://localhost:1317
+```
+
+### Output format
+
+The `sync` command prints:
+```
+Remote tree state:
+  height:     2
+  next_index: 4
+  root:       <64 hex chars>
+
+Syncing from genesis to height 2...
+Sync complete.
+  leaves synced:     4
+  last synced height: 2
+  local root:        <64 hex chars>
+  root match:        OK
+```
+
+The `witness` command outputs the Merkle path as hex (1028 bytes = position + 32 sibling hashes) and the anchor root. This output is consumed by the SDK's TypeScript API tests via `runTreeCli()`.
+
+---
+
+## API reference
 
 ### Shared types
 
@@ -455,13 +621,13 @@ Wraps `ShardTree<MemoryShardStore<MerkleHashVote, u32>, 32, 4>`. Owns the author
 
 ### `TreeSyncApi` (communication boundary)
 
-Trait defining the contract between server and client. In the POC the server implements it directly (in-process, `Error = Infallible`). In production, a network client would implement it over gRPC/REST.
+Trait defining the contract between server and client. The server implements it directly for in-process use (POC/tests). `HttpTreeSyncApi` implements it over HTTP for production.
 
-| Method | Maps to (production) |
-|---|---|
-| `get_block_commitments(from_h, to_h) -> Vec<BlockCommitments>` | Custom compact-block endpoint |
-| `get_root_at_height(h) -> Option<Fp>` | `GET /zally/v1/commitment-tree/{height}` |
-| `get_tree_state() -> TreeState` | `GET /zally/v1/commitment-tree/latest` |
+| Method | In-process | HTTP (production) |
+|---|---|---|
+| `get_block_commitments(from_h, to_h)` | Direct access to server data | `GET /zally/v1/commitment-tree/leaves?from_height=X&to_height=Y` |
+| `get_root_at_height(h)` | Direct root lookup | `GET /zally/v1/commitment-tree/{height}` |
+| `get_tree_state()` | Direct state access | `GET /zally/v1/commitment-tree/latest` |
 
 Supporting types:
 
@@ -486,6 +652,18 @@ Wraps its own `ShardTree<MemoryShardStore<MerkleHashVote, u32>, 32, 4>`, populat
 | `size() -> u64` | Number of leaves synced |
 | `last_synced_height() -> Option<u32>` | Latest synced block height |
 
+### `HttpTreeSyncApi` (network client)
+
+HTTP implementation of `TreeSyncApi` in the `vote-commitment-tree-client` crate. Uses `reqwest::blocking::Client` for synchronous HTTP calls. JSON responses use base64-encoded field elements matching the Go chain's `encoding/json.Marshal` output.
+
+```rust
+use vote_commitment_tree_client::http_sync_api::HttpTreeSyncApi;
+
+let api = HttpTreeSyncApi::new("http://localhost:1317");
+// or with custom client:
+let api = HttpTreeSyncApi::with_client(custom_client, "http://chain:1317");
+```
+
 ### Usage example
 
 ```rust
@@ -505,10 +683,10 @@ server.checkpoint(2); // EndBlocker
 
 // Client side (wallet / helper server)
 let mut client = TreeClient::empty();
+client.mark_position(van_idx);
 client.sync(&server).unwrap(); // fetches blocks 1-2
 
 // Generate witness for VAN at position 0, anchor height 1
-client.mark_position(van_idx);
 let witness = client.witness(van_idx, 1).unwrap();
 let root = server.root_at_height(1).unwrap();
 assert!(witness.verify(Fp::from(100), root));
@@ -518,47 +696,164 @@ assert_eq!(client.root_at_height(1), server.root_at_height(1));
 assert_eq!(client.root_at_height(2), server.root_at_height(2));
 ```
 
-### Fast sync optimization (future)
-
-For clients joining late (or the helper server bootstrapping), replaying every leaf from genesis is slow. The planned optimization uses **pre-computed subtree roots** — the same approach Zcash's lightwalletd uses for wallet fast-sync (`put_orchard_subtree_roots`).
-
-Each shard covers `2^4 = 16` leaves. Once full, its root is deterministic and never changes. The server caches these and serves them via a future `get_subtree_roots()` method on `TreeSyncApi`. The client inserts subtree roots at shard-level addresses, skipping individual leaf insertion for completed shards. This gives a **16x bandwidth reduction** (subtree roots vs full leaves).
-
-See `plans/12_vote_tree_client-server_poc_c24eb944.plan.md` for the full fast-sync design.
-
 ---
 
 ## Integration with the Go chain
 
-The vote chain lives in **`sdk/`** (Cosmos SDK app in Go). It already:
+The vote chain lives in **`sdk/`** (Cosmos SDK app in Go). The integration is fully operational using FFI (Option A from the original design).
+
+### What the chain does
 
 - **Stores leaves** in KV at `0x02 || big-endian index → 32-byte commitment` (one Fp per leaf).
-- **Appends** via `keeper.AppendCommitment(kvStore, commitment)` on `MsgDelegateVote` (2 leaves: `cmx_new`, `gov_comm`) and `MsgCastVote` (2 leaves: `vote_authority_note_new`, `vote_commitment`).
-- **Computes root in EndBlocker** via `keeper.ComputeTreeRoot(kvStore, nextIndex)` and stores it at the current block height for use as the anchor in ZKP #2 / ZKP #3.
+- **Appends** via `keeper.AppendCommitment(kvStore, commitment)` on `MsgDelegateVote` (1 leaf: `gov_comm`) and `MsgCastVote` (2 leaves: `vote_authority_note_new`, `vote_commitment`).
+- **Computes root in EndBlocker** via Poseidon FFI (`tree_root_poseidon.go` → `votetree.ComputePoseidonRoot`) and stores it at the current block height.
+- **Serves REST endpoints** for tree state, roots at height, and leaf batches.
 
-Today `ComputeTreeRoot` is a **placeholder** (Blake2b over all leaves). Production must use the same Poseidon Merkle tree as this crate so that roots and Merkle paths match what the circuits expect.
+### FFI architecture
 
-### Option A — FFI from Go to this crate
+The chain uses the same Poseidon tree as this crate via FFI, ensuring root and path parity:
 
-- **Build** `vote-commitment-tree` as a C-compatible library (e.g. `cdylib` or static lib) and link it from Go via cgo (same pattern as `sdk/crypto/zkp/halo2` and `sdk/crypto/redpallas`, which link `libzally_circuits`).
-- **EndBlocker**: Read leaves `0..nextIndex-1` from KV (each 32 bytes, Fp encoding). Pass them to Rust; Rust builds the tree from that list (or from a serialized tree state), returns the 32-byte root. Go writes the root at the current height.
-- **Queries** (if the chain serves Merkle paths): Same: pass leaves (or cached tree) to Rust, call something like `path(index)` and return the path to the client.
-- **Data**: Leaves and root are 32-byte Pasta Fp; encoding must match (e.g. canonical little-endian repr used in the circuits).
+```mermaid
+graph LR
+    GO["Go Keeper<br/><i>tree_root_poseidon.go</i>"] -->|cgo| CGO["C ABI"]
+    CGO --> RUST["sdk/circuits/src/votetree.rs"]
+    RUST --> VCT["vote-commitment-tree<br/><i>TreeServer</i>"]
 
-Rust can expose a minimal C API, e.g.:
+    GO2["Go Query Handler<br/><i>api/query_handler.go</i>"] -->|REST| CLIENT["HttpTreeSyncApi<br/><i>vote-commitment-tree-client</i>"]
+```
 
-- `vote_tree_root_from_leaves(leaves_ptr *uint8, count uint64, root_out *uint8)` — build tree from `count` leaves, write root into `root_out`.
-- Optionally `vote_tree_path(leaves_ptr, count, index uint64, path_out *uint8)` for path generation.
+The Rust FFI exposes two functions:
 
-The Go keeper continues to own persistence (KV); Rust is used only for the Merkle computation so there is a single implementation of Poseidon and tree structure.
+| FFI function | Purpose |
+|---|---|
+| `compute_root_from_raw(ptr, count) -> [u8; 32]` | Build tree from raw leaf bytes, return root |
+| `compute_path_from_raw(ptr, count, position) -> [u8; 1028]` | Build tree, return MerklePath at position |
 
-### Option B — Pure Go reimplementation
+Golden test vectors (3 leaves `[1, 2, 3]`) ensure Go and Rust produce identical roots. These are checked in `sdk/crypto/votetree/tree_ffi_test.go`.
 
-- Implement the same algorithm in Go: Poseidon P128Pow5T3 over Pasta Fp, same empty-leaf and empty-subtree hashes, same depth (32), same append order.
-- Replace `ComputeTreeRoot` with this implementation (iterating leaves from KV and building the root).
-- No FFI; the chain stays Go-only. Downside: two code paths (Rust for circuits, Go for chain) must stay in sync for roots and paths.
+### REST API endpoints
 
-### Recommended
+| Endpoint | Handler | Purpose |
+|---|---|---|
+| `GET /zally/v1/commitment-tree/latest` | `handleLatestCommitmentTree` | Current tree state (next_index, root, height) |
+| `GET /zally/v1/commitment-tree/{height}` | `handleCommitmentTreeAtHeight` | Root at specific checkpoint height |
+| `GET /zally/v1/commitment-tree/leaves?from_height=X&to_height=Y` | `handleCommitmentLeaves` | Block-level leaf batches for sync |
 
-- **Option A** keeps one source of truth (this crate) and matches the existing FFI pattern used for ZKP and RedPallas. The chain already depends on a Rust build for “real” verification; adding the tree library is consistent with that.
-- **Option B** is viable if you want to avoid cgo or ship a chain binary that does not link Rust at all (e.g. “light” build with stub root computation).
+---
+
+## Testing
+
+### Test layers
+
+The testing strategy validates the tree at multiple levels, from unit tests through full E2E against a running chain.
+
+```mermaid
+graph TB
+    subgraph "Layer 1: Core tree (Rust unit tests)"
+        UT["vote-commitment-tree<br/>cargo test --lib<br/><i>Empty root, append, path,<br/>checkpoint, TreeSyncApi impl</i>"]
+    end
+
+    subgraph "Layer 2: Client-server sync (Rust integration)"
+        IT["tests/client_server_integration.rs<br/>cargo test --test client_server_integration<br/><i>Server→sync→client→witness roundtrip,<br/>shard boundary, multi-client, stress</i>"]
+    end
+
+    subgraph "Layer 3: HTTP client (Rust + mock server)"
+        HT["vote-commitment-tree-client<br/>cargo test<br/><i>JSON parsing, mock HTTP,<br/>full sync pipeline, incremental sync</i>"]
+    end
+
+    subgraph "Layer 4: FFI parity (Go + Rust)"
+        FT["sdk/crypto/votetree<br/>go test<br/><i>Golden vectors: Go roots == Rust roots</i>"]
+    end
+
+    subgraph "Layer 5: E2E voting flow (TypeScript + live chain)"
+        E2E["sdk/tests/api<br/>npm test (vitest)<br/><i>Delegate → query tree → CLI sync →<br/>witness → cast vote → reveal share</i>"]
+    end
+
+    UT --> IT --> HT --> FT --> E2E
+```
+
+### Key test scenarios
+
+| Test | Layer | What it proves |
+|---|---|---|
+| `server_append_client_sync_witness_roundtrip` | Integration | Full MsgDelegateVote → sync → MsgCastVote → sync, witnesses verify |
+| `two_clients_wallet_and_helper_server` | Integration | Wallet (marks VAN) and helper server (marks VC) both produce valid witnesses |
+| `server_and_client_paths_are_identical` | Integration | Server-generated and client-generated paths match exactly |
+| `shard_boundary_crossing` | Integration | 40 leaves spanning multiple shards, all witnesses valid |
+| `full_sync_pipeline` | HTTP mock | Mock HTTP → TreeClient.sync() → witness generation end-to-end |
+| `incremental_sync` | HTTP mock | Block-by-block sync (not all-at-once) |
+| Golden vectors (`[1,2,3]`) | FFI | Go keeper root == Rust tree root for known inputs |
+| E2E voting flow rounds 1-8 | E2E | Full delegation → tree query → CLI sync → witness → cast → reveal against live chain |
+
+### Running tests
+
+```bash
+# Core tree unit tests
+cd vote-commitment-tree && cargo test --lib
+
+# Client-server integration tests
+cd vote-commitment-tree && cargo test --test client_server_integration
+
+# HTTP client tests (with mock server)
+cd vote-commitment-tree-client && cargo test
+
+# FFI parity tests (requires built circuits)
+cd sdk && go test ./crypto/votetree/...
+
+# Full E2E (requires running chain)
+cd sdk/tests/api && npm test
+```
+
+### CI pipeline
+
+Tests run automatically via GitHub Actions (`.github/workflows/`):
+
+- **`vote-commitment-tree.yml`** — Runs on changes to `vote-commitment-tree/` or `nullifier-ingest/imt-tree/`. Executes `cargo test --lib` and `cargo test --test client_server_integration`.
+- **`ci.yml` (`test-api` job)** — Builds the full chain with `make install-ffi`, starts it, waits for readiness, then runs `npm test` in `sdk/tests/api` which invokes `vote-tree-cli` sync/witness commands against the live chain.
+
+---
+
+## Where things live
+
+| Layer | Crate / Package | Files | Role |
+|---|---|---|---|
+| **Tree core** | `vote-commitment-tree` | `src/{hash,anchor,path}.rs` | Shared types: `MerkleHashVote`, `Anchor`, `MerklePath`, `poseidon_hash` |
+| **Server** | `vote-commitment-tree` | `src/server.rs` | Full tree: append, checkpoint, root, path. Implements `TreeSyncApi` in-process |
+| **Client** | `vote-commitment-tree` | `src/client.rs` | Sparse tree: sync, mark, witness. Consumes `TreeSyncApi` |
+| **Sync protocol** | `vote-commitment-tree` | `src/sync_api.rs` | `TreeSyncApi` trait, `BlockCommitments`, `LeafBatch`, `TreeState` |
+| **HTTP sync** | `vote-commitment-tree-client` | `src/http_sync_api.rs` | `HttpTreeSyncApi`: HTTP impl of `TreeSyncApi` |
+| **Wire types** | `vote-commitment-tree-client` | `src/types.rs` | JSON deserialization for chain REST responses |
+| **CLI** | `vote-commitment-tree-client` | `src/main.rs` | `vote-tree-cli`: sync, witness, verify, status commands |
+| **FFI bridge** | `sdk/circuits` | `src/votetree.rs` | `compute_root_from_raw`, `compute_path_from_raw` for Go → Rust |
+| **Chain keeper** | `sdk/x/vote/keeper` | `tree_root_poseidon.go` | `AppendCommitment`, EndBlocker root via FFI |
+| **Chain REST** | `sdk/api` | `query_handler.go` | HTTP endpoints: `/zally/v1/commitment-tree/{latest,height,leaves}` |
+| **Chain proto** | `sdk/proto/zvote/v1` | `query.proto`, `types.proto` | `CommitmentTreeState`, `BlockCommitments`, `CommitmentLeaves` proto definitions |
+| **Integration tests** | `vote-commitment-tree` | `tests/client_server_integration.rs` | 11 Rust integration tests (server → client → witness) |
+| **HTTP tests** | `vote-commitment-tree-client` | `tests/mock_server_tests.rs` | Mock HTTP server tests |
+| **FFI tests** | `sdk/crypto/votetree` | `tree_ffi_test.go` | Golden vector Go/Rust parity |
+| **E2E tests** | `sdk/tests/api` | `src/voting-flow.test.ts` | Full voting lifecycle against live chain, uses `vote-tree-cli` |
+
+### Module layout
+
+```
+vote-commitment-tree/
+  src/
+    lib.rs          Re-exports shared types + server + client + sync_api
+    hash.rs         MerkleHashVote, Hashable impl, EMPTY_ROOTS, constants
+    anchor.rs       Anchor type (committed tree root)
+    path.rs         MerklePath type (authentication path)
+    sync_api.rs     TreeSyncApi trait, BlockCommitments, LeafBatch, TreeState
+    server.rs       TreeServer: full tree, append, checkpoint, implements TreeSyncApi
+    client.rs       TreeClient: sparse ShardTree, sync, mark, witness
+  tests/
+    client_server_integration.rs   End-to-end server→client→witness tests
+
+vote-commitment-tree-client/
+  src/
+    lib.rs          Re-exports http_sync_api and types
+    main.rs         vote-tree-cli binary (sync, witness, verify, status)
+    http_sync_api.rs HttpTreeSyncApi: HTTP impl of TreeSyncApi
+    types.rs        JSON deserialization for chain REST responses
+  tests/
+    mock_server_tests.rs  Mock HTTP server integration tests
+```
