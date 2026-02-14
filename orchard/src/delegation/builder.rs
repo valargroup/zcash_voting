@@ -1,7 +1,7 @@
 //! Multi-note delegation bundle builder.
 //!
 //! Orchestrates the creation of a complete delegation proof:
-//! a single merged circuit proving all 16 conditions for up to 4 notes.
+//! a single merged circuit proving all 15 conditions for up to 4 notes.
 //! Handles padding unused note slots with zero-value notes that still carry
 //! valid IMT non-membership proofs against the real tree root.
 
@@ -37,7 +37,7 @@ pub struct RealNoteInput {
     pub imt_proof: ImtProofData,
 }
 
-/// Complete delegation bundle: a single circuit proving all 16 conditions.
+/// Complete delegation bundle: a single circuit proving all 15 conditions.
 #[derive(Debug)]
 pub struct DelegationBundle {
     /// The merged delegation circuit.

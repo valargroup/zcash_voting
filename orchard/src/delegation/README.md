@@ -1,6 +1,6 @@
 # Delegation Circuit (ZKP 1)
 
-A single circuit proving all 16 conditions of the delegation ZKP at K=14 (16,384 rows). The circuit handles the keystone note (conditions 1–8), four per-note slots (conditions 9–15 ×4), and gov null pairwise distinctness (condition 16) in one proof.
+A single circuit proving all 15 conditions of the delegation ZKP at K=14 (16,384 rows). The circuit handles the keystone note (conditions 1–8) and four per-note slots (conditions 9–15 ×4) in one proof.
 
 **Public inputs:** 12 field elements.
 **Per-note slots:** 4 (unused slots are padded with zero-value notes).

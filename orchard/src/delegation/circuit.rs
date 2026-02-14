@@ -1,6 +1,6 @@
 //! The Delegation circuit implementation.
 //!
-//! A single circuit proving all 16 conditions of the delegation ZKP:
+//! A single circuit proving all 15 conditions of the delegation ZKP:
 //!
 //! - **Condition 1**: Signed note commitment integrity.
 //! - **Condition 2**: Nullifier integrity.
@@ -312,7 +312,7 @@ pub struct NoteSlotWitness {
 
 /// The Delegation circuit.
 ///
-/// Proves all 16 conditions of the delegation ZKP (see README for details).
+/// Proves all 15 conditions of the delegation ZKP (see README for details).
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
     // Signed note witnesses (conditions 1–5).
@@ -526,26 +526,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                         x_shifted - (two_250 - y + x - one),
                     ),
                 ],
-            )
-        });
-
-        // Gov null pairwise distinctness gate (condition 16).
-        // Proves two gov nullifiers are different by witnessing inv = 1/(a - b).
-        // If a = b, no valid inv exists and the constraint fails.
-        // Applied to all 6 pairs: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3).
-        let q_gov_null_distinct = meta.selector();
-        meta.create_gate("Gov null pairwise distinctness", |meta| {
-            let q = meta.query_selector(q_gov_null_distinct);
-            let a = meta.query_advice(advices[0], Rotation::cur());
-            let b = meta.query_advice(advices[1], Rotation::cur());
-            let inv = meta.query_advice(advices[2], Rotation::cur());
-
-            let one = Expression::Constant(pallas::Base::one());
-
-            Constraints::with_selector(
-                q,
-                // (a - b) * inv = 1 is satisfiable iff a != b.
-                [("(a - b) * inv = 1", (a.clone() - b.clone()) * inv - one)],
             )
         });
 
@@ -1006,7 +986,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Returns three values per slot for use in the global conditions that follow:
         //   cmx_i      — hashed into rho_signed (condition 3)
         //   v_i        — summed into v_total (conditions 7 and 8)
-        //   gov_null_i — checked pairwise for distinctness (condition 16)
+        //   gov_null_i — exposed as public input
 
         let mut cmx_cells = Vec::with_capacity(4);
         let mut v_cells = Vec::with_capacity(4);
@@ -1370,7 +1350,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 ///
 /// Returns `(cmx_cell, v_cell, gov_null_cell)` — the extracted commitment,
 /// value, and governance nullifier for use in the rho binding (condition 3),
-/// gov commitment (condition 7), and gov null distinctness (condition 16).
+/// gov commitment (condition 7), and gov nullifier (public input).
 #[allow(clippy::too_many_arguments, non_snake_case)]
 fn synthesize_note_slot(
     config: &Config,
@@ -1868,7 +1848,7 @@ fn synthesize_note_slot(
     // Return the three values needed by global conditions:
     //   cmx_cell   → condition 3 (rho binding hash)
     //   v_base     → conditions 7 & 8 (gov commitment, min weight)
-    //   gov_null   → condition 16 (pairwise distinctness)
+    //   gov_null   → exposed as public input
     Ok((cmx_cell, v_base, gov_null_cell))
 }
 
