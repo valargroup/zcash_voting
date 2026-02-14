@@ -82,6 +82,7 @@ fn test_share_payload(
             "c2": BASE64_STANDARD.encode(Fp::from(200 + share_index as u64).to_repr()),
             "share_index": share_index,
         },
+        "share_index": share_index,
         "tree_position": tree_position,
         "vote_round_id": round_id_hex,
     })
@@ -215,15 +216,26 @@ async fn share_intake_and_queue() {
     assert_eq!(json["queues"][&round_id]["total"], 4);
 }
 
-#[tokio::test]
-async fn share_validation_rejects_bad_payload() {
-    let config = Config::default();
-    let store = ShareStore::new(&config);
-    let app = helper_server::api::router(AppState { store });
+/// Helper: POST a raw JSON payload and return the response status.
+async fn post_share(app: axum::Router, payload: &Value) -> u16 {
+    let resp = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/v1/shares")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    resp.status().as_u16()
+}
 
-    // Bad base64 in shares_hash.
-    let bad_payload = json!({
-        "shares_hash": "not-valid-base64!!!",
+/// Valid payload template for validation tests.
+fn valid_payload() -> Value {
+    json!({
+        "shares_hash": BASE64_STANDARD.encode([0u8; 32]),
         "proposal_id": 0,
         "vote_decision": 1,
         "enc_share": {
@@ -231,22 +243,61 @@ async fn share_validation_rejects_bad_payload() {
             "c2": BASE64_STANDARD.encode([0u8; 32]),
             "share_index": 0,
         },
+        "share_index": 0,
         "tree_position": 0,
         "vote_round_id": hex::encode([0u8; 32]),
-    });
+    })
+}
 
-    let resp = app
-        .oneshot(
-            axum::http::Request::builder()
-                .method("POST")
-                .uri("/api/v1/shares")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&bad_payload).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 400);
+fn make_app() -> axum::Router {
+    let config = Config::default();
+    let store = ShareStore::new(&config);
+    helper_server::api::router(AppState { store })
+}
+
+#[tokio::test]
+async fn validation_rejects_bad_base64() {
+    let mut p = valid_payload();
+    p["shares_hash"] = json!("not-valid-base64!!!");
+    assert_eq!(post_share(make_app(), &p).await, 400);
+}
+
+#[tokio::test]
+async fn validation_rejects_wrong_field_size() {
+    // shares_hash: valid base64 but only 16 bytes instead of 32.
+    let mut p = valid_payload();
+    p["shares_hash"] = json!(BASE64_STANDARD.encode([0u8; 16]));
+    assert_eq!(post_share(make_app(), &p).await, 400);
+
+    // enc_share.c1: 64 bytes instead of 32.
+    let mut p = valid_payload();
+    p["enc_share"]["c1"] = json!(BASE64_STANDARD.encode([0u8; 64]));
+    assert_eq!(post_share(make_app(), &p).await, 400);
+}
+
+#[tokio::test]
+async fn validation_rejects_bad_share_index() {
+    let mut p = valid_payload();
+    p["enc_share"]["share_index"] = json!(4);
+    assert_eq!(post_share(make_app(), &p).await, 400);
+}
+
+#[tokio::test]
+async fn validation_rejects_bad_round_id() {
+    // Non-hex.
+    let mut p = valid_payload();
+    p["vote_round_id"] = json!("not-hex!");
+    assert_eq!(post_share(make_app(), &p).await, 400);
+
+    // Wrong length (16 bytes hex instead of 32).
+    let mut p = valid_payload();
+    p["vote_round_id"] = json!(hex::encode([0u8; 16]));
+    assert_eq!(post_share(make_app(), &p).await, 400);
+}
+
+#[tokio::test]
+async fn validation_accepts_valid_payload() {
+    assert_eq!(post_share(make_app(), &valid_payload()).await, 200);
 }
 
 #[tokio::test]

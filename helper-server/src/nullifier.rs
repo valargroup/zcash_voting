@@ -82,6 +82,7 @@ mod tests {
                 c2: c2.clone(),
                 share_index: 0,
             },
+            share_index: 0,
             tree_position: 1,
             vote_round_id: hex::encode([0u8; 32]),
         };

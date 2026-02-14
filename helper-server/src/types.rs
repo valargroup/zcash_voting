@@ -32,13 +32,21 @@ pub struct SharePayload {
     pub shares_hash: String,
     /// Proposal being voted on.
     pub proposal_id: u32,
-    /// Vote decision (0 = yes, 1 = no, 2 = abstain).
+    /// Vote decision (0 = support, 1 = oppose, 2 = skip).
     pub vote_decision: u32,
     /// The encrypted share to relay.
     pub enc_share: EncryptedShareWire,
+    /// Index within the decomposition (redundant with enc_share.share_index,
+    /// but present at both levels in the spec).
+    pub share_index: u32,
     /// VC leaf index in the vote commitment tree.
     pub tree_position: u64,
     /// Vote round identifier (32 bytes, hex).
+    ///
+    /// Not in the current iOS SharePayload struct, but required by the helper
+    /// server to key the share queue by round. The iOS client has this data
+    /// via VoteCommitmentBundle.voteRoundId and will include it when
+    /// buildSharePayloads is wired to the real network layer.
     pub vote_round_id: String,
 }
 
