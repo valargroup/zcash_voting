@@ -11,8 +11,9 @@
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
 //! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
 //! - **Condition 8**: Shares Range (LookupRangeCheck, `[0, 2^30)`).
+//! - **Condition 9**: Shares Hash Integrity (Poseidon `ConstantLength<8>`, `constrain_instance`).
 //!
-//! Remaining conditions (9–11) are stubbed with witness fields and
+//! Remaining conditions (10–11) are stubbed with witness fields and
 //! public input slots; constraint logic will be added incrementally.
 //!
 //! ## Conditions overview
@@ -39,6 +40,7 @@
 //! - **Condition 8**: Shares Range — each `shares_j` in `[0, 2^24)`.
 //!   *(implemented)*
 //! - **Condition 9**: Shares Hash Integrity — `shares_hash = H(enc_share_1..4)`.
+//!   *(implemented — temporarily bound to `VOTE_COMMITMENT`; condition 11 will chain it)*
 //! - **Condition 10**: Encryption Integrity — each `enc_share_i = ElGamal(shares_i, r_i, ea_pk)`.
 //! - **Condition 11**: Vote Commitment Integrity — `vote_commitment = H(DOMAIN_VC, shares_hash,
 //!   proposal_id, vote_decision)`.
@@ -88,10 +90,11 @@ pub const VOTE_COMM_TREE_DEPTH: usize = 24;
 
 /// Circuit size (2^K rows).
 ///
-/// K=12 (4,096 rows). Conditions 1, 2, 4, 5, 6 use ~28 Poseidon
-/// hashes (~2,200 rows), plus AddChip additions, range-check running
-/// sums (conditions 5 + 8), and 24 Merkle swap regions. The 10-bit
-/// lookup table requires 1,024 rows. K=12 provides headroom.
+/// K=12 (4,096 rows). Conditions 1, 2, 4, 5, 6, 9 use ~29 Poseidon
+/// hashes (~2,500 rows), plus AddChip additions, range-check running
+/// sums (conditions 5 + 8), ECC fixed-base mul (condition 3), and 24
+/// Merkle swap regions. The 10-bit lookup table requires 1,024 rows.
+/// K=12 provides headroom.
 pub const K: u32 = 12;
 
 /// Domain tag for Vote Authority Notes.
@@ -122,8 +125,7 @@ const VOTING_ROUND_ID: usize = 6;
 
 // Suppress dead-code warnings for public input offsets that are
 // defined but not yet used by any condition's constraint logic.
-// These will be used as conditions 3, 7–11 are implemented.
-const _: usize = VOTE_COMMITMENT;
+// These will be used as conditions 10–11 are implemented.
 const _: usize = VOTE_COMM_TREE_ANCHOR_HEIGHT;
 const _: usize = PROPOSAL_ID;
 
@@ -215,16 +217,45 @@ pub fn poseidon_hash_2(a: pallas::Base, b: pallas::Base) -> pallas::Base {
     poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash([a, b])
 }
 
+/// Out-of-circuit shares hash (condition 9).
+///
+/// Computes:
+/// ```text
+/// Poseidon(c1_0_x, c2_0_x, c1_1_x, c2_1_x, c1_2_x, c2_2_x, c1_3_x, c2_3_x)
+/// ```
+///
+/// where each `(c1_i_x, c2_i_x)` are the x-coordinates (via ExtractP)
+/// of the El Gamal ciphertext components for share `i`:
+///   - `c1_i = r_i * G`
+///   - `c2_i = shares_i * G + r_i * ea_pk`
+///
+/// The order interleaves C1 and C2 components per share, matching
+/// the in-circuit witness layout. `ConstantLength<8>` absorbs the
+/// 8 field elements in 4 chunks of 2 (rate = 2).
+///
+/// Used by the builder and tests to compute the expected shares hash.
+pub fn shares_hash(
+    enc_share_c1_x: [pallas::Base; 4],
+    enc_share_c2_x: [pallas::Base; 4],
+) -> pallas::Base {
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<8>, 3, 2>::init().hash([
+        enc_share_c1_x[0], enc_share_c2_x[0],
+        enc_share_c1_x[1], enc_share_c2_x[1],
+        enc_share_c1_x[2], enc_share_c2_x[2],
+        enc_share_c1_x[3], enc_share_c2_x[3],
+    ])
+}
+
 // ================================================================
 // Config
 // ================================================================
 
 /// Configuration for the Vote Proof circuit.
 ///
-/// Holds chip configs for Poseidon (conditions 1, 2, 4, 6), AddChip
+/// Holds chip configs for Poseidon (conditions 1, 2, 4, 6, 9), AddChip
 /// (conditions 5, 7), LookupRangeCheck (conditions 5, 8), ECC (condition 3),
 /// and the Merkle swap gate (condition 1). Will be extended with
-/// custom gates as conditions 9–11 are added.
+/// custom gates as conditions 10–11 are added.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Public input column (7 field elements).
@@ -313,9 +344,10 @@ impl Config {
 /// revealing which VAN they hold. Contains witness fields for all
 /// 11 conditions; constraint logic is added incrementally.
 ///
-/// Currently constrained: conditions 1, 2, 3, 4, 5, 6, 7, 8 (VAN
+/// Currently constrained: conditions 1, 2, 3, 4, 5, 6, 7, 8, 9 (VAN
 /// membership, VAN integrity, spend authority, nullifier, authority
-/// decrement, new VAN integrity, shares sum, shares range).
+/// decrement, new VAN integrity, shares sum, shares range, shares
+/// hash integrity).
 #[derive(Clone, Debug, Default)]
 pub struct Circuit {
     // === VAN ownership and spending (conditions 1–4) ===
@@ -356,6 +388,15 @@ pub struct Circuit {
     // Condition 8 (Shares Range): each share in [0, 2^24).
     /// Voting share vector (4 shares that sum to total_note_value).
     pub(crate) shares: [Value<pallas::Base>; 4],
+
+    // Condition 9 (Shares Hash Integrity): El Gamal ciphertext x-coordinates.
+    // These are the x-coordinates of the curve points comprising each
+    // El Gamal ciphertext. Condition 10 (not yet implemented) will
+    // constrain these to be correct encryptions; condition 9 hashes them.
+    /// X-coordinates of C1_i = r_i * G for each share (via ExtractP).
+    pub(crate) enc_share_c1_x: [Value<pallas::Base>; 4],
+    /// X-coordinates of C2_i = shares_i * G + r_i * ea_pk for each share (via ExtractP).
+    pub(crate) enc_share_c2_x: [Value<pallas::Base>; 4],
 
     // Condition 10 (Encryption Integrity): El Gamal randomness per share.
     /// El Gamal encryption randomness for each share.
@@ -1212,6 +1253,100 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             true,
         )?;
 
+        // ---------------------------------------------------------------
+        // Condition 9: Shares Hash Integrity.
+        //
+        // shares_hash = Poseidon(c1_0_x, c2_0_x, c1_1_x, c2_1_x,
+        //                        c1_2_x, c2_2_x, c1_3_x, c2_3_x)
+        //
+        // Hashes the 8 x-coordinates of the 4 El Gamal ciphertext pairs
+        // into a single commitment. The order interleaves C1 and C2
+        // per share for locality.
+        //
+        // Condition 10 (not yet implemented) will constrain that each
+        // (c1_i_x, c2_i_x) is a valid El Gamal encryption of shares_i.
+        //
+        // Temporarily binds shares_hash to the VOTE_COMMITMENT public
+        // input for testability. When condition 11 is implemented,
+        // VOTE_COMMITMENT will instead be bound to the full vote
+        // commitment H(DOMAIN_VC, shares_hash, proposal_id, vote_decision).
+        // ---------------------------------------------------------------
+
+        // Witness the 8 El Gamal ciphertext x-coordinates.
+        let enc_c1_0 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c1_x[0]"),
+            config.advices[0],
+            self.enc_share_c1_x[0],
+        )?;
+        let enc_c2_0 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c2_x[0]"),
+            config.advices[0],
+            self.enc_share_c2_x[0],
+        )?;
+        let enc_c1_1 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c1_x[1]"),
+            config.advices[0],
+            self.enc_share_c1_x[1],
+        )?;
+        let enc_c2_1 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c2_x[1]"),
+            config.advices[0],
+            self.enc_share_c2_x[1],
+        )?;
+        let enc_c1_2 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c1_x[2]"),
+            config.advices[0],
+            self.enc_share_c1_x[2],
+        )?;
+        let enc_c2_2 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c2_x[2]"),
+            config.advices[0],
+            self.enc_share_c2_x[2],
+        )?;
+        let enc_c1_3 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c1_x[3]"),
+            config.advices[0],
+            self.enc_share_c1_x[3],
+        )?;
+        let enc_c2_3 = assign_free_advice(
+            layouter.namespace(|| "witness enc_share_c2_x[3]"),
+            config.advices[0],
+            self.enc_share_c2_x[3],
+        )?;
+
+        // Compute shares_hash = Poseidon(c1_0, c2_0, c1_1, c2_1,
+        //                                c1_2, c2_2, c1_3, c2_3).
+        let _shares_hash = {
+            let message = [
+                enc_c1_0, enc_c2_0,
+                enc_c1_1, enc_c2_1,
+                enc_c1_2, enc_c2_2,
+                enc_c1_3, enc_c2_3,
+            ];
+            let hasher = PoseidonHash::<
+                pallas::Base,
+                _,
+                poseidon::P128Pow5T3,
+                ConstantLength<8>,
+                3, // WIDTH
+                2, // RATE
+            >::init(
+                config.poseidon_chip(),
+                layouter.namespace(|| "shares hash Poseidon init"),
+            )?;
+            let h = hasher.hash(
+                layouter.namespace(|| "shares_hash = Poseidon(enc_shares)"),
+                message,
+            )?;
+
+            // Temporarily bind shares_hash to the VOTE_COMMITMENT public
+            // input. Will be replaced when condition 11 chains shares_hash
+            // into the full vote commitment.
+            layouter.constrain_instance(h.cell(), config.primary, VOTE_COMMITMENT)?;
+
+            h
+        };
+
         Ok(())
     }
 }
@@ -1304,10 +1439,36 @@ mod tests {
         *point.to_affine().coordinates().unwrap().x()
     }
 
-    /// Build valid test data for conditions 1, 2, 3, 4, 5, 6, and 7.
+    /// Generates random El Gamal ciphertext x-coordinates for testing
+    /// and returns `(c1_x, c2_x, shares_hash)`.
+    ///
+    /// The x-coordinates are random field elements (not actual El Gamal
+    /// ciphertexts). Condition 10 will later constrain them to be valid
+    /// encryptions; condition 9 only cares about the Poseidon hash.
+    fn random_enc_shares(rng: &mut OsRng)
+        -> ([pallas::Base; 4], [pallas::Base; 4], pallas::Base)
+    {
+        let c1_x: [pallas::Base; 4] = [
+            pallas::Base::random(&mut *rng),
+            pallas::Base::random(&mut *rng),
+            pallas::Base::random(&mut *rng),
+            pallas::Base::random(&mut *rng),
+        ];
+        let c2_x: [pallas::Base; 4] = [
+            pallas::Base::random(&mut *rng),
+            pallas::Base::random(&mut *rng),
+            pallas::Base::random(&mut *rng),
+            pallas::Base::random(&mut *rng),
+        ];
+        let hash = shares_hash(c1_x, c2_x);
+        (c1_x, c2_x, hash)
+    }
+
+    /// Build valid test data for conditions 1, 2, 3, 4, 5, 6, 7, and 9.
     ///
     /// Returns a circuit with correctly-hashed VAN witnesses, valid
-    /// shares summing to `total_note_value`, and a matching instance.
+    /// shares summing to `total_note_value`, random enc_share values
+    /// with a matching shares_hash, and a matching instance.
     /// `proposal_authority_old` is set to a small positive value (5) so
     /// conditions 5 and 6 can decrement it. Conditions not yet
     /// constrained use placeholder values (zero).
@@ -1369,6 +1530,11 @@ mod tests {
         let s2 = pallas::Base::from(3_000u64);
         let s3 = pallas::Base::from(4_000u64); // 1000 + 2000 + 3000 + 4000 = 10000
 
+        // Generate random enc_share ciphertext x-coordinates (condition 9).
+        // These are placeholder values — condition 10 will later constrain
+        // them to be valid El Gamal encryptions.
+        let (enc_c1_x, enc_c2_x, vote_commitment) = random_enc_shares(&mut rng);
+
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
             Value::known(position),
@@ -1386,11 +1552,13 @@ mod tests {
             Value::known(s2),
             Value::known(s3),
         ];
+        circuit.enc_share_c1_x = enc_c1_x.map(Value::known);
+        circuit.enc_share_c2_x = enc_c2_x.map(Value::known);
 
         let instance = Instance::from_parts(
             van_nullifier,
             vote_authority_note_new,
-            pallas::Base::zero(),
+            vote_commitment,
             vote_comm_tree_root,
             pallas::Base::zero(),
             pallas::Base::zero(),
@@ -1419,21 +1587,23 @@ mod tests {
 
     #[test]
     fn van_integrity_wrong_hash_fails() {
+        let mut rng = OsRng;
         let (_, mut instance) = make_test_data();
 
         // Deliberately wrong VAN value — condition 2 constrain_equal will fail.
-        let wrong_van = pallas::Base::random(&mut OsRng);
+        let wrong_van = pallas::Base::random(&mut rng);
         let (auth_path, position, root) = build_single_leaf_merkle_path(wrong_van);
         instance.vote_comm_tree_root = root;
 
         // Use witnesses that DON'T hash to wrong_van. Condition 3: derive pk from vsk.
-        let vsk = pallas::Scalar::random(&mut OsRng);
+        let vsk = pallas::Scalar::random(&mut rng);
         let voting_hotkey_pk = derive_voting_hotkey_pk(vsk);
         let total_note_value = pallas::Base::from(10_000u64);
         let s0 = pallas::Base::from(1_000u64);
         let s1 = pallas::Base::from(2_000u64);
         let s2 = pallas::Base::from(3_000u64);
         let s3 = pallas::Base::from(4_000u64);
+        let (enc_c1_x, enc_c2_x, vote_commitment) = random_enc_shares(&mut rng);
 
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
@@ -1441,9 +1611,9 @@ mod tests {
             Value::known(voting_hotkey_pk),
             Value::known(total_note_value),
             Value::known(pallas::Base::from(5u64)),
-            Value::known(pallas::Base::random(&mut OsRng)),
+            Value::known(pallas::Base::random(&mut rng)),
             Value::known(wrong_van),
-            Value::known(pallas::Base::random(&mut OsRng)),
+            Value::known(pallas::Base::random(&mut rng)),
         );
         circuit.vsk = Value::known(vsk);
         circuit.shares = [
@@ -1452,6 +1622,9 @@ mod tests {
             Value::known(s2),
             Value::known(s3),
         ];
+        circuit.enc_share_c1_x = enc_c1_x.map(Value::known);
+        circuit.enc_share_c2_x = enc_c2_x.map(Value::known);
+        instance.vote_commitment = vote_commitment;
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         // Should fail: derived hash ≠ witnessed vote_authority_note_old.
@@ -1545,6 +1718,9 @@ mod tests {
         let s2 = pallas::Base::from(3_000u64);
         let s3 = pallas::Base::from(4_000u64);
 
+        // Condition 9: random enc_shares with matching hash.
+        let (enc_c1_x, enc_c2_x, vote_commitment) = random_enc_shares(&mut rng);
+
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
             Value::known(voting_hotkey_pk), Value::known(total_note_value),
@@ -1558,9 +1734,11 @@ mod tests {
             Value::known(s2),
             Value::known(s3),
         ];
+        circuit.enc_share_c1_x = enc_c1_x.map(Value::known);
+        circuit.enc_share_c2_x = enc_c2_x.map(Value::known);
 
         let instance = Instance::from_parts(
-            van_nullifier, vote_authority_note_new, pallas::Base::zero(),
+            van_nullifier, vote_authority_note_new, vote_commitment,
             vote_comm_tree_root, pallas::Base::zero(), pallas::Base::zero(),
             voting_round_id,
         );
@@ -1720,6 +1898,9 @@ mod tests {
         let s2 = pallas::Base::from(3_000u64);
         let s3 = pallas::Base::from(4_000u64);
 
+        // Condition 9: random enc_shares with matching hash.
+        let (enc_c1_x, enc_c2_x, vote_commitment) = random_enc_shares(&mut rng);
+
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
             Value::known(voting_hotkey_pk), Value::known(total_note_value),
@@ -1733,9 +1914,11 @@ mod tests {
             Value::known(s2),
             Value::known(s3),
         ];
+        circuit.enc_share_c1_x = enc_c1_x.map(Value::known);
+        circuit.enc_share_c2_x = enc_c2_x.map(Value::known);
 
         let instance = Instance::from_parts(
-            van_nullifier, vote_authority_note_new, pallas::Base::zero(),
+            van_nullifier, vote_authority_note_new, vote_commitment,
             vote_comm_tree_root, pallas::Base::zero(), pallas::Base::zero(),
             voting_round_id,
         );
@@ -1806,6 +1989,9 @@ mod tests {
             proposal_authority_new, gov_comm_rand,
         );
 
+        // Condition 9: random enc_shares with matching hash.
+        let (enc_c1_x, enc_c2_x, vote_commitment) = random_enc_shares(&mut rng);
+
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path), Value::known(position),
             Value::known(voting_hotkey_pk), Value::known(total),
@@ -1819,9 +2005,11 @@ mod tests {
             Value::known(max_share),
             Value::known(max_share),
         ];
+        circuit.enc_share_c1_x = enc_c1_x.map(Value::known);
+        circuit.enc_share_c2_x = enc_c2_x.map(Value::known);
 
         let instance = Instance::from_parts(
-            van_nullifier, vote_authority_note_new, pallas::Base::zero(),
+            van_nullifier, vote_authority_note_new, vote_commitment,
             vote_comm_tree_root, pallas::Base::zero(), pallas::Base::zero(),
             voting_round_id,
         );
@@ -1856,6 +2044,71 @@ mod tests {
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         assert!(prover.verify().is_err());
+    }
+
+    // ================================================================
+    // Condition 9 (Shares Hash Integrity) tests
+    // ================================================================
+
+    /// Valid enc_share witnesses with matching shares_hash should pass.
+    #[test]
+    fn shares_hash_valid_proof() {
+        let (circuit, instance) = make_test_data();
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert_eq!(prover.verify(), Ok(()));
+    }
+
+    /// A corrupted enc_share_c1_x[0] should cause condition 9 failure:
+    /// the in-circuit hash won't match the VOTE_COMMITMENT instance.
+    #[test]
+    fn shares_hash_wrong_enc_share_fails() {
+        let (mut circuit, instance) = make_test_data();
+
+        // Corrupt one enc_share component — the Poseidon hash will
+        // change, so it won't match the instance's vote_commitment.
+        circuit.enc_share_c1_x[0] = Value::known(pallas::Base::random(&mut OsRng));
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    /// A wrong vote_commitment instance value (shares_hash mismatch)
+    /// should fail, even with correct enc_share witnesses.
+    #[test]
+    fn shares_hash_wrong_instance_fails() {
+        let (circuit, mut instance) = make_test_data();
+
+        // Supply a random (wrong) vote_commitment in the instance.
+        instance.vote_commitment = pallas::Base::random(&mut OsRng);
+
+        let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    /// Verifies the out-of-circuit shares_hash helper is deterministic.
+    #[test]
+    fn shares_hash_deterministic() {
+        let mut rng = OsRng;
+
+        let c1_x: [pallas::Base; 4] =
+            core::array::from_fn(|_| pallas::Base::random(&mut rng));
+        let c2_x: [pallas::Base; 4] =
+            core::array::from_fn(|_| pallas::Base::random(&mut rng));
+
+        let h1 = shares_hash(c1_x, c2_x);
+        let h2 = shares_hash(c1_x, c2_x);
+        assert_eq!(h1, h2);
+
+        // Changing any component changes the hash.
+        let mut c1_x_alt = c1_x;
+        c1_x_alt[2] = pallas::Base::random(&mut rng);
+        let h3 = shares_hash(c1_x_alt, c2_x);
+        assert_ne!(h1, h3);
+
+        // Swapping c1 and c2 also changes the hash.
+        let h4 = shares_hash(c2_x, c1_x);
+        assert_ne!(h1, h4);
     }
 
     // ================================================================

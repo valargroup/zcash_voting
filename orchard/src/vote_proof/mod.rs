@@ -12,10 +12,11 @@
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
 //! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
 //! - **Condition 8**: Shares Range (LookupRangeCheck, `[0, 2^30)`).
+//! - **Condition 9**: Shares Hash Integrity (Poseidon `ConstantLength<8>`, `constrain_instance`).
 
 pub mod circuit;
 
 pub use circuit::{
-    domain_van_nullifier, poseidon_hash_2, van_integrity_hash, van_nullifier_hash, Circuit, Config,
-    Instance, K, DOMAIN_VAN, VOTE_COMM_TREE_DEPTH,
+    domain_van_nullifier, poseidon_hash_2, shares_hash, van_integrity_hash, van_nullifier_hash,
+    Circuit, Config, Instance, K, DOMAIN_VAN, VOTE_COMM_TREE_DEPTH,
 };

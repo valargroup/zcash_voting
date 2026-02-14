@@ -3,7 +3,7 @@
 Proves that a registered voter is casting a valid vote, without revealing which VAN they hold. The structure follows the delegation circuit's pattern (ZKP 1) and implements conditions incrementally.
 
 **Public inputs:** 7 field elements.
-**Current K:** 12 (4,096 rows) — accommodates conditions 2, 4, 5, 6 plus the 10-bit lookup table.
+**Current K:** 12 (4,096 rows) — accommodates conditions 1–9, ECC (condition 3), and the 10-bit lookup table.
 
 ## Inputs
 
@@ -29,6 +29,8 @@ Proves that a registered voter is casting a valid vote, without revealing which 
 
 - Private (vote commitment — conditions 7–11)
    * **shares_1..4**: the voting share vector (each in `[0, 2^24)`).
+   * **enc_share_c1_x[0..3]**: x-coordinates of C1_i = r_i * G (El Gamal first component, via ExtractP).
+   * **enc_share_c2_x[0..3]**: x-coordinates of C2_i = shares_i * G + r_i * ea_pk (El Gamal second component, via ExtractP).
    * **share_randomness_1..4**: El Gamal encryption randomness per share.
    * **vote_decision**: the voter's choice.
 
@@ -36,7 +38,7 @@ Proves that a registered voter is casting a valid vote, without revealing which 
    * **voting_round_id cell**: copied from the instance column, used in condition 2 Poseidon hash and condition 4 inner hash.
    * **domain_van_nullifier cell**: constant encoding of `"vote authority spend"` (condition 4).
    * **proposal_authority_new**: derived as `proposal_authority_old - 1` (condition 5).
-   * **shares_hash**: derived from encrypted shares (condition 9).
+   * **shares_hash**: Poseidon hash of 8 enc_share x-coordinates (condition 9). Temporarily bound to `VOTE_COMMITMENT`; will be consumed by condition 11.
 
 ## Condition 2: VAN Integrity ✅
 
@@ -211,15 +213,31 @@ If a share exceeds `2^30` or is a wrapped large field element (e.g. `p - k` from
 
 **Constructions:** `LookupRangeCheckConfig` (reused from condition 5).
 
-## Condition 9: Shares Hash Integrity (TODO)
+## Condition 9: Shares Hash Integrity ✅
 
-Purpose: shares hash is correctly computed over the 4 encrypted shares.
+Purpose: commit to the 4 El Gamal ciphertext pairs so they can be verified in conditions 10 and 11 without re-witnessing.
 
 ```
-shares_hash = H(enc_share_1, enc_share_2, enc_share_3, enc_share_4)
+shares_hash = Poseidon(c1_0_x, c2_0_x, c1_1_x, c2_1_x, c1_2_x, c2_2_x, c1_3_x, c2_3_x)
 ```
 
-**Constructions:** `PoseidonChip`.
+Where:
+- **c1_i_x**: x-coordinate of `C1_i = r_i * G` (the El Gamal randomness point for share `i`), extracted via `ExtractP`. Private witness field `enc_share_c1_x[i]`.
+- **c2_i_x**: x-coordinate of `C2_i = shares_i * G + r_i * ea_pk` (the El Gamal ciphertext point for share `i`), extracted via `ExtractP`. Private witness field `enc_share_c2_x[i]`.
+
+The 8 x-coordinates are interleaved per share — `(c1_0, c2_0, c1_1, c2_1, ...)` — for locality. This matches the order used in ZKP 3 (vote reveal proof), where the server recomputes `shares_hash` from the 4 ciphertexts in the witness.
+
+**Function:** `Poseidon` with `ConstantLength<8>`. Uses `Pow5Chip` / `P128Pow5T3` with rate 2 (4 absorption rounds for 8 inputs, ~5 permutations, ~320 rows).
+
+**Constraint:** The circuit computes the Poseidon hash over all 8 witness values and enforces `constrain_instance(shares_hash, VOTE_COMMITMENT)` — temporarily binding the hash to the public input at offset 2. When condition 11 is implemented, this temporary binding will be replaced: `VOTE_COMMITMENT` will instead be bound to `H(DOMAIN_VC, shares_hash, proposal_id, vote_decision)`, and `shares_hash` will become a purely internal wire.
+
+**Relationship to other conditions:**
+- Condition 10 (not yet implemented) will constrain that the witnessed `(c1_i_x, c2_i_x)` values are actual valid El Gamal encryptions of the corresponding plaintext shares from conditions 7/8. Until then, the enc_share values are unconstrained private inputs — any field elements will satisfy condition 9.
+- Condition 11 will chain `shares_hash` into the full vote commitment, removing the temporary `VOTE_COMMITMENT` binding.
+
+**Out-of-circuit helper:** `shares_hash()` computes the same Poseidon hash outside the circuit for builder and test use.
+
+**Constructions:** `PoseidonChip` (reused from conditions 1, 2, 4, 6).
 
 ## Condition 10: Encryption Integrity (TODO)
 
