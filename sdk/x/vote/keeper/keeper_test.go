@@ -2,6 +2,7 @@ package keeper_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -17,6 +18,14 @@ import (
 	"github.com/z-cale/zally/x/vote/keeper"
 	"github.com/z-cale/zally/x/vote/types"
 )
+
+// fpLE returns a 32-byte little-endian Pallas Fp encoding of v (canonical for 0 <= v < 2^64).
+// Use for commitment tree leaves so the votetree FFI accepts them.
+func fpLE(v uint64) []byte {
+	buf := make([]byte, 32)
+	binary.LittleEndian.PutUint64(buf[:8], v)
+	return buf
+}
 
 // ---------------------------------------------------------------------------
 // Test constants
@@ -323,9 +332,9 @@ func (s *KeeperTestSuite) TestAppendCommitment_SequentialIndices() {
 	kv := s.keeper.OpenKVStore(s.ctx)
 
 	commitments := [][]byte{
-		bytes.Repeat([]byte{0xA1}, 32),
-		bytes.Repeat([]byte{0xA2}, 32),
-		bytes.Repeat([]byte{0xA3}, 32),
+		fpLE(0xA1),
+		fpLE(0xA2),
+		fpLE(0xA3),
 	}
 
 	for i, cm := range commitments {
@@ -354,7 +363,7 @@ func (s *KeeperTestSuite) TestAppendCommitment_ContinuesFromExistingState() {
 	// Seed the tree state to start at index 100.
 	s.Require().NoError(s.keeper.SetCommitmentTreeState(kv, &types.CommitmentTreeState{NextIndex: 100}))
 
-	idx, err := s.keeper.AppendCommitment(kv, bytes.Repeat([]byte{0xFF}, 32))
+	idx, err := s.keeper.AppendCommitment(kv, fpLE(0xFF))
 	s.Require().NoError(err)
 	s.Require().Equal(uint64(100), idx)
 
@@ -859,14 +868,14 @@ func (s *KeeperTestSuite) TestComputeTreeRoot() {
 		},
 		{
 			name:      "single leaf produces 32-byte root",
-			leaves:    [][]byte{bytes.Repeat([]byte{0xA1}, 32)},
+			leaves:    [][]byte{fpLE(1)},
 			expectLen: 32,
 		},
 		{
 			name: "two leaves produce 32-byte root",
 			leaves: [][]byte{
-				bytes.Repeat([]byte{0xA1}, 32),
-				bytes.Repeat([]byte{0xA2}, 32),
+				fpLE(1),
+				fpLE(2),
 			},
 			expectLen: 32,
 		},
@@ -897,7 +906,7 @@ func (s *KeeperTestSuite) TestComputeTreeRoot_DeterministicAndDistinct() {
 	s.SetupTest()
 	kv := s.keeper.OpenKVStore(s.ctx)
 
-	_, err := s.keeper.AppendCommitment(kv, bytes.Repeat([]byte{0x01}, 32))
+	_, err := s.keeper.AppendCommitment(kv, fpLE(1))
 	s.Require().NoError(err)
 
 	root1, err := s.keeper.ComputeTreeRoot(kv, 1)
@@ -909,12 +918,215 @@ func (s *KeeperTestSuite) TestComputeTreeRoot_DeterministicAndDistinct() {
 	s.Require().Equal(root1, root1Again)
 
 	// Add another leaf — root changes.
-	_, err = s.keeper.AppendCommitment(kv, bytes.Repeat([]byte{0x02}, 32))
+	_, err = s.keeper.AppendCommitment(kv, fpLE(2))
 	s.Require().NoError(err)
 
 	root2, err := s.keeper.ComputeTreeRoot(kv, 2)
 	s.Require().NoError(err)
 	s.Require().NotEqual(root1, root2)
+}
+
+// ---------------------------------------------------------------------------
+// BlockLeafIndex
+// ---------------------------------------------------------------------------
+
+func (s *KeeperTestSuite) TestBlockLeafIndex() {
+	type writeEntry struct {
+		height, start, count uint64
+	}
+	type readCheck struct {
+		height    uint64
+		wantStart uint64
+		wantCount uint64
+		wantFound bool
+	}
+
+	tests := []struct {
+		name   string
+		writes []writeEntry
+		reads  []readCheck
+	}{
+		{
+			name:   "basic round-trip",
+			writes: []writeEntry{{10, 0, 5}},
+			reads:  []readCheck{{10, 0, 5, true}},
+		},
+		{
+			name:   "not found",
+			writes: nil,
+			reads:  []readCheck{{999, 0, 0, false}},
+		},
+		{
+			name: "multiple heights",
+			writes: []writeEntry{
+				{5, 0, 2},
+				{10, 2, 3},
+				{15, 5, 1},
+			},
+			reads: []readCheck{
+				{5, 0, 2, true},
+				{10, 2, 3, true},
+				{15, 5, 1, true},
+			},
+		},
+		{
+			name: "overwrite same height",
+			writes: []writeEntry{
+				{10, 0, 2},
+				{10, 0, 7}, // second write overwrites
+			},
+			reads: []readCheck{{10, 0, 7, true}},
+		},
+		{
+			name:   "large uint64 values",
+			writes: []writeEntry{{999999, 1<<48 + 42, 1<<32 + 7}},
+			reads:  []readCheck{{999999, 1<<48 + 42, 1<<32 + 7, true}},
+		},
+	}
+
+	for _, tc := range tests {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			kv := s.keeper.OpenKVStore(s.ctx)
+
+			for _, w := range tc.writes {
+				s.Require().NoError(s.keeper.SetBlockLeafIndex(kv, w.height, w.start, w.count))
+			}
+			for _, r := range tc.reads {
+				start, count, found, err := s.keeper.GetBlockLeafIndex(kv, r.height)
+				s.Require().NoError(err)
+				s.Require().Equal(r.wantFound, found, "found mismatch for height %d", r.height)
+				if r.wantFound {
+					s.Require().Equal(r.wantStart, start, "start mismatch for height %d", r.height)
+					s.Require().Equal(r.wantCount, count, "count mismatch for height %d", r.height)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetCommitmentLeaves
+// ---------------------------------------------------------------------------
+
+func (s *KeeperTestSuite) TestGetCommitmentLeaves() {
+	// blockSetup describes leaves to append and the index entry to write.
+	type blockSetup struct {
+		height   uint64
+		start    uint64
+		leafVals []byte // each byte becomes an fpLeaf
+	}
+	// wantBlock describes expected output for one block.
+	type wantBlock struct {
+		height   uint64
+		start    uint64
+		leafVals []byte
+	}
+
+	tests := []struct {
+		name       string
+		blocks     []blockSetup
+		fromHeight uint64
+		toHeight   uint64
+		want       []wantBlock
+	}{
+		{
+			name:       "empty store",
+			fromHeight: 0,
+			toHeight:   100,
+			want:       nil,
+		},
+		{
+			name: "single block",
+			blocks: []blockSetup{
+				{height: 5, start: 0, leafVals: []byte{0x10, 0x20}},
+			},
+			fromHeight: 1,
+			toHeight:   10,
+			want: []wantBlock{
+				{height: 5, start: 0, leafVals: []byte{0x10, 0x20}},
+			},
+		},
+		{
+			name: "multiple blocks full range",
+			blocks: []blockSetup{
+				{height: 5, start: 0, leafVals: []byte{0x01, 0x02}},
+				{height: 8, start: 2, leafVals: []byte{0x03}},
+				{height: 12, start: 3, leafVals: []byte{0x04, 0x05, 0x06}},
+			},
+			fromHeight: 0,
+			toHeight:   20,
+			want: []wantBlock{
+				{height: 5, start: 0, leafVals: []byte{0x01, 0x02}},
+				{height: 8, start: 2, leafVals: []byte{0x03}},
+				{height: 12, start: 3, leafVals: []byte{0x04, 0x05, 0x06}},
+			},
+		},
+		{
+			name: "subset range filters correctly",
+			blocks: []blockSetup{
+				{height: 5, start: 0, leafVals: []byte{0x01}},
+				{height: 10, start: 1, leafVals: []byte{0x02}},
+				{height: 15, start: 2, leafVals: []byte{0x03}},
+			},
+			fromHeight: 7,
+			toHeight:   12,
+			want: []wantBlock{
+				{height: 10, start: 1, leafVals: []byte{0x02}},
+			},
+		},
+		{
+			name: "exact height (from == to)",
+			blocks: []blockSetup{
+				{height: 7, start: 0, leafVals: []byte{0x42}},
+			},
+			fromHeight: 7,
+			toHeight:   7,
+			want: []wantBlock{
+				{height: 7, start: 0, leafVals: []byte{0x42}},
+			},
+		},
+		{
+			name: "leaf content byte-exact",
+			blocks: []blockSetup{
+				{height: 1, start: 0, leafVals: []byte{0xAA, 0xBB, 0xCC}},
+			},
+			fromHeight: 1,
+			toHeight:   1,
+			want: []wantBlock{
+				{height: 1, start: 0, leafVals: []byte{0xAA, 0xBB, 0xCC}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			kv := s.keeper.OpenKVStore(s.ctx)
+
+			// Seed: append leaves and write block-index entries.
+			for _, b := range tc.blocks {
+				for _, v := range b.leafVals {
+					_, err := s.keeper.AppendCommitment(kv, fpLeaf(v))
+					s.Require().NoError(err)
+				}
+				s.Require().NoError(s.keeper.SetBlockLeafIndex(kv, b.height, b.start, uint64(len(b.leafVals))))
+			}
+
+			got, err := s.keeper.GetCommitmentLeaves(kv, tc.fromHeight, tc.toHeight)
+			s.Require().NoError(err)
+			s.Require().Len(got, len(tc.want))
+
+			for i, w := range tc.want {
+				s.Require().Equal(w.height, got[i].Height, "block %d height", i)
+				s.Require().Equal(w.start, got[i].StartIndex, "block %d start_index", i)
+				s.Require().Len(got[i].Leaves, len(w.leafVals), "block %d leaf count", i)
+				for j, v := range w.leafVals {
+					s.Require().Equal(fpLeaf(v), got[i].Leaves[j], "block %d leaf %d", i, j)
+				}
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

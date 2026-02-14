@@ -8,6 +8,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { blake2b } from "@noble/hashes/blake2b";
@@ -52,6 +53,38 @@ const FIXTURES_DIR = path.join(
   "..",
   "fixtures",
 );
+
+// ---------------------------------------------------------------------------
+// Vote commitment tree CLI (Rust shell-out)
+// ---------------------------------------------------------------------------
+
+/** Path to the vote-commitment-tree-client Cargo.toml (for `cargo run --manifest-path`). */
+const TREE_CLI_MANIFEST = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..", "..", "..", "..",
+  "vote-commitment-tree-client",
+  "Cargo.toml",
+);
+
+/**
+ * Run the `vote-tree-cli` Rust binary with the given arguments and return stdout.
+ *
+ * Uses `cargo run --manifest-path` so no `cd` is needed. The 120s timeout
+ * accommodates first-time compilation. On failure (non-zero exit), `execFileSync`
+ * throws — the test naturally fails with the CLI's stderr message.
+ */
+export function runTreeCli(args: string[]): string {
+  return execFileSync("cargo", [
+    "run", "--quiet",
+    "--manifest-path", TREE_CLI_MANIFEST,
+    "--bin", "vote-tree-cli",
+    "--", ...args,
+  ], { encoding: "utf-8", timeout: 120_000 }).trim();
+}
+
+// ---------------------------------------------------------------------------
+// Fixture loading
+// ---------------------------------------------------------------------------
 
 /** Read a binary fixture file from tests/api/fixtures/. */
 export function loadFixture(name: string): Uint8Array {
@@ -305,13 +338,23 @@ export const REAL_SIGHASH = blake2b(
 // from previous test runs (chain state persists).
 let nullifierCounter = Math.floor(Date.now() / 1000) % 1_000_000;
 
-/** Create a unique 32-byte nullifier by writing a counter value into it. */
+/** Create a unique 32-byte value by writing a counter value into it.
+ *
+ * The result is a valid canonical Pallas base field element (LE value < p).
+ * This is required because some callers use these values as commitment tree
+ * leaves, which the Poseidon Merkle root FFI deserializes via Fp::from_repr.
+ * The Pallas modulus has MSB ≈ 0x40, so byte 31 (MSB in LE) must be < 0x40
+ * to guarantee the encoding is canonical.
+ */
 function makeUniqueNullifier(): Uint8Array {
   const nf = new Uint8Array(32);
   const view = new DataView(nf.buffer);
   view.setUint32(0, nullifierCounter++, false);
-  // Fill remaining bytes with a pattern to satisfy non-empty checks
-  for (let i = 4; i < 32; i++) nf[i] = 0xab;
+  // Fill bytes 4–30 with a non-zero pattern.
+  for (let i = 4; i < 31; i++) nf[i] = 0xab;
+  // Byte 31 is the MSB in little-endian Pallas Fp encoding.
+  // Must be < 0x40 to stay below the field modulus.
+  nf[31] = 0x0a;
   return nf;
 }
 
@@ -416,9 +459,46 @@ export function makeRevealSharePayload(
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Returns true if the error is a retryable socket error (e.g. stale keep-alive
+ * connection closed by the server). Node.js's built-in fetch (undici) does NOT
+ * automatically retry POST requests on dead sockets, so we handle it here.
+ */
+function isRetryableSocketError(err: unknown): boolean {
+  if (!(err instanceof TypeError)) return false;
+  const cause = (err as { cause?: { code?: string } }).cause;
+  if (!cause?.code) return false;
+  return (
+    cause.code === "UND_ERR_SOCKET" ||
+    cause.code === "ECONNRESET" ||
+    cause.code === "ECONNREFUSED"
+  );
+}
+
+/**
+ * fetch wrapper that retries on transient socket errors (stale keep-alive
+ * connections, brief server unavailability). Only retries on network-level
+ * errors — HTTP 4xx/5xx responses are returned normally, not retried.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  maxRetries = 2,
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      if (attempt >= maxRetries || !isRetryableSocketError(err)) throw err;
+      // Brief back-off before retry (500ms, 1000ms).
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+}
+
 /** POST JSON to a /zally/v1/* endpoint and return the parsed response. */
 export async function postJSON(path: string, body: unknown) {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetchWithRetry(`${BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -429,7 +509,7 @@ export async function postJSON(path: string, body: unknown) {
 
 /** GET a /zally/v1/* endpoint and return the parsed response. */
 export async function getJSON(path: string) {
-  const res = await fetch(`${BASE_URL}${path}`);
+  const res = await fetchWithRetry(`${BASE_URL}${path}`, {});
   const json = await res.json();
   return { status: res.status, json };
 }

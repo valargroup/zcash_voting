@@ -7,7 +7,6 @@ import (
 	"cosmossdk.io/core/store"
 	"cosmossdk.io/log"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"golang.org/x/crypto/blake2b"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/z-cale/zally/crypto/elgamal"
@@ -158,21 +157,78 @@ func (k Keeper) AppendCommitment(kvStore store.KVStore, commitment []byte) (uint
 	return index, nil
 }
 
-// ComputeTreeRoot computes the commitment tree root as Blake2b-256 over all leaves.
-// This is a placeholder; production will use an incremental Poseidon Merkle tree.
-func (k Keeper) ComputeTreeRoot(kvStore store.KVStore, nextIndex uint64) ([]byte, error) {
-	if nextIndex == 0 {
-		return nil, nil
+// ComputeTreeRoot is defined in tree_root_poseidon.go (Poseidon Merkle via Rust FFI).
+
+// SetBlockLeafIndex records the range of commitment leaves that were appended
+// during a specific block height. Value format: start_index (uint64 BE) || count (uint64 BE).
+func (k Keeper) SetBlockLeafIndex(kvStore store.KVStore, height, startIndex, count uint64) error {
+	val := make([]byte, 16)
+	putUint64BE(val[0:8], startIndex)
+	putUint64BE(val[8:16], count)
+	return kvStore.Set(types.BlockLeafIndexKey(height), val)
+}
+
+// GetBlockLeafIndex returns the (start_index, count) for leaves appended at
+// the given block height. Returns (0, 0, false) if no mapping exists.
+func (k Keeper) GetBlockLeafIndex(kvStore store.KVStore, height uint64) (startIndex, count uint64, found bool, err error) {
+	val, err := kvStore.Get(types.BlockLeafIndexKey(height))
+	if err != nil {
+		return 0, 0, false, err
 	}
-	h, _ := blake2b.New256(nil) // unkeyed; never errors
-	for i := uint64(0); i < nextIndex; i++ {
-		leaf, err := kvStore.Get(types.CommitmentLeafKey(i))
-		if err != nil {
-			return nil, err
+	if len(val) < 16 {
+		return 0, 0, false, nil
+	}
+	startIndex = getUint64BE(val[0:8])
+	count = getUint64BE(val[8:16])
+	return startIndex, count, true, nil
+}
+
+// GetCommitmentLeaves returns the commitment leaves that were appended during
+// blocks from fromHeight to toHeight (inclusive). Each entry contains the block
+// height, the starting leaf index, and the leaves themselves.
+func (k Keeper) GetCommitmentLeaves(kvStore store.KVStore, fromHeight, toHeight uint64) ([]*types.BlockCommitments, error) {
+	// Iterate over the BlockLeafIndex prefix for the requested height range.
+	startKey := types.BlockLeafIndexKey(fromHeight)
+	// End key is exclusive: the key just after toHeight.
+	endKey := types.BlockLeafIndexKey(toHeight + 1)
+
+	iter, err := kvStore.Iterator(startKey, endKey)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var blocks []*types.BlockCommitments
+	for ; iter.Valid(); iter.Next() {
+		val := iter.Value()
+		if len(val) < 16 {
+			return nil, fmt.Errorf("corrupt BlockLeafIndex entry: expected 16 bytes, got %d", len(val))
 		}
-		h.Write(leaf)
+		startIndex := getUint64BE(val[0:8])
+		count := getUint64BE(val[8:16])
+
+		// Read the actual leaves from the commitment leaf store.
+		leaves := make([][]byte, count)
+		for i := uint64(0); i < count; i++ {
+			leaf, err := kvStore.Get(types.CommitmentLeafKey(startIndex + i))
+			if err != nil {
+				return nil, err
+			}
+			leaves[i] = leaf
+		}
+
+		// Extract height from the key: prefix (1 byte) + height (8 bytes BE).
+		key := iter.Key()
+		height := getUint64BE(key[len(types.BlockLeafIndexPrefix):])
+
+		blocks = append(blocks, &types.BlockCommitments{
+			Height:     height,
+			StartIndex: startIndex,
+			Leaves:     leaves,
+		})
 	}
-	return h.Sum(nil), nil
+
+	return blocks, nil
 }
 
 // GetCommitmentRootAtHeight returns the commitment tree root stored at a specific height.
