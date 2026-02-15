@@ -238,6 +238,8 @@ pub struct EncryptedShare {
     pub c2: Vec<u8>,
     pub share_index: u32,
     pub plaintext_value: u64,
+    /// El Gamal randomness (32 bytes). Witness-only; must NOT be sent over the network.
+    pub randomness: Vec<u8>,
 }
 
 #[derive(Clone, uniffi::Record)]
@@ -395,6 +397,7 @@ impl From<voting::EncryptedShare> for EncryptedShare {
             c2: s.c2,
             share_index: s.share_index,
             plaintext_value: s.plaintext_value,
+            randomness: s.randomness,
         }
     }
 }
@@ -406,6 +409,7 @@ impl From<EncryptedShare> for voting::EncryptedShare {
             c2: s.c2,
             share_index: s.share_index,
             plaintext_value: s.plaintext_value,
+            randomness: s.randomness,
         }
     }
 }

@@ -65,12 +65,14 @@ mod tests {
                 c2: vec![0xC2; 32],
                 share_index: 0,
                 plaintext_value: 1,
+                randomness: vec![0u8; 32],
             },
             EncryptedShare {
                 c1: vec![0xC1; 32],
                 c2: vec![0xC2; 32],
                 share_index: 1,
                 plaintext_value: 4,
+                randomness: vec![0u8; 32],
             },
         ]
     }

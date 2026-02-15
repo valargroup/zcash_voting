@@ -52,6 +52,10 @@ pub fn derive_share_nullifier(payload: &SharePayload, vote_commitment: Fp) -> Op
     let mut c2_arr = [0u8; 32];
     c1_arr.copy_from_slice(&c1_bytes);
     c2_arr.copy_from_slice(&c2_bytes);
+    // Compressed Pallas encoding stores the sign of y in bit 7 of byte 31.
+    // Clear it to recover the raw x-coordinate for field interpretation.
+    c1_arr[31] &= 0x7F;
+    c2_arr[31] &= 0x7F;
     let c1_fp = Option::from(Fp::from_repr(c1_arr))?;
     let c2_fp = Option::from(Fp::from_repr(c2_arr))?;
     let enc_share_hash = poseidon_hash(c1_fp, c2_fp);
@@ -96,5 +100,35 @@ mod tests {
         payload2.enc_share.share_index = 1;
         let nf3 = derive_share_nullifier(&payload2, vc).unwrap();
         assert_ne!(nf1, nf3);
+    }
+
+    #[test]
+    fn nullifier_works_with_sign_bit_set() {
+        // Simulate compressed Pallas point bytes where the sign bit (bit 7 of
+        // byte 31) is set. Without clearing the sign bit, Fp::from_repr would
+        // fail because the value exceeds the field modulus.
+        let mut c1_bytes = Fp::from(100).to_repr();
+        let mut c2_bytes = Fp::from(200).to_repr();
+        // Set the sign bit on both.
+        c1_bytes[31] |= 0x80;
+        c2_bytes[31] |= 0x80;
+
+        let payload = SharePayload {
+            shares_hash: BASE64_STANDARD.encode([0u8; 32]),
+            proposal_id: 1,
+            vote_decision: 0,
+            enc_share: EncryptedShareWire {
+                c1: BASE64_STANDARD.encode(c1_bytes),
+                c2: BASE64_STANDARD.encode(c2_bytes),
+                share_index: 2,
+            },
+            share_index: 2,
+            tree_position: 5,
+            vote_round_id: hex::encode([0u8; 32]),
+        };
+
+        // Must not return None — the sign bit should be cleared internally.
+        let nf = derive_share_nullifier(&payload, Fp::from(99));
+        assert!(nf.is_some(), "nullifier derivation must handle sign bit");
     }
 }

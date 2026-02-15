@@ -34,7 +34,7 @@ use rand::rngs::OsRng;
 use orchard::{
     delegation::{
         builder::{build_delegation_bundle, RealNoteInput},
-        imt::{ImtProofData as OrchardImtProofData, ImtProvider, IMT_DEPTH},
+        imt::{ImtError, ImtProofData as OrchardImtProofData, ImtProvider, IMT_DEPTH},
     },
     keys::{FullViewingKey, Scope, SpendingKey},
     note::{ExtractedNoteCommitment, Note, Rho},
@@ -434,7 +434,7 @@ impl ImtProvider for ApiImtProvider {
         self.root
     }
 
-    fn non_membership_proof(&self, nf: pallas::Base) -> OrchardImtProofData {
+    fn non_membership_proof(&self, nf: pallas::Base) -> Result<OrchardImtProofData, ImtError> {
         let url = server_url();
         let hex_str = &fp_hex(&nf)[2..];
 
@@ -454,13 +454,13 @@ impl ImtProvider for ApiImtProvider {
         let json: ImtProofJson = resp.json().expect("valid exclusion proof JSON");
         let proof = parse_proof(&json);
 
-        OrchardImtProofData {
+        Ok(OrchardImtProofData {
             root: proof.root,
             low: proof.low,
             high: proof.high,
             leaf_pos: proof.leaf_pos,
             path: proof.path,
-        }
+        })
     }
 }
 
@@ -530,7 +530,7 @@ fn make_real_note_inputs(
 
         let real_nf = note.nullifier(fvk);
         let nf_base = pallas::Base::from_repr(real_nf.to_bytes()).unwrap();
-        let imt_proof = imt_provider.non_membership_proof(nf_base);
+        let imt_proof = imt_provider.non_membership_proof(nf_base).expect("IMT proof fetch failed");
 
         inputs.push(RealNoteInput {
             note,

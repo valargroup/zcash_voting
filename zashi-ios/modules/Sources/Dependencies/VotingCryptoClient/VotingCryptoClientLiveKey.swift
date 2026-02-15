@@ -343,7 +343,8 @@ extension VotingCryptoClient: DependencyKey {
                         c1: $0.c1,
                         c2: $0.c2,
                         shareIndex: $0.shareIndex,
-                        plaintextValue: $0.plaintextValue
+                        plaintextValue: $0.plaintextValue,
+                        randomness: $0.randomness
                     )
                 }
             },
@@ -358,7 +359,8 @@ extension VotingCryptoClient: DependencyKey {
                                     c1: $0.c1,
                                     c2: $0.c2,
                                     shareIndex: $0.shareIndex,
-                                    plaintextValue: $0.plaintextValue
+                                    plaintextValue: $0.plaintextValue,
+                                    randomness: $0.randomness
                                 )
                             }
                             let result = try db.buildVoteCommitment(
@@ -398,7 +400,8 @@ extension VotingCryptoClient: DependencyKey {
                         c1: $0.c1,
                         c2: $0.c2,
                         shareIndex: $0.shareIndex,
-                        plaintextValue: $0.plaintextValue
+                        plaintextValue: $0.plaintextValue,
+                        randomness: $0.randomness
                     )
                 }
                 let ffiCommitment = ZcashVotingFFI.VoteCommitmentBundle(
@@ -421,7 +424,8 @@ extension VotingCryptoClient: DependencyKey {
                             c1: $0.encShare.c1,
                             c2: $0.encShare.c2,
                             shareIndex: $0.encShare.shareIndex,
-                            plaintextValue: $0.encShare.plaintextValue
+                            plaintextValue: $0.encShare.plaintextValue,
+                            randomness: $0.encShare.randomness
                         ),
                         shareIndex: $0.encShare.shareIndex,
                         treePosition: $0.treePosition
