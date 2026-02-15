@@ -78,7 +78,7 @@ pub fn build_delegation_bundle_for_test(
     let nf_imt_root = imt.root();
     let real_nf = note.nullifier(&fvk);
     let nf_fp: pallas::Base = pallas::Base::from_repr(real_nf.to_bytes()).unwrap();
-    let imt_proof = imt.non_membership_proof(nf_fp);
+    let imt_proof = imt.non_membership_proof(nf_fp)?;
 
     let note_input = RealNoteInput {
         note,
