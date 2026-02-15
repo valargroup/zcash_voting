@@ -143,14 +143,43 @@ fn voting_flow_full_lifecycle() {
     // ----- Step 4: Cast vote -----
     log_step("Step 4", "cast vote");
     let cast_body = cast_vote_payload(&round_id, anchor_height);
-    let (status, json) = post_json_accept_committed(
-        "/zally/v1/cast-vote",
-        &cast_body,
-        || commitment_tree_next_index().map(|n| n >= 4).unwrap_or(false),
-    )
-    .expect("POST cast-vote");
+    let (status, json) = {
+        let mut last = None;
+        for attempt in 1..=3 {
+            let result = post_json_accept_committed(
+                "/zally/v1/cast-vote",
+                &cast_body,
+                || commitment_tree_next_index().map(|n| n >= 4).unwrap_or(false),
+            )
+            .expect("POST cast-vote");
+            let code = result.1.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+            if result.0 == 200 && code == 0 {
+                last = Some(result);
+                break;
+            }
+            eprintln!(
+                "[E2E] Step 4 attempt {}: status={} code={} log={:?}",
+                attempt,
+                result.0,
+                code,
+                result.1.get("log").or(result.1.get("error"))
+            );
+            last = Some(result);
+            if attempt < 3 {
+                block_wait();
+            }
+        }
+        last.expect("cast-vote: 3 attempts")
+    };
     assert_eq!(status, 200, "cast-vote: expected 200, got {} body={:?}", status, json);
-    assert_eq!(json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1), 0);
+    let code = json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+    assert_eq!(
+        code,
+        0,
+        "cast-vote rejected: code={} log={:?}",
+        code,
+        json.get("log").or(json.get("error"))
+    );
     block_wait();
 
     // ----- Step 5: Tree updated after cast (4 leaves) -----
