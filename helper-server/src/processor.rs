@@ -89,18 +89,22 @@ async fn process_share(
             )
         })?;
 
-    // Reconstruct vote_commitment (VC) leaf value from the tree.
-    // For nullifier derivation we need the actual leaf Fp value.
-    // Since TreeClient doesn't expose leaf values directly, we derive the VC
-    // from the shares_hash. In production this will come from the circuit's
-    // public inputs. For now, use shares_hash as a proxy for the VC.
-    let vc_bytes = BASE64_STANDARD
+    // Reconstruct the vote commitment (VC) leaf value.
+    // The VC leaf is vote_commitment_hash(shares_hash, proposal_id, vote_decision),
+    // NOT the bare shares_hash.
+    let shares_hash_bytes = BASE64_STANDARD
         .decode(&share.payload.shares_hash)
         .map_err(|e| format!("decode shares_hash: {}", e))?;
-    let mut vc_arr = [0u8; 32];
-    vc_arr.copy_from_slice(&vc_bytes);
-    let vote_commitment =
-        Option::from(Fp::from_repr(vc_arr)).ok_or("non-canonical shares_hash Fp")?;
+    let mut sh_arr = [0u8; 32];
+    sh_arr.copy_from_slice(&shares_hash_bytes);
+    let shares_hash_fp =
+        Option::from(Fp::from_repr(sh_arr)).ok_or("non-canonical shares_hash Fp")?;
+
+    let vote_commitment = vote_commitment_tree::vote_commitment_hash(
+        shares_hash_fp,
+        Fp::from(u64::from(share.payload.proposal_id)),
+        Fp::from(u64::from(share.payload.vote_decision)),
+    );
 
     // Derive share nullifier.
     let nullifier = derive_share_nullifier(&share.payload, vote_commitment)

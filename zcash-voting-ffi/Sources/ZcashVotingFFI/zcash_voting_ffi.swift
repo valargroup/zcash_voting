@@ -1285,14 +1285,22 @@ public struct EncryptedShare {
     public var c2: Data
     public var shareIndex: UInt32
     public var plaintextValue: UInt64
+    /**
+     * El Gamal randomness (32 bytes). Witness-only; must NOT be sent over the network.
+     */
+    public var randomness: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(c1: Data, c2: Data, shareIndex: UInt32, plaintextValue: UInt64) {
+    public init(c1: Data, c2: Data, shareIndex: UInt32, plaintextValue: UInt64,
+        /**
+         * El Gamal randomness (32 bytes). Witness-only; must NOT be sent over the network.
+         */randomness: Data) {
         self.c1 = c1
         self.c2 = c2
         self.shareIndex = shareIndex
         self.plaintextValue = plaintextValue
+        self.randomness = randomness
     }
 }
 
@@ -1315,6 +1323,9 @@ extension EncryptedShare: Equatable, Hashable {
         if lhs.plaintextValue != rhs.plaintextValue {
             return false
         }
+        if lhs.randomness != rhs.randomness {
+            return false
+        }
         return true
     }
 
@@ -1323,6 +1334,7 @@ extension EncryptedShare: Equatable, Hashable {
         hasher.combine(c2)
         hasher.combine(shareIndex)
         hasher.combine(plaintextValue)
+        hasher.combine(randomness)
     }
 }
 
@@ -1338,7 +1350,8 @@ public struct FfiConverterTypeEncryptedShare: FfiConverterRustBuffer {
                 c1: FfiConverterData.read(from: &buf),
                 c2: FfiConverterData.read(from: &buf),
                 shareIndex: FfiConverterUInt32.read(from: &buf),
-                plaintextValue: FfiConverterUInt64.read(from: &buf)
+                plaintextValue: FfiConverterUInt64.read(from: &buf),
+                randomness: FfiConverterData.read(from: &buf)
         )
     }
 
@@ -1347,6 +1360,7 @@ public struct FfiConverterTypeEncryptedShare: FfiConverterRustBuffer {
         FfiConverterData.write(value.c2, into: &buf)
         FfiConverterUInt32.write(value.shareIndex, into: &buf)
         FfiConverterUInt64.write(value.plaintextValue, into: &buf)
+        FfiConverterData.write(value.randomness, into: &buf)
     }
 }
 
@@ -3110,7 +3124,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zcash_voting_ffi_checksum_func_voting_ffi_version() != 33187) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_and_prove_delegation() != 1792) {
+    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_and_prove_delegation() != 23036) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_governance_pczt() != 30033) {

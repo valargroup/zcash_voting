@@ -144,6 +144,9 @@ pub struct EncryptedShare {
     pub c2: Vec<u8>,
     pub share_index: u32,
     pub plaintext_value: u64,
+    /// El Gamal randomness `r` (32 bytes, LE pallas::Scalar repr).
+    /// Needed for ZKP #2 witness; must NOT be sent over the network.
+    pub randomness: Vec<u8>,
 }
 
 /// Complete vote commitment bundle for submission to vote chain.

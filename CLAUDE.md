@@ -34,6 +34,16 @@ When writing PR descriptions, always describe changes relative to the target bra
 
 Do not create new migration files (e.g., `002_*.sql`). This is a pre-production codebase — modify the existing `001_init.sql` directly. Only create separate migrations if explicitly asked.
 
+## FFI Regeneration
+
+After modifying `librustvoting` public API, `zcash-voting-ffi/rust/src/lib.rs`, or any types exposed through the FFI layer, you **must** regenerate the FFI bindings before committing:
+
+```sh
+cd zcash-voting-ffi && make dev
+```
+
+This rebuilds the xcframework binaries and regenerates `Sources/ZcashVotingFFI/zcash_voting_ffi.swift`. The generated Swift file and xcframework binaries must be committed alongside the Rust changes.
+
 ## Code Change Guidelines
 
 **Never consider backwards compatibility** unless explicitly told to do so. Feel free to rename functions, change APIs, delete unused code, and refactor without worrying about breaking existing consumers. This is a research codebase where clean code matters more than stability.

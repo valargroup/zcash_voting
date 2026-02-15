@@ -50,8 +50,72 @@ pub type VoteCommitmentTree = TreeServer;
 
 use pasta_curves::Fp;
 
+/// Domain tag for Vote Commitments (matches `orchard::vote_proof::circuit::DOMAIN_VC`).
+pub const DOMAIN_VC: u64 = 1;
+
 /// Poseidon hash of two field elements (delegates to imt-tree for circuit consistency).
 #[inline]
 pub fn poseidon_hash(left: Fp, right: Fp) -> Fp {
     imt_tree::poseidon_hash(left, right)
+}
+
+/// Compute the vote commitment leaf hash (arity-4 Poseidon).
+///
+/// ```text
+/// vote_commitment_hash(shares_hash, proposal_id, vote_decision) =
+///     Poseidon(DOMAIN_VC, shares_hash, proposal_id, vote_decision)
+/// ```
+///
+/// This must produce identical output to `orchard::vote_proof::vote_commitment_hash`.
+pub fn vote_commitment_hash(
+    shares_hash: Fp,
+    proposal_id: Fp,
+    vote_decision: Fp,
+) -> Fp {
+    use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3};
+
+    poseidon::Hash::<_, P128Pow5T3, ConstantLength<4>, 3, 2>::init().hash([
+        Fp::from(DOMAIN_VC),
+        shares_hash,
+        proposal_id,
+        vote_decision,
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vote_commitment_hash_basic() {
+        // Sanity: different inputs → different outputs.
+        let a = vote_commitment_hash(Fp::from(1u64), Fp::from(2u64), Fp::from(0u64));
+        let b = vote_commitment_hash(Fp::from(1u64), Fp::from(2u64), Fp::from(1u64));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_vote_commitment_hash_deterministic() {
+        let h1 = vote_commitment_hash(Fp::from(42u64), Fp::from(3u64), Fp::from(1u64));
+        let h2 = vote_commitment_hash(Fp::from(42u64), Fp::from(3u64), Fp::from(1u64));
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_vote_commitment_hash_cross_validates_with_orchard() {
+        use orchard::vote_proof;
+
+        let shares_hash = Fp::from(0xDEAD_BEEFu64);
+        let proposal_id = Fp::from(5u64);
+        let vote_decision = Fp::from(1u64);
+
+        let ours = vote_commitment_hash(shares_hash, proposal_id, vote_decision);
+        let theirs = vote_proof::vote_commitment_hash(shares_hash, proposal_id, vote_decision);
+        assert_eq!(ours, theirs, "vote_commitment_hash must match orchard circuit helper");
+    }
+
+    #[test]
+    fn test_domain_vc_matches_orchard() {
+        assert_eq!(DOMAIN_VC, orchard::vote_proof::DOMAIN_VC);
+    }
 }

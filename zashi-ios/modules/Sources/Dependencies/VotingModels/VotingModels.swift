@@ -371,12 +371,15 @@ public struct EncryptedShare: Equatable, Sendable {
     public let c2: Data
     public let shareIndex: UInt32
     public let plaintextValue: UInt64
+    /// El Gamal randomness (32 bytes). Witness-only; must NOT be sent over the network.
+    public let randomness: Data
 
-    public init(c1: Data, c2: Data, shareIndex: UInt32, plaintextValue: UInt64) {
+    public init(c1: Data, c2: Data, shareIndex: UInt32, plaintextValue: UInt64, randomness: Data) {
         self.c1 = c1
         self.c2 = c2
         self.shareIndex = shareIndex
         self.plaintextValue = plaintextValue
+        self.randomness = randomness
     }
 }
 
