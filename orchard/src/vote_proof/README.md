@@ -107,7 +107,7 @@ Identical to the delegation circuit's `q_imt_swap` gate.
 
 ## Condition 3: Spend Authority ✅
 
-Purpose: prove the voter controls the voting hotkey address delegated to in Phase 1–2. Uses the same CommitIvk chain as ZKP 1 (delegation) condition 5.
+Purpose: prove the voter controls the voting hotkey address delegated to in Phase 1–2. Uses the same CommitIvk chain as ZKP 1 (delegation) condition 5, implemented via the shared **`circuit::address_ownership`** gadget (ZKP 1 and ZKP 2 both call `spend_auth_g_mul` and `prove_address_ownership`).
 
 ```
 vsk_ak      = [vsk] * SpendAuthG               (fixed-base ECC mul)
@@ -126,14 +126,12 @@ Where:
 - **vpk_g_d**: diversified base point (private witness, full affine point). Witnessed as `NonIdentityPoint`. The x-coordinate is extracted for Poseidon hashing in conditions 2 and 6.
 - **vpk_pk_d**: diversified transmission key (private witness, full affine point). Witnessed as `NonIdentityPoint`. Constrained to equal the derived `[ivk_v] * vpk_g_d` via `Point::constrain_equal`.
 
-**Structure:** Five steps in a scoped block:
-1. `ScalarFixed::new(vsk)` → `FixedPoint::mul(SpendAuthG)` → `vsk_ak_point` (fixed-base scalar mul, ~500 rows)
-2. `vsk_ak_point.extract_p()` → `ak` (x-coordinate extraction, 0 rows — just cell wiring)
-3. `ScalarFixed::new(rivk_v)` → `commit_ivk_gadget(sinsemilla_chip, ecc_chip, commit_ivk_chip, ak, vsk_nk, rivk_v)` → `ivk_v` (Sinsemilla commitment with canonicity checks, ~2,000 rows)
-4. `ScalarVar::from_base(ivk_v)` → `vpk_g_d_point.mul(ivk_v_scalar)` → `derived_vpk_pk_d` (variable-base scalar mul, ~500 rows)
-5. `derived_vpk_pk_d.constrain_equal(vpk_pk_d_point)` — full point equality (both coordinates)
+**Structure:** Uses the shared `circuit::address_ownership` gadget:
+1. `spend_auth_g_mul(ecc_chip, layouter, "cond3: [vsk] SpendAuthG", vsk_scalar)` → `vsk_ak_point` (fixed-base scalar mul)
+2. `vsk_ak_point.extract_p()` → `ak` (x-coordinate extraction)
+3. `prove_address_ownership(..., ak, vsk_nk, rivk_v_scalar, &vpk_g_d_point, &vpk_pk_d_point)` — CommitIvk, `[ivk_v]*vpk_g_d`, and constrain to vpk_pk_d (same flow as ZKP 1 condition 5)
 
-**Chip dependencies:** `SinsemillaChip` (for the CommitIvk Sinsemilla hash), `CommitIvkChip` (for ak/nk canonicity gate), `EccChip` (for fixed-base and variable-base scalar multiplication). The Sinsemilla chip also loads the 10-bit lookup table used by conditions 5 and 8 (replacing the manual table loading).
+**Chip dependencies:** `SinsemillaChip`, `CommitIvkChip`, `EccChip` (used inside the shared gadget). The Sinsemilla chip also loads the 10-bit lookup table used by conditions 5 and 8.
 
 **Constraint:** The circuit derives vpk_pk_d from vsk → ak → ivk_v → [ivk_v] * vpk_g_d and enforces full point equality with the witnessed vpk_pk_d. Since vpk_pk_d's x-coordinate flows into conditions 2 and 6 (VAN integrity hashes), and vpk_g_d's x-coordinate flows into the same hashes, any mismatch in the key hierarchy would break conditions 2/3/6 simultaneously.
 
@@ -145,7 +143,7 @@ Where:
 
 **Out-of-circuit helper:** `derive_voting_address(vsk, nk, rivk_v)` in tests performs the same computation: `[vsk] * SpendAuthG → ExtractP → CommitIvk → [ivk_v] * g_d`. Uses `CommitDomain::short_commit` from `halo2_gadgets::sinsemilla::primitives`.
 
-**Constructions:** `SinsemillaChip`, `CommitIvkChip`, `EccChip`, `FixedPoint`, `ScalarFixed`, `NonIdentityPoint`, `ScalarVar`, `Point::constrain_equal`.
+**Constructions:** Shared `circuit::address_ownership::spend_auth_g_mul` and `circuit::address_ownership::prove_address_ownership`; `SinsemillaChip`, `CommitIvkChip`, `EccChip`, `ScalarFixed`, `NonIdentityPoint`, `Point::constrain_equal`.
 
 ## Condition 4: VAN Nullifier Integrity ✅
 

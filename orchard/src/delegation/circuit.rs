@@ -30,16 +30,15 @@ use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
 
 use crate::{
     circuit::{
+        address_ownership::{prove_address_ownership, spend_auth_g_mul},
         commit_ivk::{CommitIvkChip, CommitIvkConfig},
         gadget::{
             add_chip::{AddChip, AddConfig},
-            assign_free_advice, commit_ivk, derive_nullifier, note_commit, AddInstruction,
+            assign_free_advice, derive_nullifier, note_commit, AddInstruction,
         },
         note_commit::{NoteCommitChip, NoteCommitConfig},
     },
-    constants::{
-        OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains,
-    },
+    constants::{OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains},
     keys::{
         CommitIvkRandomness, DiversifiedTransmissionKey, FullViewingKey, NullifierDerivingKey,
         Scope, SpendValidatingKey,
@@ -57,7 +56,7 @@ use crate::{
 use halo2_gadgets::{
     ecc::{
         chip::{EccChip, EccConfig},
-        FixedPoint, NonIdentityPoint, Point, ScalarFixed, ScalarVar,
+        NonIdentityPoint, Point, ScalarFixed, ScalarVar,
     },
     poseidon::{
         primitives::{self as poseidon, ConstantLength},
@@ -674,6 +673,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             self.g_d_signed.as_ref().map(|gd| gd.to_affine()),
         )?;
 
+        // Witness pk_d_signed (diversified transmission key). Used by condition 5 (address
+        // ownership) and condition 1 (signed note commitment).
+        let pk_d_signed = NonIdentityPoint::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "witness pk_d_signed"),
+            self.pk_d_signed
+                .as_ref()
+                .map(|pk_d_signed| pk_d_signed.inner().to_affine()),
+        )?;
+
         // Witness nk (nullifier deriving key).
         let nk = assign_free_advice(
             layouter.namespace(|| "witness nk"),
@@ -753,28 +762,15 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // rk = [alpha] * SpendAuthG + ak_P
         // ---------------------------------------------------------------
 
-        // Spend authority
-        // Proves that the public rk is a valid rerandomization of the prover's ak.
+        // Spend authority: proves that the public rk is a valid rerandomization of the prover's ak.
         // The out-of-circuit verifier checks that the keystone signature is valid under rk,
         // so this links the ZKP to the signature without revealing ak.
         {
-            // Witness alpha (spend auth randomizer) as a full-width fixed scalar.
             let alpha =
                 ScalarFixed::new(ecc_chip.clone(), layouter.namespace(|| "alpha"), self.alpha)?;
-
-            // alpha_commitment = [alpha] SpendAuthG
-            let (alpha_commitment, _) = {
-                // SpendAuthG is a fixed generator point on the Pallas elliptic curve, used
-                // specifically for spend authorization in the Orchard protocol.
-                let spend_auth_g = OrchardFixedBasesFull::SpendAuthG;
-                let spend_auth_g = FixedPoint::from_inner(ecc_chip.clone(), spend_auth_g);
-                spend_auth_g.mul(layouter.namespace(|| "[alpha] SpendAuthG"), alpha)?
-            };
-
-            // rk = [alpha] SpendAuthG + ak_P
+            let alpha_commitment =
+                spend_auth_g_mul(ecc_chip.clone(), layouter.namespace(|| "cond4"), "[alpha] SpendAuthG", alpha)?;
             let rk = alpha_commitment.add(layouter.namespace(|| "rk"), &ak_P)?;
-
-            // Constrain rk to equal the public inputs (x and y coordinates).
             layouter.constrain_instance(rk.inner().x().cell(), config.primary, RK_X)?;
             layouter.constrain_instance(rk.inner().y().cell(), config.primary, RK_Y)?;
         }
@@ -784,58 +780,27 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // pk_d_signed = [ivk] * g_d_signed.
         // ---------------------------------------------------------------
 
-        // Diversified address integrity.
-        // ivk = ⊥ or pk_d_signed = [ivk] * g_d_signed
-        // where ivk = CommitIvk_rivk(ExtractP(ak_P), nk)
-        //
-        // The ⊥ case is handled internally by CommitDomain::short_commit:
-        // incomplete addition allows ⊥ to occur, and synthesis detects
-        // these edge cases and aborts proof creation.
-        let ivk_cell = {
-            let ivk = {
-                // ExtractP(ak_P) -- extract the x-coordinate from the curve point
-                let ak = ak_P.extract_p().inner().clone();
-                let rivk = ScalarFixed::new(
-                    ecc_chip.clone(),
-                    layouter.namespace(|| "rivk"),
-                    self.rivk.map(|rivk| rivk.inner()),
-                )?;
-
-                // Commit ak and nk with rivk randomness, creating an ivk.
-                commit_ivk(
-                    config.sinsemilla_chip_1(),
-                    ecc_chip.clone(),
-                    config.commit_ivk_chip(),
-                    layouter.namespace(|| "CommitIvk"),
-                    ak,
-                    nk.clone(),
-                    rivk,
-                )?
-            };
-
-            // ivk is internal — NOT constrained to a public input.
-            let ivk_cell = ivk.inner().clone();
-
-            // Convert ivk (an x-coordinate) to a variable-base scalar for EC multiplication.
-            let ivk_scalar =
-                ScalarVar::from_base(ecc_chip.clone(), layouter.namespace(|| "ivk"), ivk.inner())?;
-
-            // [ivk] g_d_signed - derive the expected pk_d
-            let (derived_pk_d_signed, _ivk) =
-                g_d_signed.mul(layouter.namespace(|| "[ivk] g_d_signed"), ivk_scalar)?;
-
-            // Witness pk_d_signed and constrain it to equal the derived value.
-            let pk_d_signed = NonIdentityPoint::new(
-                ecc_chip.clone(),
-                layouter.namespace(|| "witness pk_d_signed"),
-                self.pk_d_signed
-                    .map(|pk_d_signed| pk_d_signed.inner().to_affine()),
-            )?;
-            derived_pk_d_signed
-                .constrain_equal(layouter.namespace(|| "pk_d_signed equality"), &pk_d_signed)?;
-
-            ivk_cell
-        };
+        // Diversified address integrity via shared address_ownership gadget.
+        // ivk = ⊥ or pk_d_signed = [ivk] * g_d_signed where ivk = CommitIvk_rivk(ExtractP(ak_P), nk).
+        // The ⊥ case is handled internally by CommitDomain::short_commit.
+        let ak = ak_P.extract_p().inner().clone();
+        let rivk = ScalarFixed::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "rivk"),
+            self.rivk.map(|rivk| rivk.inner()),
+        )?;
+        let ivk_cell = prove_address_ownership(
+            config.sinsemilla_chip_1(),
+            ecc_chip.clone(),
+            config.commit_ivk_chip(),
+            layouter.namespace(|| "cond5"),
+            "cond5",
+            ak,
+            nk.clone(),
+            rivk,
+            &g_d_signed,
+            &pk_d_signed,
+        )?;
 
         // ---------------------------------------------------------------
         // Condition 1: Signed note commitment integrity.

@@ -62,7 +62,7 @@ use pasta_curves::{arithmetic::CurveAffine, pallas, vesta};
 use halo2_gadgets::{
     ecc::{
         chip::{EccChip, EccConfig},
-        FixedPoint, NonIdentityPoint, ScalarFixed, ScalarVar,
+        NonIdentityPoint, ScalarFixed, ScalarVar,
     },
     poseidon::{
         primitives::{self as poseidon, ConstantLength},
@@ -71,13 +71,11 @@ use halo2_gadgets::{
     sinsemilla::chip::{SinsemillaChip, SinsemillaConfig},
     utilities::{bool_check, lookup_range_check::LookupRangeCheckConfig},
 };
+use crate::circuit::address_ownership::{prove_address_ownership, spend_auth_g_mul};
 use crate::circuit::commit_ivk::{CommitIvkChip, CommitIvkConfig};
-use crate::circuit::gadget::{
-    add_chip::{AddChip, AddConfig},
-    commit_ivk as commit_ivk_gadget, AddInstruction,
-};
+use crate::circuit::gadget::{add_chip::{AddChip, AddConfig}, AddInstruction};
 use crate::constants::{
-    OrchardCommitDomains, OrchardFixedBases, OrchardFixedBasesFull, OrchardHashDomains,
+    OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains,
 };
 use crate::circuit::van_integrity;
 
@@ -898,62 +896,37 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // (ZKP 1, condition 5) but applied to the voting key hierarchy.
         // ---------------------------------------------------------------
 
-        {
-            // Step 1: vsk_ak = [vsk] * SpendAuthG (fixed-base scalar multiplication).
-            // vsk is the voting spending key; SpendAuthG is the fixed generator.
-            let vsk_scalar = ScalarFixed::new(
-                ecc_chip.clone(),
-                layouter.namespace(|| "cond3: vsk"),
-                self.vsk,
-            )?;
-            let spend_auth_g = OrchardFixedBasesFull::SpendAuthG;
-            let spend_auth_g = FixedPoint::from_inner(ecc_chip.clone(), spend_auth_g);
-            let (vsk_ak_point, _) =
-                spend_auth_g.mul(layouter.namespace(|| "cond3: [vsk] SpendAuthG"), vsk_scalar)?;
+        let vsk_scalar = ScalarFixed::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "cond3: vsk"),
+            self.vsk,
+        )?;
+        let vsk_ak_point = spend_auth_g_mul(
+            ecc_chip.clone(),
+            layouter.namespace(|| "cond3"),
+            "cond3: [vsk] SpendAuthG",
+            vsk_scalar,
+        )?;
+        let ak = vsk_ak_point.extract_p().inner().clone();
 
-            // Step 2: ak = ExtractP(vsk_ak) — extract the x-coordinate.
-            let ak = vsk_ak_point.extract_p().inner().clone();
+        let rivk_v_scalar = ScalarFixed::new(
+            ecc_chip.clone(),
+            layouter.namespace(|| "cond3: rivk_v"),
+            self.rivk_v,
+        )?;
 
-            // Step 3: ivk_v = CommitIvk(ak, nk, rivk_v) — Sinsemilla-based commitment.
-            // nk is the nullifier deriving key (vsk_nk), shared with condition 4.
-            // rivk_v is the CommitIvk randomness (blinding scalar).
-            let rivk_v_scalar = ScalarFixed::new(
-                ecc_chip.clone(),
-                layouter.namespace(|| "cond3: rivk_v"),
-                self.rivk_v,
-            )?;
-
-            let ivk_v = commit_ivk_gadget(
-                config.sinsemilla_chip(),
-                ecc_chip.clone(),
-                config.commit_ivk_chip(),
-                layouter.namespace(|| "cond3: CommitIvk"),
-                ak,
-                vsk_nk,
-                rivk_v_scalar,
-            )?;
-
-            // Step 4: [ivk_v] * vpk_g_d — variable-base scalar multiplication.
-            // ivk_v is an x-coordinate (base field element); convert to a scalar
-            // for the variable-base ECC mul.
-            let ivk_v_scalar = ScalarVar::from_base(
-                ecc_chip.clone(),
-                layouter.namespace(|| "cond3: ivk_v as scalar"),
-                ivk_v.inner(),
-            )?;
-            let (derived_vpk_pk_d, _) = vpk_g_d_point.mul(
-                layouter.namespace(|| "cond3: [ivk_v] vpk_g_d"),
-                ivk_v_scalar,
-            )?;
-
-            // Step 5: Constrain derived vpk_pk_d == witnessed vpk_pk_d.
-            // This proves the prover knows vsk such that the voting address
-            // (vpk_g_d, vpk_pk_d) is correctly derived.
-            derived_vpk_pk_d.constrain_equal(
-                layouter.namespace(|| "cond3: vpk_pk_d equality"),
-                &vpk_pk_d_point,
-            )?;
-        }
+        let _ivk_cell = prove_address_ownership(
+            config.sinsemilla_chip(),
+            ecc_chip.clone(),
+            config.commit_ivk_chip(),
+            layouter.namespace(|| "cond3"),
+            "cond3",
+            ak,
+            vsk_nk,
+            rivk_v_scalar,
+            &vpk_g_d_point,
+            &vpk_pk_d_point,
+        )?;
 
         // ---------------------------------------------------------------
         // Condition 1: VAN Membership.

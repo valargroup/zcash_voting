@@ -146,7 +146,7 @@ Where:
 - **alpha** — fresh randomness. If rk were the same across transactions, an observer could link them to the same spender.
 - **SpendAuthG** — the fixed base generator point on the Pallas curve dedicated to spend authorization.
 
-**Constructions:** `EccChip` (ScalarFixed, FixedPoint mul, add).
+**Constructions:** Shared `circuit::address_ownership::spend_auth_g_mul` (fixed-base `[alpha]*SpendAuthG`), then `EccChip` add to get rk.
 
 ## 5. CommitIvk & Diversified Address Integrity
 
@@ -172,7 +172,7 @@ Where:
 - **g_d_signed** — the diversified generator from the note recipient's address.
 - **pk_d_signed** — the diversified transmission key from the note recipient's address.
 
-**Constructions:** `CommitIvkChip`, `SinsemillaChip` (config 1), `EccChip`.
+**Constructions:** Shared `circuit::address_ownership::prove_address_ownership` (CommitIvk + `[ivk]*g_d` + constrain to pk_d). Uses `CommitIvkChip`, `SinsemillaChip` (config 1), `EccChip` internally.
 
 ## 6. Output Note Commitment Integrity
 
