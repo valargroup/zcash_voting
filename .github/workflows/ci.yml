@@ -133,12 +133,21 @@ jobs:
           key: ${{ runner.os }}-api-rust-${{ hashFiles('sdk/circuits/Cargo.lock', 'vote-commitment-tree-client/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-api-rust-
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: sdk/.cache/go-build
+          key: ${{ runner.os }}-api-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-api-go-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
       - name: Build and install zallyd
         run: make install-ffi
+        env:
+          GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
       - name: Pre-build vote-commitment-tree-client
         run: cargo build --manifest-path ../vote-commitment-tree-client/Cargo.toml
       - name: Initialize chain
