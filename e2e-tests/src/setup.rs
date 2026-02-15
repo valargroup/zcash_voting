@@ -1,10 +1,10 @@
 //! Build a real delegation bundle for E2E tests (ZKP #1 + RedPallas).
 //!
-//! Generates session params with vote_end_time = now + 420s (7 min) and a canonical
+//! Generates session params with vote_end_time = now + 240s (4 min) and a canonical
 //! vote_round_id, then builds the delegation bundle and RedPallas signature
 //! so the test can create the session and delegate without fixture files.
-//! CI logs show ~4 min from test start to create session and ~6 min to cast-vote;
-//! 7 min keeps the round ACTIVE through delegate/cast/first reveal, then we wait for TALLYING.
+//! vote_end_time is fixed at bundle build. Raw CI logs: bundle at 19:59:19, cast-vote at 20:02:11
+//! (~173s); 4 min keeps the round ACTIVE through delegate/cast/first reveal with margin.
 
 use crate::payloads::{DelegationBundlePayload, SetupRoundFields};
 use blake2b_simd::Params as Blake2bParams;
@@ -26,7 +26,7 @@ use pasta_curves::pallas;
 use rand::rngs::OsRng;
 
 /// Build delegation bundle and session fields for the E2E test.
-/// vote_end_time = now + 420s (7 min); CI needs ~6 min to reach cast-vote, so this keeps the round ACTIVE.
+/// vote_end_time = now + 240s (4 min). CI logs: ~173s from bundle to cast-vote; 4 min keeps round ACTIVE.
 /// Returns payload for MsgDelegateVote and session fields for MsgCreateVotingSession (so round_id matches the proof).
 pub fn build_delegation_bundle_for_test(
 ) -> Result<(DelegationBundlePayload, SetupRoundFields), Box<dyn std::error::Error + Send + Sync>>
@@ -95,7 +95,7 @@ pub fn build_delegation_bundle_for_test(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 420;
+        + 240;
 
     let nc_root_repr = nc_root.to_repr();
     let nf_imt_root_repr = nf_imt_root.to_repr();
