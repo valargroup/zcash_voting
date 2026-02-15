@@ -19,11 +19,13 @@ Proves that a registered voter is casting a valid vote, without revealing which 
    * **ea_pk_y** (offset 8): y-coordinate of the election authority public key. Both coordinates are public to prevent sign-ambiguity attacks (using −ea_pk would corrupt the tally).
 
 - Private (VAN ownership — conditions 1–4)
-   * **voting_hotkey_pk**: the voting hotkey public key (x-coordinate of the ECC point derived from `vsk`).
+   * **g_d_x**: diversified base point x-coordinate (from DiversifyHash(d)). Matches ZKP 1 (delegation) VAN structure.
+   * **pk_d_x**: diversified transmission key x-coordinate (pk_d = [ivk] * g_d). Matches ZKP 1 VAN structure.
+   * **voting_hotkey_pk**: the voting hotkey public key (x-coordinate of [vsk]*SpendAuthG); used for condition 3 (spend authority).
    * **total_note_value**: the voter's total delegated weight.
    * **proposal_authority_old**: remaining proposal authority bitmask in the old VAN.
    * **gov_comm_rand**: blinding randomness for the VAN commitment.
-   * **vote_authority_note_old**: the old VAN commitment (Poseidon hash of its components).
+   * **vote_authority_note_old**: the old VAN commitment (two-layer Poseidon hash, same structure as ZKP 1 gov_comm).
    * **vote_comm_tree_path**: Poseidon-based Merkle authentication path (24 sibling hashes).
    * **vote_comm_tree_position**: leaf position in the vote commitment tree.
    * **vsk**: voting spending key (scalar for ECC multiplication).
@@ -49,27 +51,28 @@ Proves that a registered voter is casting a valid vote, without revealing which 
 
 ## Condition 2: VAN Integrity ✅
 
-Purpose: prove that the old VAN commitment is correctly constructed from its components. This binds the voter's identity, weight, round, authority, and blinding factor into a single authenticated leaf in the vote commitment tree.
+Purpose: prove that the old VAN commitment is correctly constructed from its components. Uses the **same two-layer hash structure as ZKP 1 (delegation)** so that a VAN created by the delegation circuit can be spent (opened) by the vote proof circuit.
 
 ```
-vote_authority_note_old = Poseidon(DOMAIN_VAN, voting_hotkey_pk, total_note_value,
-                                   voting_round_id, proposal_authority_old, gov_comm_rand)
+gov_comm_core = Poseidon(DOMAIN_VAN, g_d_x, pk_d_x, total_note_value,
+                         voting_round_id, proposal_authority_old)
+vote_authority_note_old = Poseidon(gov_comm_core, gov_comm_rand)
 ```
 
 Where:
 - **DOMAIN_VAN**: `0`. Domain separation tag for Vote Authority Notes (vs `DOMAIN_VC = 1` for Vote Commitments). Assigned via `assign_advice_from_constant` so the value is baked into the verification key.
-- **voting_hotkey_pk**: the voting hotkey public key. A single Pallas base field element (the x-coordinate of the ECC point derived from `vsk`). Shared with condition 3 (spend authority check).
+- **g_d_x**, **pk_d_x**: diversified address components (diversified base and transmission key x-coordinates). Same encoding as in ZKP 1 condition 7, so a VAN created by delegation has the same commitment structure.
 - **total_note_value**: the voter's total delegated weight. Shared with condition 7 (shares sum check).
 - **voting_round_id**: the vote round identifier (public input at offset 6). Copied from the instance column via `assign_advice_from_instance`, ensuring the in-circuit value matches the verifier's public input.
 - **proposal_authority_old**: remaining proposal authority bitmask. Shared with condition 5 (decrement check).
 - **gov_comm_rand**: random blinding factor. Prevents observers from brute-forcing the address or weight from the public VAN commitment.
-- **vote_authority_note_old**: the witnessed VAN commitment. Constrained to equal the Poseidon output via `constrain_equal`.
+- **vote_authority_note_old**: the witnessed VAN commitment. Constrained to equal the two-layer Poseidon output via `constrain_equal`.
 
-**Function:** `Poseidon` with `ConstantLength<6>`. Uses `Pow5Chip` / `P128Pow5T3` with rate 2 (3 absorption rounds for 6 inputs).
+**Function:** Two Poseidon invocations: first `ConstantLength<6>` (core), then `ConstantLength<2>` (core, gov_comm_rand). Uses `Pow5Chip` / `P128Pow5T3` with rate 2. Matches delegation circuit condition 7 (gov_comm) structure.
 
-**Constraint:** The circuit computes `derived_van = Poseidon(DOMAIN_VAN, voting_hotkey_pk, total_note_value, voting_round_id, proposal_authority_old, gov_comm_rand)` and enforces strict equality `derived_van == vote_authority_note_old`. Since `vote_authority_note_old` will also be used as the Merkle leaf in condition 1, this creates a binding: the VAN membership proof and the VAN integrity check are tied to the same commitment.
+**Constraint:** The circuit computes the two-layer hash and enforces strict equality with `vote_authority_note_old`. Since `vote_authority_note_old` will also be used as the Merkle leaf in condition 1, this creates a binding: the VAN membership proof and the VAN integrity check are tied to the same commitment.
 
-**Out-of-circuit helper:** `van_integrity_hash()` computes the same Poseidon hash outside the circuit for builder and test use.
+**Out-of-circuit helper:** `van_integrity_hash(g_d_x, pk_d_x, total_note_value, voting_round_id, proposal_authority_old, gov_comm_rand)` computes the same two-layer hash outside the circuit for builder and test use.
 
 **Constructions:** `PoseidonChip`.
 
@@ -158,22 +161,17 @@ Where:
 
 ## Condition 6: New VAN Integrity ✅
 
-Purpose: the new VAN has the same fields as the old except with decremented authority.
+Purpose: the new VAN has the same structure as the old (ZKP 1–compatible two-layer hash) except with decremented authority.
 
-```
-vote_authority_note_new = Poseidon(DOMAIN_VAN, voting_hotkey_pk, total_note_value,
-                                   voting_round_id, proposal_authority_new, gov_comm_rand)
-```
+Same two-layer formula as condition 2: `gov_comm_core = Poseidon(DOMAIN_VAN, g_d_x, pk_d_x, total_note_value, voting_round_id, proposal_authority_new)` then `vote_authority_note_new = Poseidon(gov_comm_core, gov_comm_rand)`.
 
 Where:
-- All inputs except `proposal_authority_new` are cell-equality-linked to the same witness cells used in condition 2.
-- **proposal_authority_new**: flows from condition 5's output. This is the only difference between the condition 2 and condition 6 Poseidon hashes.
+- **g_d_x**, **pk_d_x**, **total_note_value**, **voting_round_id**, **gov_comm_rand** are cell-equality-linked to the same witness cells used in condition 2.
+- **proposal_authority_new**: flows from condition 5's output. This is the only difference between the condition 2 and condition 6 hashes.
 
-**Function:** `Poseidon` with `ConstantLength<6>` (same as condition 2).
+**Constraint:** The circuit computes the two-layer hash and enforces `constrain_instance(derived_van_new, VOTE_AUTHORITY_NOTE_NEW)` — binding the result to the public input at offset 1.
 
-**Constraint:** The circuit computes the hash and enforces `constrain_instance(derived_van_new, VOTE_AUTHORITY_NOTE_NEW)` — binding the result to the public input at offset 1.
-
-**Out-of-circuit helper:** Reuses `van_integrity_hash()` with `proposal_authority_old - 1` as the authority argument.
+**Out-of-circuit helper:** Reuses `van_integrity_hash(g_d_x, pk_d_x, total_note_value, voting_round_id, proposal_authority_new, gov_comm_rand)` with `proposal_authority_new = proposal_authority_old - 1`.
 
 **Constructions:** `PoseidonChip`.
 

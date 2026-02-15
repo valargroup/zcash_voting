@@ -11,7 +11,7 @@
 //! - **Condition 6**: New VAN Integrity (Poseidon hash, `constrain_instance`).
 //! - **Condition 7**: Shares Sum Correctness (AddChip, `constrain_equal`).
 //! - **Condition 8**: Shares Range (LookupRangeCheck, `[0, 2^30)`).
-//! - **Condition 9**: Shares Hash Integrity (Poseidon `ConstantLength<8>`, `constrain_instance`).
+//! - **Condition 9**: Shares Hash Integrity (Poseidon `ConstantLength<8>`; output flows to condition 11).
 //! - **Condition 10**: Encryption Integrity (ECC variable-base mul, `constrain_equal`).
 //! - **Condition 11**: Vote Commitment Integrity (Poseidon `ConstantLength<4>`, `constrain_instance`).
 //!
@@ -22,8 +22,8 @@
 //! VAN ownership and spending:
 //! - **Condition 1**: VAN Membership — Merkle path from `vote_authority_note_old`
 //!   to `vote_comm_tree_root`.
-//! - **Condition 2**: VAN Integrity — `vote_authority_note_old` is a correct
-//!   Poseidon hash of its components. *(implemented)*
+//! - **Condition 2**: VAN Integrity — `vote_authority_note_old` is the two-layer
+//!   Poseidon hash (ZKP 1–compatible: core then finalize with rand). *(implemented)*
 //! - **Condition 3**: Spend Authority — prover knows `vsk` such that
 //!   `voting_hotkey_pk = ExtractP([vsk] * SpendAuthG)`. *(implemented)*
 //! - **Condition 4**: VAN Nullifier Integrity — `van_nullifier` is correctly
@@ -32,8 +32,8 @@
 //! New VAN construction:
 //! - **Condition 5**: Proposal Authority Decrement — `proposal_authority_new =
 //!   proposal_authority_old - 1`, and `proposal_authority_old > 0`. *(implemented)*
-//! - **Condition 6**: New VAN Integrity — same structure as condition 2 but
-//!   with decremented authority. *(implemented)*
+//! - **Condition 6**: New VAN Integrity — same two-layer structure as condition 2
+//!   but with decremented authority. *(implemented)*
 //!
 //! Vote commitment construction:
 //! - **Condition 7**: Shares Sum Correctness — `sum(shares_1..4) = total_note_value`.
@@ -149,28 +149,33 @@ const _: usize = VOTE_COMM_TREE_ANCHOR_HEIGHT;
 
 /// Out-of-circuit VAN integrity hash (condition 2).
 ///
-/// Computes:
+/// Matches ZKP 1 (delegation) two-layer structure for cross-circuit interoperability:
 /// ```text
-/// Poseidon(DOMAIN_VAN, voting_hotkey_pk, total_note_value,
-///          voting_round_id, proposal_authority_old, gov_comm_rand)
+/// gov_comm_core = Poseidon(DOMAIN_VAN, g_d_x, pk_d_x, total_note_value,
+///                          voting_round_id, proposal_authority)
+/// vote_authority_note = Poseidon(gov_comm_core, gov_comm_rand)
 /// ```
 ///
 /// Used by the builder and tests to compute the expected VAN commitment.
 pub fn van_integrity_hash(
-    voting_hotkey_pk: pallas::Base,
+    g_d_x: pallas::Base,
+    pk_d_x: pallas::Base,
     total_note_value: pallas::Base,
     voting_round_id: pallas::Base,
-    proposal_authority_old: pallas::Base,
+    proposal_authority: pallas::Base,
     gov_comm_rand: pallas::Base,
 ) -> pallas::Base {
-    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<6>, 3, 2>::init().hash([
-        pallas::Base::from(DOMAIN_VAN),
-        voting_hotkey_pk,
-        total_note_value,
-        voting_round_id,
-        proposal_authority_old,
-        gov_comm_rand,
-    ])
+    let gov_comm_core =
+        poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<6>, 3, 2>::init().hash([
+            pallas::Base::from(DOMAIN_VAN),
+            g_d_x,
+            pk_d_x,
+            total_note_value,
+            voting_round_id,
+            proposal_authority,
+        ]);
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init()
+        .hash([gov_comm_core, gov_comm_rand])
 }
 
 /// Returns the domain separator for the VAN nullifier inner hash.
@@ -461,9 +466,15 @@ pub struct Circuit {
     /// Leaf position in the vote commitment tree.
     pub(crate) vote_comm_tree_position: Value<u32>,
 
-    // Condition 2 (VAN Integrity): Poseidon(DOMAIN_VAN, voting_hotkey_pk,
-    // total_note_value, voting_round_id, proposal_authority_old, gov_comm_rand).
-    /// The voting hotkey public key (x-coordinate of the ECC point derived from vsk).
+    // Condition 2 (VAN Integrity): two-layer hash matching ZKP 1 (delegation):
+    // gov_comm_core = Poseidon(DOMAIN_VAN, g_d_x, pk_d_x, total_note_value,
+    //                          voting_round_id, proposal_authority_old);
+    // vote_authority_note_old = Poseidon(gov_comm_core, gov_comm_rand).
+    /// Diversified base point x-coordinate (from DiversifyHash(d)).
+    pub(crate) g_d_x: Value<pallas::Base>,
+    /// Diversified transmission key x-coordinate (pk_d = [ivk] * g_d).
+    pub(crate) pk_d_x: Value<pallas::Base>,
+    /// The voting hotkey public key (x-coordinate of [vsk]*SpendAuthG); used for condition 3 (spend authority).
     pub(crate) voting_hotkey_pk: Value<pallas::Base>,
     /// The voter's total delegated weight.
     pub(crate) total_note_value: Value<pallas::Base>,
@@ -532,6 +543,8 @@ impl Circuit {
     pub fn with_van_witnesses(
         vote_comm_tree_path: Value<[pallas::Base; VOTE_COMM_TREE_DEPTH]>,
         vote_comm_tree_position: Value<u32>,
+        g_d_x: Value<pallas::Base>,
+        pk_d_x: Value<pallas::Base>,
         voting_hotkey_pk: Value<pallas::Base>,
         total_note_value: Value<pallas::Base>,
         proposal_authority_old: Value<pallas::Base>,
@@ -542,6 +555,8 @@ impl Circuit {
         Circuit {
             vote_comm_tree_path,
             vote_comm_tree_position,
+            g_d_x,
+            pk_d_x,
             voting_hotkey_pk,
             total_note_value,
             proposal_authority_old,
@@ -555,11 +570,11 @@ impl Circuit {
 
 /// In-circuit VAN integrity hash (conditions 2 and 6).
 ///
-/// Computes the Poseidon hash used for both the old VAN (condition 2)
-/// and the new VAN (condition 6):
+/// Two-layer structure matching ZKP 1 (delegation) for cross-circuit interoperability:
 /// ```text
-/// Poseidon(domain_van, voting_hotkey_pk, total_note_value,
-///          voting_round_id, proposal_authority, gov_comm_rand)
+/// gov_comm_core = Poseidon(domain_van, g_d_x, pk_d_x, total_note_value,
+///                          voting_round_id, proposal_authority)
+/// result = Poseidon(gov_comm_core, gov_comm_rand)
 /// ```
 ///
 /// The only difference between conditions 2 and 6 is the
@@ -570,34 +585,50 @@ fn van_integrity_poseidon(
     layouter: &mut impl Layouter<pallas::Base>,
     label: &str,
     domain_van: AssignedCell<pallas::Base, pallas::Base>,
-    voting_hotkey_pk: AssignedCell<pallas::Base, pallas::Base>,
+    g_d_x: AssignedCell<pallas::Base, pallas::Base>,
+    pk_d_x: AssignedCell<pallas::Base, pallas::Base>,
     total_note_value: AssignedCell<pallas::Base, pallas::Base>,
     voting_round_id: AssignedCell<pallas::Base, pallas::Base>,
     proposal_authority: AssignedCell<pallas::Base, pallas::Base>,
     gov_comm_rand: AssignedCell<pallas::Base, pallas::Base>,
 ) -> Result<AssignedCell<pallas::Base, pallas::Base>, plonk::Error> {
-    let message = [
+    let core_message = [
         domain_van,
-        voting_hotkey_pk,
+        g_d_x,
+        pk_d_x,
         total_note_value,
         voting_round_id,
         proposal_authority,
-        gov_comm_rand,
     ];
-    let poseidon_hasher = PoseidonHash::<
+    let poseidon_hasher_6 = PoseidonHash::<
         pallas::Base,
         _,
         poseidon::P128Pow5T3,
         ConstantLength<6>,
-        3, // WIDTH (state size, from P128Pow5T3)
-        2, // RATE (elements absorbed per permutation)
+        3,
+        2,
     >::init(
         config.poseidon_chip(),
-        layouter.namespace(|| alloc::format!("{label} Poseidon init")),
+        layouter.namespace(|| alloc::format!("{label} core Poseidon init")),
     )?;
-    poseidon_hasher.hash(
-        layouter.namespace(|| alloc::format!("{label} Poseidon hash")),
-        message,
+    let gov_comm_core = poseidon_hasher_6.hash(
+        layouter.namespace(|| alloc::format!("{label} Poseidon(core)")),
+        core_message,
+    )?;
+    let poseidon_hasher_2 = PoseidonHash::<
+        pallas::Base,
+        _,
+        poseidon::P128Pow5T3,
+        ConstantLength<2>,
+        3,
+        2,
+    >::init(
+        config.poseidon_chip(),
+        layouter.namespace(|| alloc::format!("{label} final Poseidon init")),
+    )?;
+    poseidon_hasher_2.hash(
+        layouter.namespace(|| alloc::format!("{label} Poseidon(core, rand)")),
+        [gov_comm_core, gov_comm_rand],
     )
 }
 
@@ -775,7 +806,17 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             },
         )?;
 
-        // Private witnesses for condition 2.
+        // Private witnesses for condition 2 (VAN integrity: g_d_x, pk_d_x match ZKP 1).
+        let g_d_x = assign_free_advice(
+            layouter.namespace(|| "witness g_d_x"),
+            config.advices[0],
+            self.g_d_x,
+        )?;
+        let pk_d_x = assign_free_advice(
+            layouter.namespace(|| "witness pk_d_x"),
+            config.advices[0],
+            self.pk_d_x,
+        )?;
         let voting_hotkey_pk = assign_free_advice(
             layouter.namespace(|| "witness voting_hotkey_pk"),
             config.advices[0],
@@ -824,16 +865,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // reused in later conditions:
         // - vote_authority_note_old: also used in condition 1 (Merkle leaf).
         // - voting_round_id: also used in condition 4 (VAN nullifier).
-        // - voting_hotkey_pk: also used in condition 3 (spend authority) and
-        //   condition 6 (new VAN integrity).
-        // - total_note_value, voting_round_id, proposal_authority_old,
+        // - voting_hotkey_pk: also used in condition 3 (spend authority).
+        // - g_d_x, pk_d_x, total_note_value, voting_round_id, proposal_authority_old,
         //   gov_comm_rand, domain_van: also used in condition 6 (new VAN integrity).
         // - total_note_value: also used in condition 7 (shares sum check).
         let vote_authority_note_old_cond1 = vote_authority_note_old.clone();
         let voting_round_id_cond4 = voting_round_id.clone();
         let domain_van_cond6 = domain_van.clone();
+        let g_d_x_cond6 = g_d_x.clone();
+        let pk_d_x_cond6 = pk_d_x.clone();
         let voting_hotkey_pk_cond3 = voting_hotkey_pk.clone();
-        let voting_hotkey_pk_cond6 = voting_hotkey_pk.clone();
         let total_note_value_cond6 = total_note_value.clone();
         let total_note_value_cond7 = total_note_value.clone();
         let voting_round_id_cond6 = voting_round_id.clone();
@@ -841,10 +882,10 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let gov_comm_rand_cond6 = gov_comm_rand.clone();
 
         // ---------------------------------------------------------------
-        // Condition 2: VAN Integrity.
-        // vote_authority_note_old = Poseidon(DOMAIN_VAN, voting_hotkey_pk,
-        //     total_note_value, voting_round_id, proposal_authority_old,
-        //     gov_comm_rand)
+        // Condition 2: VAN Integrity (ZKP 1–compatible two-layer hash).
+        // gov_comm_core = Poseidon(DOMAIN_VAN, g_d_x, pk_d_x, total_note_value,
+        //                          voting_round_id, proposal_authority_old)
+        // vote_authority_note_old = Poseidon(gov_comm_core, gov_comm_rand)
         // ---------------------------------------------------------------
 
         let derived_van = van_integrity_poseidon(
@@ -852,7 +893,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             &mut layouter,
             "Old VAN integrity",
             domain_van,
-            voting_hotkey_pk,
+            g_d_x,
+            pk_d_x,
             total_note_value,
             voting_round_id,
             proposal_authority_old,
@@ -1217,16 +1259,11 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         };
 
         // ---------------------------------------------------------------
-        // Condition 6: New VAN Integrity.
+        // Condition 6: New VAN Integrity (ZKP 1–compatible two-layer hash).
         //
-        // vote_authority_note_new = Poseidon(DOMAIN_VAN, voting_hotkey_pk,
-        //     total_note_value, voting_round_id, proposal_authority_new,
-        //     gov_comm_rand)
-        //
-        // Same hash as condition 2 via van_integrity_poseidon(), with
-        // proposal_authority_new (from condition 5) replacing
-        // proposal_authority_old. All other inputs are cell-equality-
-        // linked to the same witness cells used in condition 2.
+        // Same structure as condition 2; proposal_authority_new (from
+        // condition 5) replaces proposal_authority_old. g_d_x and pk_d_x
+        // are unchanged (same diversified address).
         // ---------------------------------------------------------------
 
         let derived_van_new = van_integrity_poseidon(
@@ -1234,7 +1271,8 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             &mut layouter,
             "New VAN integrity",
             domain_van_cond6,
-            voting_hotkey_pk_cond6,
+            g_d_x_cond6,
+            pk_d_x_cond6,
             total_note_value_cond6,
             voting_round_id_cond6,
             proposal_authority_new,
@@ -1368,15 +1406,12 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         //
         // Hashes the 8 x-coordinates of the 4 El Gamal ciphertext pairs
         // into a single commitment. The order interleaves C1 and C2
-        // per share for locality.
-        //
-        // Condition 10 (not yet implemented) will constrain that each
-        // (c1_i_x, c2_i_x) is a valid El Gamal encryption of shares_i.
-        //
-        // Temporarily binds shares_hash to the VOTE_COMMITMENT public
-        // input for testability. When condition 11 is implemented,
-        // VOTE_COMMITMENT will instead be bound to the full vote
-        // commitment H(DOMAIN_VC, shares_hash, proposal_id, vote_decision).
+        // per share for locality. shares_hash is an internal wire; it
+        // is not bound to the instance column. Condition 10 constrains
+        // that each (c1_i_x, c2_i_x) is a valid El Gamal encryption of
+        // shares_i. Condition 11 computes the full vote commitment
+        // H(DOMAIN_VC, shares_hash, proposal_id, vote_decision) and
+        // binds that value to the VOTE_COMMITMENT public input.
         // ---------------------------------------------------------------
 
         // Witness the 8 El Gamal ciphertext x-coordinates.
@@ -1956,6 +1991,10 @@ mod tests {
         let vsk = pallas::Scalar::from(1u64);
         let voting_hotkey_pk = derive_voting_hotkey_pk(vsk);
 
+        // VAN uses diversified address (g_d_x, pk_d_x) matching ZKP 1.
+        let g_d_x = pallas::Base::random(&mut rng);
+        let pk_d_x = pallas::Base::random(&mut rng);
+
         // total_note_value must be small enough that all 4 shares
         // fit in [0, 2^24) for condition 8's range check.
         let total_note_value = pallas::Base::from(10_000u64);
@@ -1964,7 +2003,8 @@ mod tests {
         let vsk_nk = pallas::Base::random(&mut rng);
 
         let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk,
+            g_d_x,
+            pk_d_x,
             total_note_value,
             voting_round_id,
             proposal_authority_old,
@@ -1975,7 +2015,8 @@ mod tests {
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk,
+            g_d_x,
+            pk_d_x,
             total_note_value,
             voting_round_id,
             proposal_authority_new,
@@ -2000,6 +2041,8 @@ mod tests {
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
             Value::known(position),
+            Value::known(g_d_x),
+            Value::known(pk_d_x),
             Value::known(voting_hotkey_pk),
             Value::known(total_note_value),
             Value::known(proposal_authority_old),
@@ -2067,6 +2110,8 @@ mod tests {
         // Use witnesses that DON'T hash to wrong_van. Condition 3: derive pk from vsk.
         let vsk = pallas::Scalar::random(&mut rng);
         let voting_hotkey_pk = derive_voting_hotkey_pk(vsk);
+        let g_d_x = pallas::Base::random(&mut rng);
+        let pk_d_x = pallas::Base::random(&mut rng);
         let shares_u64: [u64; 4] = [1_000, 2_000, 3_000, 4_000];
         let (_ea_sk, ea_pk_point, ea_pk_affine) = generate_ea_keypair();
         let (enc_c1_x, enc_c2_x, randomness, shares_hash_val) =
@@ -2075,6 +2120,8 @@ mod tests {
         let mut circuit = Circuit::with_van_witnesses(
             Value::known(auth_path),
             Value::known(position),
+            Value::known(g_d_x),
+            Value::known(pk_d_x),
             Value::known(voting_hotkey_pk),
             Value::known(pallas::Base::from(10_000u64)),
             Value::known(pallas::Base::from(5u64)),
@@ -2117,18 +2164,26 @@ mod tests {
     fn van_integrity_hash_deterministic() {
         let mut rng = OsRng;
 
-        let pk = pallas::Base::random(&mut rng);
+        let g_d_x = pallas::Base::random(&mut rng);
+        let pk_d_x = pallas::Base::random(&mut rng);
         let val = pallas::Base::random(&mut rng);
         let round = pallas::Base::random(&mut rng);
         let auth = pallas::Base::random(&mut rng);
         let rand = pallas::Base::random(&mut rng);
 
-        let h1 = van_integrity_hash(pk, val, round, auth, rand);
-        let h2 = van_integrity_hash(pk, val, round, auth, rand);
+        let h1 = van_integrity_hash(g_d_x, pk_d_x, val, round, auth, rand);
+        let h2 = van_integrity_hash(g_d_x, pk_d_x, val, round, auth, rand);
         assert_eq!(h1, h2);
 
         // Changing any input changes the hash.
-        let h3 = van_integrity_hash(pallas::Base::random(&mut rng), val, round, auth, rand);
+        let h3 = van_integrity_hash(
+            pallas::Base::random(&mut rng),
+            pk_d_x,
+            val,
+            round,
+            auth,
+            rand,
+        );
         assert_ne!(h1, h3);
     }
 
@@ -2158,6 +2213,8 @@ mod tests {
 
         let vsk = pallas::Scalar::random(&mut rng);
         let voting_hotkey_pk = derive_voting_hotkey_pk(vsk);
+        let g_d_x = pallas::Base::random(&mut rng);
+        let pk_d_x = pallas::Base::random(&mut rng);
         let total_note_value = pallas::Base::from(10_000u64);
         let voting_round_id = pallas::Base::random(&mut rng);
         let proposal_authority_old = pallas::Base::from(5u64);
@@ -2165,16 +2222,24 @@ mod tests {
         let vsk_nk = pallas::Base::random(&mut rng);
 
         let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk, total_note_value, voting_round_id,
-            proposal_authority_old, gov_comm_rand,
+            g_d_x,
+            pk_d_x,
+            total_note_value,
+            voting_round_id,
+            proposal_authority_old,
+            gov_comm_rand,
         );
         let (auth_path, position, vote_comm_tree_root) =
             build_single_leaf_merkle_path(vote_authority_note_old);
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk, total_note_value, voting_round_id,
-            proposal_authority_new, gov_comm_rand,
+            g_d_x,
+            pk_d_x,
+            total_note_value,
+            voting_round_id,
+            proposal_authority_new,
+            gov_comm_rand,
         );
 
         // Use a DIFFERENT vsk_nk in the circuit.
@@ -2189,10 +2254,16 @@ mod tests {
             encrypt_shares(shares_u64, ea_pk_point);
 
         let mut circuit = Circuit::with_van_witnesses(
-            Value::known(auth_path), Value::known(position),
-            Value::known(voting_hotkey_pk), Value::known(total_note_value),
-            Value::known(proposal_authority_old), Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old), Value::known(wrong_vsk_nk),
+            Value::known(auth_path),
+            Value::known(position),
+            Value::known(g_d_x),
+            Value::known(pk_d_x),
+            Value::known(voting_hotkey_pk),
+            Value::known(total_note_value),
+            Value::known(proposal_authority_old),
+            Value::known(gov_comm_rand),
+            Value::known(vote_authority_note_old),
+            Value::known(wrong_vsk_nk),
         );
         circuit.vsk = Value::known(vsk);
         circuit.shares = shares_u64.map(|s| Value::known(pallas::Base::from(s)));
@@ -2324,6 +2395,8 @@ mod tests {
 
         let vsk = pallas::Scalar::random(&mut rng);
         let voting_hotkey_pk = derive_voting_hotkey_pk(vsk);
+        let g_d_x = pallas::Base::random(&mut rng);
+        let pk_d_x = pallas::Base::random(&mut rng);
         let total_note_value = pallas::Base::from(10_000u64);
         let voting_round_id = pallas::Base::random(&mut rng);
         let proposal_authority_old = pallas::Base::from(5u64);
@@ -2331,8 +2404,12 @@ mod tests {
         let vsk_nk = pallas::Base::random(&mut rng);
 
         let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk, total_note_value, voting_round_id,
-            proposal_authority_old, gov_comm_rand,
+            g_d_x,
+            pk_d_x,
+            total_note_value,
+            voting_round_id,
+            proposal_authority_old,
+            gov_comm_rand,
         );
 
         // Place the leaf at position 7 (binary: ...0111).
@@ -2356,8 +2433,12 @@ mod tests {
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk, total_note_value, voting_round_id,
-            proposal_authority_new, gov_comm_rand,
+            g_d_x,
+            pk_d_x,
+            total_note_value,
+            voting_round_id,
+            proposal_authority_new,
+            gov_comm_rand,
         );
 
         // Shares that sum to total_note_value (conditions 7 + 8).
@@ -2369,10 +2450,16 @@ mod tests {
             encrypt_shares(shares_u64, ea_pk_point);
 
         let mut circuit = Circuit::with_van_witnesses(
-            Value::known(auth_path), Value::known(position),
-            Value::known(voting_hotkey_pk), Value::known(total_note_value),
-            Value::known(proposal_authority_old), Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old), Value::known(vsk_nk),
+            Value::known(auth_path),
+            Value::known(position),
+            Value::known(g_d_x),
+            Value::known(pk_d_x),
+            Value::known(voting_hotkey_pk),
+            Value::known(total_note_value),
+            Value::known(proposal_authority_old),
+            Value::known(gov_comm_rand),
+            Value::known(vote_authority_note_old),
+            Value::known(vsk_nk),
         );
         circuit.vsk = Value::known(vsk);
         circuit.shares = shares_u64.map(|s| Value::known(pallas::Base::from(s)));
@@ -2439,22 +2526,32 @@ mod tests {
         let mut rng = OsRng;
         let vsk = pallas::Scalar::random(&mut rng);
         let voting_hotkey_pk = derive_voting_hotkey_pk(vsk);
+        let g_d_x = pallas::Base::random(&mut rng);
+        let pk_d_x = pallas::Base::random(&mut rng);
         let voting_round_id = pallas::Base::random(&mut rng);
         let proposal_authority_old = pallas::Base::from(5u64);
         let gov_comm_rand = pallas::Base::random(&mut rng);
         let vsk_nk = pallas::Base::random(&mut rng);
 
         let vote_authority_note_old = van_integrity_hash(
-            voting_hotkey_pk, total, voting_round_id,
-            proposal_authority_old, gov_comm_rand,
+            g_d_x,
+            pk_d_x,
+            total,
+            voting_round_id,
+            proposal_authority_old,
+            gov_comm_rand,
         );
         let (auth_path, position, vote_comm_tree_root) =
             build_single_leaf_merkle_path(vote_authority_note_old);
         let van_nullifier = van_nullifier_hash(vsk_nk, voting_round_id, vote_authority_note_old);
         let proposal_authority_new = proposal_authority_old - pallas::Base::one();
         let vote_authority_note_new = van_integrity_hash(
-            voting_hotkey_pk, total, voting_round_id,
-            proposal_authority_new, gov_comm_rand,
+            g_d_x,
+            pk_d_x,
+            total,
+            voting_round_id,
+            proposal_authority_new,
+            gov_comm_rand,
         );
 
         // Condition 10: real El Gamal encryption with max-value shares.
@@ -2465,10 +2562,16 @@ mod tests {
             encrypt_shares(shares_u64, ea_pk_point);
 
         let mut circuit = Circuit::with_van_witnesses(
-            Value::known(auth_path), Value::known(position),
-            Value::known(voting_hotkey_pk), Value::known(total),
-            Value::known(proposal_authority_old), Value::known(gov_comm_rand),
-            Value::known(vote_authority_note_old), Value::known(vsk_nk),
+            Value::known(auth_path),
+            Value::known(position),
+            Value::known(g_d_x),
+            Value::known(pk_d_x),
+            Value::known(voting_hotkey_pk),
+            Value::known(total),
+            Value::known(proposal_authority_old),
+            Value::known(gov_comm_rand),
+            Value::known(vote_authority_note_old),
+            Value::known(vsk_nk),
         );
         circuit.vsk = Value::known(vsk);
         circuit.shares = [Value::known(max_share); 4];
