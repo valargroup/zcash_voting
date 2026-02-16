@@ -1,4 +1,4 @@
-use ff::PrimeField;
+use ff::{Field, PrimeField};
 use group::{Curve, GroupEncoding};
 use pasta_curves::pallas;
 
@@ -113,6 +113,9 @@ pub fn build_vote_commitment(
     // Generate the real proof
     progress.on_progress(0.10);
     let mut rng = rand::thread_rng();
+    // Generate spend-auth randomizer for the voting key.
+    // The caller will need alpha_v to sign the TX2 sighash with rsk_v = ask_v.randomize(&alpha_v).
+    let alpha_v = pallas::Scalar::random(&mut rng);
     let vote_bundle = build_vote_proof_from_delegation(
         &sk,
         address_index,
@@ -125,6 +128,7 @@ pub fn build_vote_commitment(
         proposal_id as u64,
         choice as u64,
         ea_pk_affine,
+        alpha_v,
         &mut rng,
     )
     .map_err(|e| VotingError::ProofFailed {
@@ -160,6 +164,8 @@ pub fn build_vote_commitment(
         anchor_height,
         vote_round_id: hex::encode(voting_round_id),
         shares_hash: vote_bundle.shares_hash.to_repr().to_vec(),
+        r_vpk_bytes: vote_bundle.r_vpk_bytes.to_vec(),
+        alpha_v: alpha_v.to_repr().to_vec(),
     })
 }
 

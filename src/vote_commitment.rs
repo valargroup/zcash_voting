@@ -74,6 +74,8 @@ mod tests {
             anchor_height: 0,
             vote_round_id: String::new(),
             shares_hash: vec![0xDD; 32],
+            r_vpk_bytes: vec![0xEE; 32],
+            alpha_v: vec![0xFF; 32],
         }
     }
 

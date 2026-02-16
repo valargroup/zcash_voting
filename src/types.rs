@@ -168,6 +168,11 @@ pub struct VoteCommitmentBundle {
     /// Poseidon hash of encrypted share x-coordinates (32 bytes).
     /// Intermediate value: vote_commitment = H(DOMAIN_VC, shares_hash, proposal_id, vote_decision).
     pub shares_hash: Vec<u8>,
+    /// Compressed r_vpk (32 bytes) for sighash computation and signature verification.
+    pub r_vpk_bytes: Vec<u8>,
+    /// Spend-auth randomizer alpha_v (32 bytes, LE scalar repr).
+    /// Needed to sign the TX2 sighash: rsk_v = ask_v.randomize(&alpha_v).
+    pub alpha_v: Vec<u8>,
 }
 
 /// Payload sent to helper server for delegated share submission.
