@@ -70,8 +70,12 @@ func ValidateVoteTx(ctx context.Context, msg types.VoteMessage, k keeper.Keeper,
 	if roundID := msg.GetVoteRoundId(); roundID != nil {
 		switch m := msg.(type) {
 		case *types.MsgSubmitTally:
-			// MsgSubmitTally requires strictly TALLYING status + creator match.
-			if err := k.ValidateRoundForTally(ctx, roundID, m.Creator); err != nil {
+			// MsgSubmitTally requires strictly TALLYING status.
+			if err := k.ValidateRoundForTally(ctx, roundID); err != nil {
+				return err
+			}
+			// Creator must be the block proposer; rejected entirely in CheckTx.
+			if err := k.ValidateTallySubmitter(ctx, m.Creator); err != nil {
 				return err
 			}
 		default:

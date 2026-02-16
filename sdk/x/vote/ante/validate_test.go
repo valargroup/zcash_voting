@@ -2,6 +2,7 @@ package ante_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -11,9 +12,13 @@ import (
 	"cosmossdk.io/log"
 	storetypes "cosmossdk.io/store/types"
 
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+
 	"github.com/cosmos/cosmos-sdk/runtime"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	"github.com/z-cale/zally/crypto/redpallas"
 	"github.com/z-cale/zally/crypto/zkp"
@@ -21,6 +26,37 @@ import (
 	"github.com/z-cale/zally/x/vote/keeper"
 	"github.com/z-cale/zally/x/vote/types"
 )
+
+// testProposerConsAddr is the consensus address embedded in the test block header.
+// The mock staking keeper maps this to testValidatorAddr().
+var testProposerConsAddr = bytes.Repeat([]byte{0xAA}, 20)
+
+// mockStakingKeeper is a test double for the keeper.StakingKeeper interface.
+// It always returns a bonded validator for any address. GetValidatorByConsAddr
+// maps testProposerConsAddr to testValidatorAddr() for proposer checks.
+type mockStakingKeeper struct{}
+
+func (mockStakingKeeper) GetValidator(_ context.Context, _ sdk.ValAddress) (stakingtypes.Validator, error) {
+	return stakingtypes.Validator{Status: stakingtypes.Bonded}, nil
+}
+
+func (mockStakingKeeper) GetValidatorByConsAddr(_ context.Context, _ sdk.ConsAddress) (stakingtypes.Validator, error) {
+	return stakingtypes.Validator{
+		Status:          stakingtypes.Bonded,
+		OperatorAddress: testValidatorAddr(),
+	}, nil
+}
+
+// errStakingKeeper always returns ErrNoValidatorFound.
+type errStakingKeeper struct{}
+
+func (errStakingKeeper) GetValidator(_ context.Context, _ sdk.ValAddress) (stakingtypes.Validator, error) {
+	return stakingtypes.Validator{}, stakingtypes.ErrNoValidatorFound
+}
+
+func (errStakingKeeper) GetValidatorByConsAddr(_ context.Context, _ sdk.ConsAddress) (stakingtypes.Validator, error) {
+	return stakingtypes.Validator{}, stakingtypes.ErrNoValidatorFound
+}
 
 // ---------------------------------------------------------------------------
 // Failing mock verifiers (for negative test cases)
@@ -199,13 +235,21 @@ func TestValidateTestSuite(t *testing.T) {
 // SetupTest creates a fresh in-memory KV store, vote keeper, and SDK context
 // with a deterministic block time before each test case.
 func (s *ValidateTestSuite) SetupTest() {
+	// Configure bech32 prefixes for validator address parsing.
+	cfg := sdk.GetConfig()
+	cfg.SetBech32PrefixForValidator("zvotevaloper", "zvotevaloperpub")
+	cfg.SetBech32PrefixForAccount("zvote", "zvotepub")
+
 	key := storetypes.NewKVStoreKey(types.StoreKey)
 	tkey := storetypes.NewTransientStoreKey("transient_test")
 	testCtx := testutil.DefaultContextWithDB(s.T(), key, tkey)
 
-	s.ctx = testCtx.Ctx.WithBlockTime(testBlockTime)
+	s.ctx = testCtx.Ctx.WithBlockTime(testBlockTime).WithBlockHeader(cmtproto.Header{
+		Time:            testBlockTime,
+		ProposerAddress: testProposerConsAddr,
+	})
 	storeService := runtime.NewKVStoreService(key)
-	s.keeper = keeper.NewKeeper(storeService, "zvote1authority", log.NewNopLogger())
+	s.keeper = keeper.NewKeeper(storeService, "zvote1authority", log.NewNopLogger(), mockStakingKeeper{})
 }
 
 // ---------------------------------------------------------------------------
@@ -785,18 +829,22 @@ func (s *ValidateTestSuite) TestValidateVoteTx_RevealShare() {
 			errContains: "vote round not found",
 		},
 		{
-			name: "expired ACTIVE round still accepted for shares (pre-EndBlocker window)",
+			name: "expired ACTIVE round rejected for shares",
 			msg:  func() types.VoteMessage { return newValidMsgRevealShare() },
 			opts: mockOpts(),
 			setup: func() { s.setupExpiredRound() },
-			// MsgRevealShare uses ValidateRoundForShares, which accepts ACTIVE
-			// rounds even past vote_end_time (shares are always valid until FINALIZED).
+			// MsgRevealShare now uses ValidateRoundForVoting, which rejects
+			// expired rounds. Shares are only accepted during the ACTIVE window.
+			expectErr:   true,
+			errContains: "vote round is not active",
 		},
 		{
-			name: "tallying round accepted for shares",
-			msg:  func() types.VoteMessage { return newValidMsgRevealShare() },
-			opts: mockOpts(),
+			name:  "tallying round rejected for shares",
+			msg:   func() types.VoteMessage { return newValidMsgRevealShare() },
+			opts:  mockOpts(),
 			setup: func() { s.setupTallyingRound() },
+			expectErr:   true,
+			errContains: "vote round is not active",
 		},
 		{
 			name: "finalized round rejected for shares",
@@ -872,10 +920,16 @@ func (s *ValidateTestSuite) TestValidateVoteTx_RevealShare() {
 // Tests: MsgSubmitTally
 // ---------------------------------------------------------------------------
 
+// testValidatorAddr returns a valid zvotevaloper bech32 address for test use.
+// Must be called after bech32 config is set in SetupTest.
+func testValidatorAddr() string {
+	return sdk.ValAddress(bytes.Repeat([]byte{0x01}, 20)).String()
+}
+
 func newValidMsgSubmitTally() *types.MsgSubmitTally {
 	return &types.MsgSubmitTally{
 		VoteRoundId: testRoundID,
-		Creator:     "zvote1testcreator",
+		Creator:     testValidatorAddr(),
 		Entries: []*types.TallyEntry{
 			{ProposalId: 1, VoteDecision: 1, TotalValue: 500},
 		},
@@ -883,16 +937,26 @@ func newValidMsgSubmitTally() *types.MsgSubmitTally {
 }
 
 func (s *ValidateTestSuite) TestValidateVoteTx_SubmitTally() {
+	// checkTxCtx returns a context with IsCheckTx=true for testing mempool rejection.
+	checkTxCtx := func() sdk.Context {
+		return s.ctx.WithIsCheckTx(true)
+	}
+	// recheckTxCtx returns a context with IsReCheckTx=true.
+	recheckTxCtx := func() sdk.Context {
+		return s.ctx.WithIsReCheckTx(true)
+	}
+
 	tests := []struct {
 		name        string
 		msg         func() types.VoteMessage
 		opts        ante.ValidateOpts
 		setup       func()
+		ctxFn       func() sdk.Context // optional: override context (e.g. CheckTx)
 		expectErr   bool
 		errContains string
 	}{
 		{
-			name:  "valid submit tally with tallying round",
+			name:  "valid submit tally with tallying round (FinalizeBlock context)",
 			msg:   func() types.VoteMessage { return newValidMsgSubmitTally() },
 			opts:  mockOpts(),
 			setup: func() { s.setupTallyingRound() },
@@ -947,25 +1011,39 @@ func (s *ValidateTestSuite) TestValidateVoteTx_SubmitTally() {
 			expectErr:   true,
 			errContains: "not in tallying state",
 		},
-		// --- Creator mismatch ---
+		// --- Proposer check ---
 		{
-			name: "creator mismatch rejected",
+			name: "creator mismatch with block proposer rejected",
 			msg: func() types.VoteMessage {
 				m := newValidMsgSubmitTally()
-				m.Creator = "zvote1imposter"
+				// Use a valid valoper address that is NOT the proposer.
+				m.Creator = sdk.ValAddress(bytes.Repeat([]byte{0xFF}, 20)).String()
 				return m
 			},
 			opts:        mockOpts(),
 			setup:       func() { s.setupTallyingRound() },
 			expectErr:   true,
-			errContains: "creator mismatch",
+			errContains: "does not match block proposer",
+		},
+		// --- CheckTx rejection ---
+		{
+			name:        "rejected in CheckTx (mempool submission not allowed)",
+			msg:         func() types.VoteMessage { return newValidMsgSubmitTally() },
+			opts:        mockOpts(),
+			setup:       func() { s.setupTallyingRound() },
+			ctxFn:       checkTxCtx,
+			expectErr:   true,
+			errContains: "cannot be submitted via mempool",
 		},
 		// --- RecheckTx behavior ---
 		{
-			name:  "recheck: passes with tallying round and correct creator",
-			msg:   func() types.VoteMessage { return newValidMsgSubmitTally() },
-			opts:  recheckOpts(),
-			setup: func() { s.setupTallyingRound() },
+			name:        "recheck: also rejected (mempool re-validation)",
+			msg:         func() types.VoteMessage { return newValidMsgSubmitTally() },
+			opts:        recheckOpts(),
+			setup:       func() { s.setupTallyingRound() },
+			ctxFn:       recheckTxCtx,
+			expectErr:   true,
+			errContains: "cannot be submitted via mempool",
 		},
 	}
 
@@ -975,7 +1053,11 @@ func (s *ValidateTestSuite) TestValidateVoteTx_SubmitTally() {
 			if tc.setup != nil {
 				tc.setup()
 			}
-			err := ante.ValidateVoteTx(s.ctx, tc.msg(), s.keeper, tc.opts)
+			ctx := s.ctx
+			if tc.ctxFn != nil {
+				ctx = tc.ctxFn()
+			}
+			err := ante.ValidateVoteTx(ctx, tc.msg(), s.keeper, tc.opts)
 			if tc.expectErr {
 				s.Require().Error(err)
 				if tc.errContains != "" {

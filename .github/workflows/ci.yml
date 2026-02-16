@@ -170,6 +170,7 @@ jobs:
         run: cargo test --release --manifest-path ../e2e-tests/Cargo.toml -- --nocapture --ignored --test-threads=1
         env:
           ZALLY_API_URL: http://localhost:1317
+          ZALLY_EA_PK_PATH: /home/runner/.zallyd/ea.pk
       - name: Upload chain log on failure
         if: failure()
         uses: actions/upload-artifact@v4

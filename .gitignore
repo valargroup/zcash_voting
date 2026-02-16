@@ -35,3 +35,6 @@ orchard/book/src/zkps/zkp3-vote-reveal-proof.md
 
 # Swift build artifacts
 keystone-qr/.build/
+
+# macOS
+.DS_Store

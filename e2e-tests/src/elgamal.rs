@@ -106,6 +106,12 @@ pub fn marshal_public_key(pk: &PublicKey) -> [u8; COMPRESSED_POINT_SIZE] {
     pk.0.to_bytes()
 }
 
+/// Deserialize 32 bytes into a public key (compressed Pallas point).
+pub fn unmarshal_public_key(data: &[u8; COMPRESSED_POINT_SIZE]) -> Result<PublicKey, String> {
+    let pt = point_from_compressed(data)?;
+    Ok(PublicKey(pt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +127,24 @@ mod tests {
         let ct2 = unmarshal(&bytes).expect("unmarshal");
         let bytes2 = marshal(&ct2);
         assert_eq!(bytes, bytes2, "round-trip marshal/unmarshal");
+    }
+
+    #[test]
+    fn cross_validate_go_vectors() {
+        // Vectors from Go curvey TestCrossValidationVectors (using standard Pallas generator):
+        // scalar=1 (generator point) — should match pasta_curves generator
+        let go_gen_hex = "00000000ed302d991bf94c09fc98462200000000000000000000000000000040";
+        let go_gen_bytes = hex::decode(go_gen_hex).unwrap();
+
+        // Rust generator point
+        let rust_gen = pallas::Point::generator();
+        let rust_gen_bytes = rust_gen.to_bytes();
+
+        assert_eq!(
+            go_gen_bytes.as_slice(),
+            rust_gen_bytes.as_ref(),
+            "Go standard Pallas generator != Rust pasta_curves generator"
+        );
     }
 
     #[test]
