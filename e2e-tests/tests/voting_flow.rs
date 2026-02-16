@@ -1,6 +1,6 @@
 //! Happy-path E2E voting flow: create session, delegate (real ZKP #1), cast
-//! (real ZKP #2), reveal shares, wait for TALLYING, auto-tally finalizes.
-//! No fixture files — delegation proof and vote proof generated inline.
+//! (real ZKP #2), reveal shares (real ZKP #3), wait for TALLYING, auto-tally finalizes.
+//! No fixture files — all three ZKP proofs generated inline.
 //! ElGamal PK is read from the node's EA keypair (ZALLY_EA_PK_PATH env var).
 
 use base64::Engine;
@@ -13,13 +13,15 @@ use e2e_tests::{
     elgamal::{self, homomorphic_add},
     payloads::{
         create_voting_session_payload, delegate_vote_payload, cast_vote_payload_real,
-        reveal_share_payload, ciphertext_to_base64, encrypt_share,
+        reveal_share_payload, ciphertext_to_base64,
     },
-    setup::{build_delegation_bundle_for_test, build_van_merkle_witness},
+    setup::{build_delegation_bundle_for_test, build_van_merkle_witness, build_vote_commitment_merkle_witness},
 };
 use ff::{Field, PrimeField};
 use group::Curve;
 use orchard::keys::SpendAuthorizingKey;
+use orchard::share_reveal::builder::build_share_reveal;
+use orchard::share_reveal::{create_share_reveal_proof, verify_share_reveal_proof};
 use orchard::vote_proof::build_vote_proof_from_delegation;
 use pasta_curves::pallas;
 use rand::SeedableRng;
@@ -354,18 +356,74 @@ fn voting_flow_full_lifecycle() {
         next_index
     );
 
-    // Step 4c: tree client sync 3 leaves
+    // Step 5b: tree client sync 3 leaves
     let out = run_tree_cli(&["sync", "--node", &base_url]);
     assert!(out.contains("3"));
 
-    // Step 4d: witness position 2
+    // Step 5c: witness position 2
     let out = run_tree_cli(&["witness", "--node", &base_url, "--position", "2"]);
     assert!(out.contains("Witness"));
 
-    // ----- Step 6: Reveal share (first) -----
-    log_step("Step 6", "reveal share (first)");
-    let enc_share_0 = encrypt_share(&elgamal_pk, 1, &mut rng);
-    let reveal_body = reveal_share_payload(&round_id, anchor_height, &enc_share_0, 1, 1);
+    // ----- Step 5d: Build vote commitment tree Merkle witness for ZKP #3 -----
+    log_step("Step 5d", "building vote commitment tree Merkle witness for ZKP #3");
+    let (vc_auth_path, vc_position, vc_tree_root) = build_vote_commitment_merkle_witness(
+        vote_proof_data.van_comm,
+        vote_bundle.instance.vote_authority_note_new,
+        vote_bundle.instance.vote_commitment,
+        anchor_height,
+    );
+
+    // Verify local root matches on-chain root.
+    {
+        let (status, json) = get_json(&format!("/zally/v1/commitment-tree/{}", anchor_height))
+            .expect("GET tree at height");
+        assert_eq!(status, 200);
+        let on_chain_root_b64 = json.get("tree")
+            .and_then(|t| t.get("root"))
+            .and_then(|r| r.as_str())
+            .expect("on-chain tree root");
+        let on_chain_root_bytes = base64::engine::general_purpose::STANDARD
+            .decode(on_chain_root_b64)
+            .expect("decode on-chain root");
+        let local_root_bytes = vc_tree_root.to_repr();
+        assert_eq!(
+            on_chain_root_bytes,
+            local_root_bytes.as_ref(),
+            "local vote commitment tree root does not match on-chain root at height {}",
+            anchor_height
+        );
+    }
+
+    // ----- Step 6: Reveal share 0 (real ZKP #3) -----
+    log_step("Step 6", "building share reveal proof (ZKP #3, share 0, K=14 may take 30-60s)...");
+    let share_0_bundle = build_share_reveal(
+        vc_auth_path,
+        vc_position,
+        vote_bundle.enc_c1_x,
+        vote_bundle.enc_c2_x,
+        0, // share_index
+        pallas::Base::from(1u64), // proposal_id
+        pallas::Base::from(1u64), // vote_decision
+        vote_proof_data.vote_round_id,
+    );
+    let share_0_proof = create_share_reveal_proof(share_0_bundle.circuit.clone(), &share_0_bundle.instance);
+
+    // Local verification
+    verify_share_reveal_proof(&share_0_proof, &share_0_bundle.instance)
+        .expect("local share reveal proof verification must pass (share 0)");
+    log_step("Step 6", "local verification passed, submitting reveal-share");
+
+    let share_0_nullifier = share_0_bundle.instance.share_nullifier.to_repr();
+    let enc_share_0_bytes = &vote_bundle.enc_shares_compressed[0];
+    let reveal_body = reveal_share_payload(
+        &round_id,
+        anchor_height,
+        share_0_nullifier.as_ref(),
+        enc_share_0_bytes,
+        1, // proposal_id
+        1, // vote_decision
+        &share_0_proof,
+    );
     let (status, json) = post_json_accept_committed(
         "/zally/v1/reveal-share",
         &reveal_body,
@@ -373,7 +431,8 @@ fn voting_flow_full_lifecycle() {
     )
     .expect("POST reveal-share");
     assert_eq!(status, 200, "reveal-share: expected 200, got {} body={:?}", status, json);
-    assert_eq!(json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1), 0);
+    assert_eq!(json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1), 0,
+        "reveal-share (share 0) rejected: {:?}", json.get("log").or(json.get("error")));
     block_wait();
 
     // ----- Step 7: Tally has encrypted ciphertext -----
@@ -384,18 +443,41 @@ fn voting_flow_full_lifecycle() {
     let tally = json.get("tally").expect("tally");
     assert!(tally.get("1").is_some());
 
-    // ----- Step 8: Reveal second share (while still ACTIVE) -----
-    // RevealShare is only accepted during ACTIVE, so both reveals must happen before TALLYING.
-    log_step("Step 8", "reveal second share (while ACTIVE)");
-    let enc_share_1 = encrypt_share(&elgamal_pk, 1, &mut rng);
-    let reveal_body_1 = reveal_share_payload(&round_id, anchor_height, &enc_share_1, 1, 1);
+    // ----- Step 8: Reveal share 1 (real ZKP #3, while still ACTIVE) -----
+    log_step("Step 8", "building share reveal proof (ZKP #3, share 1, K=14 may take 30-60s)...");
+    let share_1_bundle = build_share_reveal(
+        vc_auth_path,
+        vc_position,
+        vote_bundle.enc_c1_x,
+        vote_bundle.enc_c2_x,
+        1, // share_index
+        pallas::Base::from(1u64), // proposal_id
+        pallas::Base::from(1u64), // vote_decision
+        vote_proof_data.vote_round_id,
+    );
+    let share_1_proof = create_share_reveal_proof(share_1_bundle.circuit.clone(), &share_1_bundle.instance);
+
+    // Local verification
+    verify_share_reveal_proof(&share_1_proof, &share_1_bundle.instance)
+        .expect("local share reveal proof verification must pass (share 1)");
+    log_step("Step 8", "local verification passed, submitting reveal-share");
+
+    let share_1_nullifier = share_1_bundle.instance.share_nullifier.to_repr();
+    let enc_share_1_bytes = &vote_bundle.enc_shares_compressed[1];
     let expected_accumulated_b64 = {
-        let dec0 = base64::engine::general_purpose::STANDARD.decode(&enc_share_0).expect("decode enc_share_0");
-        let dec1 = base64::engine::general_purpose::STANDARD.decode(&enc_share_1).expect("decode enc_share_1");
-        let ct0 = elgamal::unmarshal(&dec0).expect("unmarshal ct0");
-        let ct1 = elgamal::unmarshal(&dec1).expect("unmarshal ct1");
+        let ct0 = elgamal::unmarshal(enc_share_0_bytes).expect("unmarshal share 0");
+        let ct1 = elgamal::unmarshal(enc_share_1_bytes).expect("unmarshal share 1");
         ciphertext_to_base64(&homomorphic_add(&ct0, &ct1))
     };
+    let reveal_body_1 = reveal_share_payload(
+        &round_id,
+        anchor_height,
+        share_1_nullifier.as_ref(),
+        enc_share_1_bytes,
+        1, // proposal_id
+        1, // vote_decision
+        &share_1_proof,
+    );
     let (status, json) = post_json_accept_committed(
         "/zally/v1/reveal-share",
         &reveal_body_1,
@@ -414,19 +496,14 @@ fn voting_flow_full_lifecycle() {
     )
     .expect("POST");
     assert_eq!(status, 200, "reveal-share (second): expected 200, got {} body={:?}", status, json);
-    assert_eq!(json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1), 0);
+    assert_eq!(json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1), 0,
+        "reveal-share (share 1) rejected: {:?}", json.get("log").or(json.get("error")));
     block_wait();
 
     // ----- Step 9: Accumulated tally matches HomomorphicAdd(share0, share1) -----
     log_step("Step 9", "accumulated tally matches HomomorphicAdd(share0, share1)");
-    let dec0 = base64::engine::general_purpose::STANDARD
-        .decode(&enc_share_0)
-        .expect("decode enc_share_0");
-    let dec1 = base64::engine::general_purpose::STANDARD
-        .decode(&enc_share_1)
-        .expect("decode enc_share_1");
-    let ct0 = elgamal::unmarshal(&dec0).expect("unmarshal ct0");
-    let ct1 = elgamal::unmarshal(&dec1).expect("unmarshal ct1");
+    let ct0 = elgamal::unmarshal(enc_share_0_bytes).expect("unmarshal share 0");
+    let ct1 = elgamal::unmarshal(enc_share_1_bytes).expect("unmarshal share 1");
     let expected_accumulated = homomorphic_add(&ct0, &ct1);
     let expected_accumulated_b64 = ciphertext_to_base64(&expected_accumulated);
 
@@ -436,8 +513,8 @@ fn voting_flow_full_lifecycle() {
     assert_eq!(on_chain, expected_accumulated_b64, "accumulated ciphertext mismatch");
 
     // ----- Step 10: Wait for TALLYING -----
-    log_step("Step 10", "waiting for TALLYING (up to 250s)");
-    wait_for_round_status(&round_id_hex, SESSION_STATUS_TALLYING, 250_000, 3_000)
+    log_step("Step 10", "waiting for TALLYING (up to 500s)");
+    wait_for_round_status(&round_id_hex, SESSION_STATUS_TALLYING, 500_000, 3_000)
         .expect("wait for TALLYING");
     let (_, json) = get_json(&format!("/zally/v1/round/{}", round_id_hex)).expect("GET round");
     assert_eq!(
@@ -448,6 +525,8 @@ fn voting_flow_full_lifecycle() {
     // ----- Step 11: Wait for FINALIZED (auto-tally via PrepareProposal) -----
     // The block proposer holds the EA secret key and auto-injects MsgSubmitTally
     // during PrepareProposal. We wait for the round to reach FINALIZED status.
+    // The Go El Gamal uses SpendAuthG (matching the ZKP #2 circuit), so
+    // BSGS decryption should succeed and auto-tally should finalize.
     log_step("Step 11", "waiting for FINALIZED via auto-tally (up to 60s)");
     wait_for_round_status(&round_id_hex, SESSION_STATUS_FINALIZED, 60_000, 2_000)
         .expect("wait for FINALIZED (auto-tally)");
@@ -464,9 +543,11 @@ fn voting_flow_full_lifecycle() {
     assert_eq!(status, 200, "GET tally-results: expected 200, got {} body={:?}", status, json);
     let results = json.get("results").and_then(|r| r.as_array()).expect("results");
     assert!(!results.is_empty());
-    // Auto-tally decrypts the accumulated ciphertext (two shares of value 1 each).
+    // Auto-tally decrypts the accumulated ciphertext from 2 of 4 shares.
+    // Each share = 15_000_000 / 4 = 3_750_000; two shares sum to 7_500_000.
     assert_eq!(results[0].get("vote_decision").and_then(|v| v.as_u64()).unwrap_or(0), 1);
-    assert_eq!(results[0].get("total_value").and_then(|v| v.as_u64()).unwrap_or(0), 2);
+    let total_value = results[0].get("total_value").and_then(|v| v.as_u64()).unwrap_or(0);
+    assert_eq!(total_value, 7_500_000, "expected 2 of 4 shares from 15M note = 7.5M, got {}", total_value);
 
     log_step("Done", "voting flow happy path passed");
 }
