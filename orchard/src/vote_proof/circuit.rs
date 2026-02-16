@@ -353,7 +353,7 @@ pub struct Config {
     q_cond5_init: Selector,
     /// Selector for condition 6 bit rows 2..17 (recurrence).
     q_cond5_bits: Selector,
-    /// Selector for condition 6 last bit row: run_selected = 1.
+    /// Selector for condition 6 last bit row: run_sel = 1 and run_selected = 1.
     q_cond5_selected_one: Selector,
 }
 
@@ -787,12 +787,19 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             )
         });
 
-        // At the last bit row (row 16): run_selected must equal 1 (selected bit was set).
+        // At the last bit row (row 16): run_sel = 1 (exactly one selector active) and run_selected = 1 (that bit was set).
         let q_cond5_selected_one = meta.selector();
-        meta.create_gate("cond6 run_selected = 1", |meta| {
+        meta.create_gate("cond6 run_sel = 1 and run_selected = 1", |meta| {
             let q = meta.query_selector(q_cond5_selected_one);
+            let run_sel = meta.query_advice(advices[4], Rotation::cur());
             let run_selected = meta.query_advice(advices[5], Rotation::cur());
-            Constraints::with_selector(q, [("run_selected = 1", run_selected - one_expr)])
+            Constraints::with_selector(
+                q,
+                [
+                    ("run_sel = 1", run_sel - one_expr.clone()),
+                    ("run_selected = 1", run_selected - one_expr),
+                ],
+            )
         });
 
         Config {
