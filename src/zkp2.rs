@@ -159,6 +159,7 @@ pub fn build_vote_commitment(
         enc_shares,
         anchor_height,
         vote_round_id: hex::encode(voting_round_id),
+        shares_hash: vote_bundle.shares_hash.to_repr().to_vec(),
     })
 }
 

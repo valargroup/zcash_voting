@@ -165,6 +165,9 @@ pub struct VoteCommitmentBundle {
     pub anchor_height: u32,
     /// Voting round ID (hex string).
     pub vote_round_id: String,
+    /// Poseidon hash of encrypted share x-coordinates (32 bytes).
+    /// Intermediate value: vote_commitment = H(DOMAIN_VC, shares_hash, proposal_id, vote_decision).
+    pub shares_hash: Vec<u8>,
 }
 
 /// Payload sent to helper server for delegated share submission.
