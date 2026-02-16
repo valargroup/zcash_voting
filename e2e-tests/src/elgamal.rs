@@ -106,6 +106,12 @@ pub fn marshal_public_key(pk: &PublicKey) -> [u8; COMPRESSED_POINT_SIZE] {
     pk.0.to_bytes()
 }
 
+/// Deserialize 32 bytes into a public key (compressed Pallas point).
+pub fn unmarshal_public_key(data: &[u8; COMPRESSED_POINT_SIZE]) -> Result<PublicKey, String> {
+    let pt = point_from_compressed(data)?;
+    Ok(PublicKey(pt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
