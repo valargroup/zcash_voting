@@ -1,0 +1,15 @@
+[Unit]
+Description=Nullifier ingest query server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/zally/nullifier-service
+Environment="DB_PATH=/root/zally/nullifier-service/nullifiers.db"
+Environment="PORT=3000"
+ExecStart=/root/zally/nullifier-service/query-server
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

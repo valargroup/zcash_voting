@@ -50,9 +50,13 @@ The `query-server` binary serves the exclusion-proof API. It needs:
 - **Database**: A SQLite DB of ingested nullifiers. Either copy an existing `nullifiers.db` to the host or run `ingest-nfs` first (see below).
 - **Port**: Set `PORT` (default 3000) when running.
 
-Example **systemd unit** (using data dir `/root/zally/nullifier-service`). Adjust paths if you use a different `DEPLOY_PATH`:
+Example **systemd unit** (using data dir `/root/zally/nullifier-service`). A copyable unit file is in `docs/nullifier-query-server.service`; copy to `/etc/systemd/system/` and adjust paths if you use a different `DEPLOY_PATH`:
 
-`/etc/systemd/system/nullifier-query-server.service`:
+```bash
+sudo cp nullifier-ingest/docs/nullifier-query-server.service /etc/systemd/system/
+```
+
+Or create `/etc/systemd/system/nullifier-query-server.service` with:
 
 ```ini
 [Unit]
