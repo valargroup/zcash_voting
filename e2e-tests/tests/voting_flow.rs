@@ -104,7 +104,7 @@ fn voting_flow_full_lifecycle() {
     let (status, json) = post_json_accept_committed(
         "/zally/v1/delegate-vote",
         &deleg_body,
-        || commitment_tree_next_index().map(|n| n >= 2).unwrap_or(false),
+        || commitment_tree_next_index().map(|n| n >= 1).unwrap_or(false),
     )
     .expect("POST delegate-vote");
     assert_eq!(status, 200, "delegate-vote: expected HTTP 200, got {} body={:?}", status, json);
@@ -127,7 +127,8 @@ fn voting_flow_full_lifecycle() {
             if h > 0 {
                 anchor_height = h;
                 assert!(tree.get("root").is_some());
-                assert!(tree.get("next_index").and_then(|x| x.as_u64()).unwrap_or(0) >= 2);
+                // Only van_cmx is appended to the tree (cmx_new is not included).
+                assert!(tree.get("next_index").and_then(|x| x.as_u64()).unwrap_or(0) >= 1);
                 break;
             }
         }
@@ -141,11 +142,11 @@ fn voting_flow_full_lifecycle() {
     assert_eq!(status, 200, "GET tree at height: status={} body={:?}", status, json);
     assert!(json.get("tree").is_some());
 
-    // Step 2c: Rust tree client sync (2 leaves)
-    log_step("Step 2c", "tree CLI sync (2 leaves)");
+    // Step 2c: Rust tree client sync (1 leaf: only van_cmx is appended)
+    log_step("Step 2c", "tree CLI sync (1 leaf)");
     let base_url = api::base_url();
     let out = run_tree_cli(&["sync", "--node", &base_url]);
-    assert!(out.contains("leaves synced:     2") || out.contains("leaves synced: 2"));
+    assert!(out.contains("leaves synced:     1") || out.contains("leaves synced: 1"));
     assert!(out.contains("root match:") || out.contains("OK"));
 
     // Step 2d: witness position 0
@@ -155,9 +156,8 @@ fn voting_flow_full_lifecycle() {
     // ----- Step 4: Cast vote (real ZKP #2) -----
     log_step("Step 4", "building vote proof (ZKP #2, K=14 may take 30-60s)...");
 
-    // 4a: Build local commitment tree witness for the VAN (gov_comm at position 1).
+    // 4a: Build local commitment tree witness for the VAN (van_cmx at position 0).
     let (van_auth_path, van_position, van_tree_root) = build_van_merkle_witness(
-        vote_proof_data.cmx_new,
         vote_proof_data.gov_comm,
         anchor_height,
     );
@@ -241,7 +241,7 @@ fn voting_flow_full_lifecycle() {
             let result = post_json_accept_committed(
                 "/zally/v1/cast-vote",
                 &cast_body,
-                || commitment_tree_next_index().map(|n| n >= 4).unwrap_or(false),
+                || commitment_tree_next_index().map(|n| n >= 3).unwrap_or(false),
             )
             .expect("POST cast-vote");
             let code = result.1.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
@@ -274,20 +274,20 @@ fn voting_flow_full_lifecycle() {
     );
     block_wait();
 
-    // ----- Step 5: Tree updated after cast (4 leaves) -----
-    log_step("Step 5", "tree updated after cast (4 leaves)");
+    // ----- Step 5: Tree updated after cast (3 leaves: 1 from delegation + 2 from cast) -----
+    log_step("Step 5", "tree updated after cast (3 leaves)");
     let (status, json) = get_json("/zally/v1/commitment-tree/latest").expect("GET tree latest");
     assert_eq!(status, 200, "GET tree latest: status={} body={:?}", status, json);
     let tree = json.get("tree").expect("tree");
     anchor_height = tree.get("height").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
     assert_eq!(
         tree.get("next_index").and_then(|x| x.as_u64()).unwrap_or(0),
-        4
+        3
     );
 
-    // Step 4c: tree client sync 4 leaves
+    // Step 4c: tree client sync 3 leaves
     let out = run_tree_cli(&["sync", "--node", &base_url]);
-    assert!(out.contains("4"));
+    assert!(out.contains("3"));
 
     // Step 4d: witness position 2
     let out = run_tree_cli(&["witness", "--node", &base_url, "--position", "2"]);

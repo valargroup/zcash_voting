@@ -106,7 +106,7 @@ pub struct DelegationBundlePayload {
     pub signed_note_nullifier: Vec<u8>,
     pub cmx_new: Vec<u8>,
     pub enc_memo: Vec<u8>,
-    pub gov_comm: Vec<u8>,
+    pub van_cmx: Vec<u8>,
     pub gov_nullifiers: Vec<Vec<u8>>,
     pub proof: Vec<u8>,
 }
@@ -125,7 +125,7 @@ pub fn delegate_vote_payload(round_id: &[u8], bundle: &DelegationBundlePayload) 
         "signed_note_nullifier": to_base64(&bundle.signed_note_nullifier),
         "cmx_new": to_base64(&bundle.cmx_new),
         "enc_memo": to_base64(&bundle.enc_memo),
-        "gov_comm": to_base64(&bundle.gov_comm),
+        "van_cmx": to_base64(&bundle.van_cmx),
         "gov_nullifiers": gov_nulls,
         "proof": to_base64(&bundle.proof),
         "vote_round_id": to_base64(round_id),

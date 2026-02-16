@@ -181,7 +181,7 @@ pub fn build_delegation_bundle_for_test(
     let nf_signed_bytes = bundle.instance.nf_signed.to_bytes();
     let cmx_new_bytes = bundle.instance.cmx_new.to_repr();
     let vote_round_id_repr = bundle.instance.vote_round_id.to_repr();
-    let gov_comm_bytes = bundle.instance.gov_comm.to_repr();
+    let van_cmx_bytes = bundle.instance.gov_comm.to_repr();
     let gov_null_bytes: Vec<[u8; 32]> = bundle
         .instance
         .gov_null
@@ -202,7 +202,7 @@ pub fn build_delegation_bundle_for_test(
     extend_padded32(&mut canonical, &nf_signed_bytes);
     canonical.extend_from_slice(cmx_new_bytes.as_ref());
     extend_padded64(&mut canonical, &enc_memo);
-    extend_padded32(&mut canonical, gov_comm_bytes.as_ref());
+    extend_padded32(&mut canonical, van_cmx_bytes.as_ref());
     for i in 0..4 {
         if i < gov_null_bytes.len() {
             canonical.extend_from_slice(&gov_null_bytes[i]);
@@ -224,7 +224,7 @@ pub fn build_delegation_bundle_for_test(
         signed_note_nullifier: nf_signed_bytes.to_vec(),
         cmx_new: cmx_new_bytes.as_ref().to_vec(),
         enc_memo: enc_memo.to_vec(),
-        gov_comm: gov_comm_bytes.as_ref().to_vec(),
+        van_cmx: van_cmx_bytes.as_ref().to_vec(),
         gov_nullifiers: gov_null_bytes.iter().map(|b| b.to_vec()).collect(),
         proof,
     };
@@ -250,29 +250,27 @@ pub fn build_delegation_bundle_for_test(
     Ok((payload, fields, vote_proof_data))
 }
 
-/// Build a vote commitment tree locally with the two leaves from delegation
-/// (cmx_new at position 0, gov_comm at position 1) and return the Merkle
-/// authentication path for the VAN (gov_comm) at position 1.
+/// Build a vote commitment tree locally with the single van_cmx leaf from
+/// delegation (at position 0) and return the Merkle authentication path.
+/// cmx_new is NOT added to the tree — no subsequent proof references it.
 ///
 /// The `checkpoint_height` should be the on-chain anchor height at which
 /// the delegation block was committed.
 ///
 /// Returns `(auth_path, position, root)` suitable for the vote proof builder.
 pub fn build_van_merkle_witness(
-    cmx_new: pallas::Base,
-    gov_comm: pallas::Base,
+    van_cmx: pallas::Base,
     checkpoint_height: u32,
 ) -> ([pallas::Base; VOTE_COMM_TREE_DEPTH], u32, pallas::Base) {
     let mut tree = TreeServer::empty();
-    tree.append(cmx_new);
-    tree.append(gov_comm);
+    tree.append(van_cmx);
     tree.checkpoint(checkpoint_height);
 
     let root = tree.root_at_height(checkpoint_height)
         .expect("checkpoint should exist");
 
-    let path = tree.path(1, checkpoint_height)
-        .expect("VAN at position 1 should have a valid path");
+    let path = tree.path(0, checkpoint_height)
+        .expect("VAN at position 0 should have a valid path");
 
     // Convert MerkleHashVote siblings to pallas::Base for the circuit.
     let auth_path_hashes = path.auth_path();
@@ -285,8 +283,8 @@ pub fn build_van_merkle_witness(
 
     // Sanity: verify the path produces the expected root.
     assert!(
-        path.verify(gov_comm, root),
-        "merkle path verification failed for VAN at position 1"
+        path.verify(van_cmx, root),
+        "merkle path verification failed for VAN at position 0"
     );
 
     (auth_path, position, root)
