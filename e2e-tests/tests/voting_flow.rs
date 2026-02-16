@@ -90,7 +90,7 @@ fn voting_flow_full_lifecycle() {
         build_delegation_bundle_for_test().expect("build_delegation_bundle_for_test");
     log_step("Setup", "delegation bundle ready");
 
-    let (body, _fields, round_id) =
+    let (body, created_fields, round_id) =
         create_voting_session_payload(&ea_pk_bytes, 120, Some(session_fields));
     let round_id_hex = round_id_hex(&round_id);
 
@@ -513,8 +513,21 @@ fn voting_flow_full_lifecycle() {
     assert_eq!(on_chain, expected_accumulated_b64, "accumulated ciphertext mismatch");
 
     // ----- Step 10: Wait for TALLYING -----
-    log_step("Step 10", "waiting for TALLYING (up to 500s)");
-    wait_for_round_status(&round_id_hex, SESSION_STATUS_TALLYING, 500_000, 3_000)
+    // The voting round can only enter TALLYING after vote_end_time passes.
+    // Derive timeout from the actual round end-time (plus a small post-expiry buffer).
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_secs();
+    let secs_until_vote_end = created_fields.vote_end_time.saturating_sub(now_secs);
+    let wait_for_tallying_ms = (secs_until_vote_end.saturating_add(120))
+        .saturating_mul(1000)
+        .clamp(120_000, 900_000);
+    log_step(
+        "Step 10",
+        &format!("waiting for TALLYING (up to {}s)", wait_for_tallying_ms / 1000),
+    );
+    wait_for_round_status(&round_id_hex, SESSION_STATUS_TALLYING, wait_for_tallying_ms, 3_000)
         .expect("wait for TALLYING");
     let (_, json) = get_json(&format!("/zally/v1/round/{}", round_id_hex)).expect("GET round");
     assert_eq!(

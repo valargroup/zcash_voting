@@ -1,10 +1,11 @@
 //! Build a real delegation bundle for E2E tests (ZKP #1 + RedPallas).
 //!
-//! Generates session params with vote_end_time = now + 240s (4 min) and a canonical
+//! Generates session params with vote_end_time = now + configured window and a canonical
 //! vote_round_id, then builds the delegation bundle and RedPallas signature
 //! so the test can create the session and delegate without fixture files.
-//! Release-mode proofs take ~90s total; 4 min keeps the round ACTIVE through
-//! delegate/cast/both reveals with margin, then expires for auto-tally.
+//! The window defaults to 12 minutes and can be overridden with
+//! ZALLY_E2E_VOTE_WINDOW_SECS. This timestamp is part of vote_round_id, so it must
+//! be chosen before proof generation starts.
 
 use crate::payloads::{DelegationBundlePayload, SetupRoundFields};
 use blake2b_simd::Params as Blake2bParams;
@@ -26,6 +27,17 @@ use orchard::{
 use pasta_curves::pallas;
 use rand::rngs::OsRng;
 use vote_commitment_tree::TreeServer;
+
+const DEFAULT_E2E_VOTE_WINDOW_SECS: u64 = 720;
+const MIN_E2E_VOTE_WINDOW_SECS: u64 = 300;
+
+fn vote_window_secs() -> u64 {
+    std::env::var("ZALLY_E2E_VOTE_WINDOW_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(|secs| secs.max(MIN_E2E_VOTE_WINDOW_SECS))
+        .unwrap_or(DEFAULT_E2E_VOTE_WINDOW_SECS)
+}
 
 /// Append exactly 32 bytes to `out` from `b` (pad with zeros if shorter).
 fn extend_padded32(out: &mut Vec<u8>, b: &[u8]) {
@@ -60,8 +72,9 @@ pub struct VoteProofDelegationData {
 }
 
 /// Build delegation bundle and session fields for the E2E test.
-/// vote_end_time = now + 240s (4 min). Release-mode proofs take ~90s total;
-/// the round must stay ACTIVE through all submissions, then expire for auto-tally.
+/// vote_end_time = now + vote_window_secs() where the default window is 12 min
+/// (override with ZALLY_E2E_VOTE_WINDOW_SECS, clamped to >= 300s).
+/// The round must stay ACTIVE through all submissions, then expire for auto-tally.
 /// Returns payload for MsgDelegateVote, session fields for MsgCreateVotingSession,
 /// and private witness data for building ZKP #2 (vote proof).
 pub fn build_delegation_bundle_for_test() -> Result<
@@ -136,7 +149,7 @@ pub fn build_delegation_bundle_for_test() -> Result<
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 240;
+        + vote_window_secs();
 
     let nc_root_repr = nc_root.to_repr();
     let nf_imt_root_repr = nf_imt_root.to_repr();
