@@ -57,6 +57,9 @@ mod tests {
             vote_commitment: vec![0xCC; 32],
             proposal_id: 1,
             proof: vec![0xAB; 256],
+            enc_shares: vec![],
+            anchor_height: 0,
+            vote_round_id: String::new(),
         }
     }
 

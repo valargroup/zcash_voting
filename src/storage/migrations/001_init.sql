@@ -15,7 +15,11 @@ CREATE TABLE rounds (
     cmx_new             BLOB,
     alpha               BLOB,
     rseed_signed        BLOB,
-    rseed_output        BLOB
+    rseed_output        BLOB,
+    gov_comm            BLOB,
+    total_note_value    INTEGER,
+    address_index       INTEGER,
+    van_leaf_position   INTEGER
 );
 
 CREATE TABLE cached_tree_state (

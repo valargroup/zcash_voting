@@ -192,7 +192,8 @@ pub fn clear_round(conn: &Connection, round_id: &str) -> Result<(), VotingError>
 
 /// Persist all delegation action data in a single UPDATE:
 /// blinding factor, dummy nullifiers, constrained rho, padded note cmx values,
-/// signed action fields (nf_signed, cmx_new, alpha), and note rseeds.
+/// signed action fields (nf_signed, cmx_new, alpha), note rseeds,
+/// VAN leaf value, total note value, and address index.
 pub fn store_delegation_data(
     conn: &Connection,
     round_id: &str,
@@ -205,6 +206,9 @@ pub fn store_delegation_data(
     alpha: &[u8],
     rseed_signed: &[u8],
     rseed_output: &[u8],
+    gov_comm: &[u8],
+    total_note_value: u64,
+    address_index: u32,
 ) -> Result<(), VotingError> {
     // Serialize dummy nullifiers as a flat byte blob: [nf0 (32 bytes) | nf1 | nf2 | ...].
     // Length 0 means no padding was needed (all 4 notes were real).
@@ -219,7 +223,12 @@ pub fn store_delegation_data(
 
     let rows = conn
         .execute(
-            "UPDATE rounds SET van_comm_rand = :rand, dummy_nullifiers = :dummies, rho_signed = :rho, padded_note_data = :padded, nf_signed = :nf_signed, cmx_new = :cmx_new, alpha = :alpha, rseed_signed = :rseed_signed, rseed_output = :rseed_output WHERE round_id = :round_id",
+            "UPDATE rounds SET van_comm_rand = :rand, dummy_nullifiers = :dummies, \
+             rho_signed = :rho, padded_note_data = :padded, nf_signed = :nf_signed, \
+             cmx_new = :cmx_new, alpha = :alpha, rseed_signed = :rseed_signed, \
+             rseed_output = :rseed_output, gov_comm = :gov_comm, \
+             total_note_value = :total_note_value, address_index = :address_index \
+             WHERE round_id = :round_id",
             named_params! {
                 ":rand": van_comm_rand,
                 ":dummies": dummy_blob,
@@ -230,6 +239,9 @@ pub fn store_delegation_data(
                 ":alpha": alpha,
                 ":rseed_signed": rseed_signed,
                 ":rseed_output": rseed_output,
+                ":gov_comm": gov_comm,
+                ":total_note_value": total_note_value as i64,
+                ":address_index": address_index as i64,
                 ":round_id": round_id,
             },
         )
@@ -382,6 +394,84 @@ pub fn load_padded_cmx(conn: &Connection, round_id: &str) -> Result<Vec<Vec<u8>>
         });
     }
     Ok(blob.chunks_exact(32).map(|c| c.to_vec()).collect())
+}
+
+// --- ZKP #2 inputs ---
+
+/// Data from delegation that ZKP #2 needs.
+pub struct Zkp2DelegationData {
+    pub gov_comm_rand: Vec<u8>,
+    pub total_note_value: u64,
+    pub address_index: u32,
+    pub ea_pk: Vec<u8>,
+    pub voting_round_id: String,
+}
+
+/// Load all fields ZKP #2 needs from the rounds table (persisted during delegation).
+pub fn load_zkp2_inputs(
+    conn: &Connection,
+    round_id: &str,
+) -> Result<Zkp2DelegationData, VotingError> {
+    conn.query_row(
+        "SELECT gov_comm_rand, total_note_value, address_index, ea_pk, round_id \
+         FROM rounds WHERE round_id = :round_id",
+        named_params! { ":round_id": round_id },
+        |row| {
+            Ok(Zkp2DelegationData {
+                gov_comm_rand: row.get(0)?,
+                total_note_value: row.get::<_, i64>(1)? as u64,
+                address_index: row.get::<_, i64>(2)? as u32,
+                ea_pk: row.get(3)?,
+                voting_round_id: row.get(4)?,
+            })
+        },
+    )
+    .map_err(|e| VotingError::InvalidInput {
+        message: format!("failed to load ZKP2 inputs for round: {} ({})", round_id, e),
+    })
+}
+
+// --- VAN leaf position ---
+
+/// Store the VAN leaf position after delegation TX is confirmed on chain.
+pub fn store_van_position(
+    conn: &Connection,
+    round_id: &str,
+    position: u32,
+) -> Result<(), VotingError> {
+    let rows = conn
+        .execute(
+            "UPDATE rounds SET van_leaf_position = :position WHERE round_id = :round_id",
+            named_params! {
+                ":position": position as i64,
+                ":round_id": round_id,
+            },
+        )
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to store VAN position: {}", e),
+        })?;
+    if rows == 0 {
+        return Err(VotingError::InvalidInput {
+            message: format!("round not found: {}", round_id),
+        });
+    }
+    Ok(())
+}
+
+/// Load the VAN leaf position for witness generation.
+pub fn load_van_position(conn: &Connection, round_id: &str) -> Result<u32, VotingError> {
+    conn.query_row(
+        "SELECT van_leaf_position FROM rounds WHERE round_id = :round_id",
+        named_params! { ":round_id": round_id },
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .map_err(|e| VotingError::InvalidInput {
+        message: format!("no van_leaf_position for round: {} ({})", round_id, e),
+    })?
+    .map(|v| v as u32)
+    .ok_or_else(|| VotingError::InvalidInput {
+        message: format!("van_leaf_position not yet set for round: {}", round_id),
+    })
 }
 
 // --- Cached Tree State ---
