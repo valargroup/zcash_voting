@@ -2,67 +2,306 @@ import ComposableArchitecture
 import Foundation
 import VotingModels
 
+// MARK: - API Configuration
+
+/// Configuration for the Zally chain REST API.
+/// Set `activeRoundIdHex` before entering the voting flow.
+public enum ZallyAPIConfig {
+    /// Base URL for the chain REST API (e.g. "http://localhost:1317").
+    /// TODO: Source from app configuration or server discovery.
+    public static var baseURL = "http://localhost:1317"
+
+    /// Hex-encoded 32-byte vote_round_id of the active round.
+    /// Must be set before calling fetchActiveVotingSession.
+    /// TODO: Replace with proper round discovery (QR scan, deep link, or chain query).
+    public static var activeRoundIdHex: String?
+}
+
+// MARK: - Errors
+
+private enum ZallyAPIError: LocalizedError {
+    case noActiveRoundConfigured
+    case httpError(statusCode: Int, message: String)
+    case invalidResponse(String)
+    case txFailed(code: UInt32, log: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noActiveRoundConfigured:
+            return "No active voting round configured. Set ZallyAPIConfig.activeRoundIdHex before entering the voting flow."
+        case .httpError(let code, let message):
+            return "HTTP \(code): \(message)"
+        case .invalidResponse(let detail):
+            return "Invalid API response: \(detail)"
+        case .txFailed(let code, let log):
+            return "Transaction failed (code \(code)): \(log)"
+        }
+    }
+}
+
+// MARK: - HTTP Helpers
+
+/// URLSession configured with a long timeout to accommodate ZKP verification (30-60s).
+private let httpSession: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 120
+    return URLSession(configuration: config)
+}()
+
+private func getJSON(_ path: String) async throws -> [String: Any] {
+    guard let url = URL(string: "\(ZallyAPIConfig.baseURL)\(path)") else {
+        throw ZallyAPIError.invalidResponse("invalid URL: \(ZallyAPIConfig.baseURL)\(path)")
+    }
+    let (data, response) = try await httpSession.data(from: url)
+    guard let http = response as? HTTPURLResponse else {
+        throw ZallyAPIError.invalidResponse("not an HTTP response")
+    }
+    guard http.statusCode == 200 else {
+        let body = String(data: data, encoding: .utf8) ?? ""
+        throw ZallyAPIError.httpError(statusCode: http.statusCode, message: body)
+    }
+    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw ZallyAPIError.invalidResponse("expected JSON object")
+    }
+    return json
+}
+
+private func postJSON(_ path: String, body: [String: Any]) async throws -> [String: Any] {
+    guard let url = URL(string: "\(ZallyAPIConfig.baseURL)\(path)") else {
+        throw ZallyAPIError.invalidResponse("invalid URL: \(ZallyAPIConfig.baseURL)\(path)")
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+    let (data, response) = try await httpSession.data(for: request)
+    guard let http = response as? HTTPURLResponse else {
+        throw ZallyAPIError.invalidResponse("not an HTTP response")
+    }
+    guard http.statusCode == 200 else {
+        let body = String(data: data, encoding: .utf8) ?? ""
+        throw ZallyAPIError.httpError(statusCode: http.statusCode, message: body)
+    }
+    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw ZallyAPIError.invalidResponse("expected JSON object")
+    }
+    return json
+}
+
+/// Parse a broadcast TX response into TxResult. Throws on non-zero code.
+private func parseTxResult(_ json: [String: Any]) throws -> TxResult {
+    let txHash = json["tx_hash"] as? String ?? ""
+    let code = (json["code"] as? NSNumber)?.uint32Value ?? 0
+    let log = json["log"] as? String ?? ""
+    if code != 0 {
+        throw ZallyAPIError.txFailed(code: code, log: log)
+    }
+    return TxResult(txHash: txHash, code: code, log: log)
+}
+
+// MARK: - Protobuf JSON Parsing Helpers
+
+/// Parse a uint64 value that may come as a string (protobuf JSON) or number.
+private func parseUInt64(_ value: Any?) -> UInt64 {
+    if let str = value as? String, let n = UInt64(str) { return n }
+    if let num = value as? NSNumber { return num.uint64Value }
+    return 0
+}
+
+/// Parse a uint32 value from JSON (number or string).
+private func parseUInt32(_ value: Any?) -> UInt32 {
+    if let str = value as? String, let n = UInt32(str) { return n }
+    if let num = value as? NSNumber { return num.uint32Value }
+    return 0
+}
+
+/// Decode base64-encoded bytes, returning empty Data on failure.
+private func parseBase64(_ value: Any?) -> Data {
+    guard let str = value as? String, let data = Data(base64Encoded: str) else { return Data() }
+    return data
+}
+
+/// Convert hex string to Data.
+private func dataFromHex(_ hex: String) -> Data {
+    var data = Data()
+    var idx = hex.startIndex
+    while idx < hex.endIndex {
+        let next = hex.index(idx, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+        if let byte = UInt8(hex[idx..<next], radix: 16) {
+            data.append(byte)
+        }
+        idx = next
+    }
+    return data
+}
+
+// MARK: - Response Parsers
+
+/// Parse a VotingSession from the "round" JSON object returned by GET /zally/v1/round/{id}.
+private func parseVotingSession(from round: [String: Any]) throws -> VotingSession {
+    let voteEndTimeUnix = parseUInt64(round["vote_end_time"])
+    let voteEndTime = Date(timeIntervalSince1970: TimeInterval(voteEndTimeUnix))
+    let statusRaw = parseUInt32(round["status"])
+
+    // Parse proposals array
+    var proposals: [Proposal] = []
+    if let proposalsJSON = round["proposals"] as? [[String: Any]] {
+        proposals = proposalsJSON.map { p in
+            Proposal(
+                id: parseUInt32(p["id"]),
+                title: p["title"] as? String ?? "",
+                description: p["description"] as? String ?? ""
+            )
+        }
+    }
+
+    return VotingSession(
+        voteRoundId: parseBase64(round["vote_round_id"]),
+        snapshotHeight: parseUInt64(round["snapshot_height"]),
+        snapshotBlockhash: parseBase64(round["snapshot_blockhash"]),
+        proposalsHash: parseBase64(round["proposals_hash"]),
+        voteEndTime: voteEndTime,
+        eaPK: parseBase64(round["ea_pk"]),
+        vkZkp1: parseBase64(round["vk_zkp1"]),
+        vkZkp2: parseBase64(round["vk_zkp2"]),
+        vkZkp3: parseBase64(round["vk_zkp3"]),
+        ncRoot: parseBase64(round["nc_root"]),
+        nullifierIMTRoot: parseBase64(round["nullifier_imt_root"]),
+        creator: round["creator"] as? String ?? "",
+        proposals: proposals,
+        status: SessionStatus(rawValue: statusRaw) ?? .unspecified
+    )
+}
+
+/// Parse a CommitmentTreeState from the "tree" JSON object.
+private func parseCommitmentTree(from tree: [String: Any]) -> CommitmentTreeState {
+    CommitmentTreeState(
+        nextIndex: parseUInt64(tree["next_index"]),
+        root: parseBase64(tree["root"]),
+        height: parseUInt64(tree["height"])
+    )
+}
+
+// MARK: - Live Implementation
+
 extension VotingAPIClient: DependencyKey {
     public static var liveValue: Self {
         Self(
             fetchActiveVotingSession: {
-                // Stub: return mock session matching the prototype's VotingRound
-                try await Task.sleep(for: .milliseconds(200))
-                return VotingSession(
-                    voteRoundId: Data(repeating: 0x0A, count: 32),
-                    snapshotHeight: 3_235_467,
-                    snapshotBlockhash: Data(repeating: 0x0B, count: 32),
-                    proposalsHash: Data(repeating: 0x0C, count: 32),
-                    voteEndTime: Calendar.current.date(byAdding: .day, value: 5, to: Date())!,
-                    eaPK: Data(repeating: 0x01, count: 32),
-                    vkZkp1: Data(repeating: 0x02, count: 32),
-                    vkZkp2: Data(repeating: 0x03, count: 32),
-                    vkZkp3: Data(repeating: 0x04, count: 32),
-                    ncRoot: Data(repeating: 0x05, count: 32),
-                    nullifierIMTRoot: Data(repeating: 0x06, count: 32),
-                    creator: "zvote1admin",
-                    proposals: [],
-                    status: .active
-                )
+                guard let roundIdHex = ZallyAPIConfig.activeRoundIdHex, !roundIdHex.isEmpty else {
+                    throw ZallyAPIError.noActiveRoundConfigured
+                }
+                let json = try await getJSON("/zally/v1/round/\(roundIdHex)")
+                guard let round = json["round"] as? [String: Any] else {
+                    throw ZallyAPIError.invalidResponse("missing 'round' in response")
+                }
+                return try parseVotingSession(from: round)
             },
             fetchVotingWeight: { _ in
-                try await Task.sleep(for: .milliseconds(100))
-                return 14_250_000_000 // 142.50 ZEC
+                // Weight is computed locally from wallet notes; this endpoint is unused.
+                fatalError("fetchVotingWeight is deprecated — weight is computed from wallet notes")
             },
-            fetchNoteInclusionProofs: { commitments in
-                try await Task.sleep(for: .milliseconds(100))
-                return commitments.map { _ in Data(repeating: 0x11, count: 32) }
+            fetchNoteInclusionProofs: { _ in
+                // Witnesses are generated by votingCrypto; this endpoint is unused.
+                fatalError("fetchNoteInclusionProofs is deprecated — witnesses come from votingCrypto")
             },
-            fetchNullifierExclusionProofs: { nullifiers in
-                try await Task.sleep(for: .milliseconds(100))
-                return nullifiers.map { _ in Data(repeating: 0x22, count: 32) }
+            fetchNullifierExclusionProofs: { _ in
+                // Nullifier exclusion proofs are fetched by the Rust IMT client; this endpoint is unused.
+                fatalError("fetchNullifierExclusionProofs is deprecated — handled by IMT client")
             },
-            fetchCommitmentTreeState: { _ in
-                try await Task.sleep(for: .milliseconds(100))
-                return CommitmentTreeState(nextIndex: 1024, root: Data(repeating: 0x33, count: 32), height: 3_235_467)
+            fetchCommitmentTreeState: { height in
+                let json = try await getJSON("/zally/v1/commitment-tree/\(height)")
+                guard let tree = json["tree"] as? [String: Any] else {
+                    throw ZallyAPIError.invalidResponse("missing 'tree' in response")
+                }
+                return parseCommitmentTree(from: tree)
             },
             fetchLatestCommitmentTree: {
-                try await Task.sleep(for: .milliseconds(100))
-                return CommitmentTreeState(nextIndex: 2048, root: Data(repeating: 0x44, count: 32), height: 2_800_100)
+                let json = try await getJSON("/zally/v1/commitment-tree/latest")
+                guard let tree = json["tree"] as? [String: Any] else {
+                    throw ZallyAPIError.invalidResponse("missing 'tree' in response")
+                }
+                return parseCommitmentTree(from: tree)
             },
-            submitDelegation: { _ in
-                try await Task.sleep(for: .milliseconds(500))
-                return TxResult(txHash: "mock_delegation_tx_\(UUID().uuidString.prefix(8))", code: 0)
+            submitDelegation: { registration in
+                let body: [String: Any] = [
+                    "rk": registration.rk.base64EncodedString(),
+                    "spend_auth_sig": registration.spendAuthSig.base64EncodedString(),
+                    "sighash": registration.sighash.base64EncodedString(),
+                    "signed_note_nullifier": registration.signedNoteNullifier.base64EncodedString(),
+                    "cmx_new": registration.cmxNew.base64EncodedString(),
+                    "enc_memo": registration.encMemo.base64EncodedString(),
+                    "gov_comm": registration.govComm.base64EncodedString(),
+                    "gov_nullifiers": registration.govNullifiers.map { $0.base64EncodedString() },
+                    "proof": registration.proof.base64EncodedString(),
+                    "vote_round_id": registration.voteRoundId.base64EncodedString()
+                ]
+                let json = try await postJSON("/zally/v1/delegate-vote", body: body)
+                return try parseTxResult(json)
             },
-            submitVoteCommitment: { _ in
-                try await Task.sleep(for: .milliseconds(300))
-                return TxResult(txHash: "mock_vote_tx_\(UUID().uuidString.prefix(8))", code: 0)
+            submitVoteCommitment: { bundle in
+                // voteRoundId is a hex string; chain expects base64-encoded bytes
+                let roundIdBytes = dataFromHex(bundle.voteRoundId)
+                let body: [String: Any] = [
+                    "van_nullifier": bundle.vanNullifier.base64EncodedString(),
+                    "vote_authority_note_new": bundle.voteAuthorityNoteNew.base64EncodedString(),
+                    "vote_commitment": bundle.voteCommitment.base64EncodedString(),
+                    "proposal_id": bundle.proposalId,
+                    "proof": bundle.proof.base64EncodedString(),
+                    "vote_round_id": roundIdBytes.base64EncodedString(),
+                    "vote_comm_tree_anchor_height": bundle.anchorHeight
+                ]
+                let json = try await postJSON("/zally/v1/cast-vote", body: body)
+                return try parseTxResult(json)
             },
-            delegateShares: { _ in
-                try await Task.sleep(for: .milliseconds(200))
+            delegateShares: { payloads, roundIdHex, anchorHeight in
+                let roundIdBytes = dataFromHex(roundIdHex)
+
+                // Submit each share as a separate reveal-share transaction
+                for payload in payloads {
+                    // Concatenate C1||C2 for the enc_share field (64 bytes total)
+                    var encShareBytes = Data()
+                    encShareBytes.append(payload.encShare.c1)
+                    encShareBytes.append(payload.encShare.c2)
+
+                    // Generate a unique share nullifier (32 bytes, canonical Pallas Fp: MSB < 0x40)
+                    var nullifier = Data(count: 32)
+                    nullifier.withUnsafeMutableBytes { ptr in
+                        _ = SecRandomCopyBytes(kSecRandomDefault, 32, ptr.baseAddress!)
+                    }
+                    nullifier[0] &= 0x3F
+
+                    let body: [String: Any] = [
+                        "share_nullifier": nullifier.base64EncodedString(),
+                        "enc_share": encShareBytes.base64EncodedString(),
+                        "proposal_id": payload.proposalId,
+                        "vote_decision": payload.voteDecision,
+                        // TODO: Replace with real ZKP #3 proof
+                        "proof": Data("mock-reveal-share-proof".utf8).base64EncodedString(),
+                        "vote_round_id": roundIdBytes.base64EncodedString(),
+                        "vote_comm_tree_anchor_height": anchorHeight
+                    ]
+                    let json = try await postJSON("/zally/v1/reveal-share", body: body)
+                    _ = try parseTxResult(json)
+                }
             },
-            fetchProposalTally: { _, _ in
-                try await Task.sleep(for: .milliseconds(200))
-                return TallyResult(entries: [
-                    TallyResult.Entry(decision: 0, amount: 50_000_000_000),
-                    TallyResult.Entry(decision: 1, amount: 30_000_000_000),
-                    TallyResult.Entry(decision: 2, amount: 10_000_000_000)
-                ])
+            fetchProposalTally: { roundId, proposalId in
+                let roundIdHex = roundId.map { String(format: "%02x", $0) }.joined()
+                let json = try await getJSON("/zally/v1/tally-results/\(roundIdHex)")
+                guard let results = json["results"] as? [[String: Any]] else {
+                    // No results yet — return empty tally
+                    return TallyResult(entries: [])
+                }
+                let entries = results
+                    .filter { parseUInt32($0["proposal_id"]) == proposalId }
+                    .map { entry in
+                        TallyResult.Entry(
+                            decision: parseUInt32(entry["vote_decision"]),
+                            amount: parseUInt64(entry["total_value"])
+                        )
+                    }
+                return TallyResult(entries: entries)
             }
         )
     }

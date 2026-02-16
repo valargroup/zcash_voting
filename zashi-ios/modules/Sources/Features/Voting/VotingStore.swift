@@ -812,7 +812,7 @@ public struct Voting {
                         let payloads = try await votingCrypto.buildSharePayloads(
                             builtBundle.encShares, builtBundle, choice, vcTreePosition
                         )
-                        try await votingAPI.delegateShares(payloads)
+                        try await votingAPI.delegateShares(payloads, roundId, builtBundle.anchorHeight)
 
                         // Mark vote submitted in DB
                         try await votingCrypto.markVoteSubmitted(roundId, proposalId)
