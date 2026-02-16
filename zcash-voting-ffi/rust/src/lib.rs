@@ -277,6 +277,40 @@ pub struct SharePayload {
     pub all_enc_shares: Vec<EncryptedShare>,
 }
 
+
+
+/// Complete delegation TX payload ready for chain submission.
+/// Returned by `get_delegation_submission` after proof generation.
+#[derive(Clone, uniffi::Record)]
+pub struct DelegationSubmission {
+    pub rk: Vec<u8>,
+    pub spend_auth_sig: Vec<u8>,
+    pub sighash: Vec<u8>,
+    pub nf_signed: Vec<u8>,
+    pub cmx_new: Vec<u8>,
+    pub enc_memo: Vec<u8>,
+    pub gov_comm: Vec<u8>,
+    pub gov_nullifiers: Vec<Vec<u8>>,
+    pub proof: Vec<u8>,
+    pub vote_round_id: String,
+}
+
+impl From<voting::DelegationSubmissionData> for DelegationSubmission {
+    fn from(d: voting::DelegationSubmissionData) -> Self {
+        Self {
+            rk: d.rk,
+            spend_auth_sig: d.spend_auth_sig,
+            sighash: d.sighash,
+            nf_signed: d.nf_signed,
+            cmx_new: d.cmx_new,
+            enc_memo: d.enc_memo,
+            gov_comm: d.gov_comm,
+            gov_nullifiers: d.gov_nullifiers,
+            proof: d.proof,
+            vote_round_id: d.vote_round_id,
+        }
+    }
+}
 /// Result of real delegation proof generation (ZKP #1).
 #[derive(Clone, uniffi::Record)]
 pub struct DelegationProofResult {
@@ -821,6 +855,24 @@ impl VotingDatabase {
             .into_iter()
             .map(Into::into)
             .collect())
+    }
+
+    /// Reconstruct the full chain-ready delegation TX payload from DB + seed.
+    ///
+    /// After `build_and_prove_delegation` completes, call this to get the signed
+    /// delegation payload for submission. Derives the sender's SpendingKey from
+    /// seed, computes the canonical sighash, and signs it.
+    pub fn get_delegation_submission(
+        &self,
+        round_id: String,
+        sender_seed: Vec<u8>,
+        network_id: u32,
+        account_index: u32,
+    ) -> Result<DelegationSubmission, VotingError> {
+        Ok(self
+            .db
+            .get_delegation_submission(&round_id, &sender_seed, network_id, account_index)?
+            .into())
     }
 
     /// Store the VAN leaf position after delegation TX is confirmed on chain.
