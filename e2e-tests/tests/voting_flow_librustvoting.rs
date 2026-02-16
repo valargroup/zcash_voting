@@ -91,7 +91,7 @@ fn voting_flow_librustvoting_path() {
     let (status, json) = post_json_accept_committed(
         "/zally/v1/delegate-vote",
         &deleg_body,
-        || commitment_tree_next_index().map(|n| n >= 2).unwrap_or(false),
+        || commitment_tree_next_index().map(|n| n >= 1).unwrap_or(false),
     )
     .expect("POST delegate-vote");
     assert_eq!(status, 200, "delegate-vote: HTTP {}, body={:?}", status, json);
@@ -104,7 +104,8 @@ fn voting_flow_librustvoting_path() {
     block_wait();
 
     // ---- Step 3: Wait for tree to have root after delegation ----
-    log_step("Step 3", "waiting for commitment tree (2 leaves)");
+    // Only van_cmx is appended to the tree (cmx_new is not included).
+    log_step("Step 3", "waiting for commitment tree (1 leaf: van_cmx)");
     let mut anchor_height: u32 = 0;
     for _ in 0..30 {
         let (status, json) =
@@ -113,7 +114,7 @@ fn voting_flow_librustvoting_path() {
         if let Some(tree) = json.get("tree") {
             let h = tree.get("height").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
             let next_idx = tree.get("next_index").and_then(|x| x.as_u64()).unwrap_or(0);
-            if h > 0 && next_idx >= 2 {
+            if h > 0 && next_idx >= 1 {
                 anchor_height = h;
                 assert!(tree.get("root").is_some());
                 break;
@@ -121,7 +122,7 @@ fn voting_flow_librustvoting_path() {
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
-    assert!(anchor_height > 0, "tree never reached 2 leaves after delegation");
+    assert!(anchor_height > 0, "tree never reached 1 leaf after delegation");
 
     // ---- Step 4: Create VotingDb and persist delegation data ----
     log_step("Step 4", "creating VotingDb, persisting delegation data");
@@ -162,20 +163,20 @@ fn voting_flow_librustvoting_path() {
         .expect("store_delegation_data");
     }
 
-    // VAN is at position 1 in the commitment tree (cmx_new=0, gov_comm=1)
-    db.store_van_position(&round_id_hex, 1)
+    // VAN is at position 0 in the commitment tree (only van_cmx is appended)
+    db.store_van_position(&round_id_hex, 0)
         .expect("store_van_position");
 
     // ---- Step 5: Sync tree via TreeClient + HttpTreeSyncApi ----
     log_step("Step 5", "syncing vote commitment tree from chain");
     let base_url = api::base_url();
     let mut tree_client = TreeClient::empty();
-    tree_client.mark_position(1); // VAN at position 1
+    tree_client.mark_position(0); // VAN at position 0
     let sync_api = HttpTreeSyncApi::new(&base_url);
     tree_client
         .sync(&sync_api)
         .expect("TreeClient sync from chain");
-    assert!(tree_client.size() >= 2, "tree should have >= 2 leaves after sync");
+    assert!(tree_client.size() >= 1, "tree should have >= 1 leaf after sync");
     log_step(
         "Step 5",
         &format!(
@@ -186,11 +187,11 @@ fn voting_flow_librustvoting_path() {
     );
 
     // ---- Step 6: Generate VAN witness ----
-    log_step("Step 6", "generating VAN witness at position 1");
+    log_step("Step 6", "generating VAN witness at position 0");
     let witness = tree_client
-        .witness(1, anchor_height)
+        .witness(0, anchor_height)
         .expect("generate VAN witness");
-    assert_eq!(witness.position(), 1);
+    assert_eq!(witness.position(), 0);
 
     // Verify local root matches on-chain root
     let local_root = tree_client
@@ -236,7 +237,7 @@ fn voting_flow_librustvoting_path() {
             1, // proposal_id
             1, // choice (oppose)
             &auth_path_bytes,
-            1,             // van_position
+            0,             // van_position
             anchor_height,
             &NoopProgressReporter,
         )
@@ -332,7 +333,7 @@ fn voting_flow_librustvoting_path() {
             let result = post_json_accept_committed(
                 "/zally/v1/cast-vote",
                 &cast_body,
-                || commitment_tree_next_index().map(|n| n >= 4).unwrap_or(false),
+                || commitment_tree_next_index().map(|n| n >= 3).unwrap_or(false),
             )
             .expect("POST cast-vote");
             let code = result.1.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
@@ -366,14 +367,14 @@ fn voting_flow_librustvoting_path() {
 
     // ---- Step 9: Build share payloads via VotingDb ----
     log_step("Step 9", "building share payloads via VotingDb");
-    // After cast-vote, tree has 4 leaves: cmx_new(0), gov_comm(1),
-    // vote_authority_note_new(2), vote_commitment(3). VC is at position 3.
+    // After cast-vote, tree has 3 leaves: van_cmx(0),
+    // vote_authority_note_new(1), vote_commitment(2). VC is at position 2.
     let payloads = db
         .build_share_payloads(
             &bundle.enc_shares,
             &bundle,
             1, // vote_decision (oppose)
-            3, // vc_tree_position
+            2, // vc_tree_position
         )
         .expect("VotingDb::build_share_payloads");
     assert_eq!(payloads.len(), 4, "should have 4 share payloads");
@@ -381,7 +382,7 @@ fn voting_flow_librustvoting_path() {
         assert_eq!(p.shares_hash, bundle.shares_hash);
         assert_eq!(p.proposal_id, 1);
         assert_eq!(p.vote_decision, 1);
-        assert_eq!(p.tree_position, 3);
+        assert_eq!(p.tree_position, 2);
         assert_eq!(p.enc_share.share_index, i as u32);
     }
     log_step("Step 9", "share payloads built and validated");
@@ -389,8 +390,8 @@ fn voting_flow_librustvoting_path() {
     // ---- Step 10: Build real ZKP #3 and submit reveal-share ----
     log_step("Step 10", "building share reveal proof (ZKP #3, share 0)...");
 
-    // Resync tree to include cast-vote leaves (VAN_new at 2, VC at 3)
-    tree_client.mark_position(3); // VC position
+    // Resync tree to include cast-vote leaves (VAN_new at 1, VC at 2)
+    tree_client.mark_position(2); // VC position
     tree_client.sync(&sync_api).expect("resync tree after cast-vote");
 
     let (_, tree_json) =
@@ -402,7 +403,7 @@ fn voting_flow_librustvoting_path() {
         .unwrap_or(anchor_height as u64) as u32;
 
     // Build VC auth path from tree
-    let vc_witness = tree_client.witness(3, reveal_anchor).expect("VC tree witness");
+    let vc_witness = tree_client.witness(2, reveal_anchor).expect("VC tree witness");
     let vc_auth_path: [pallas::Base; 24] = {
         let path_hashes = vc_witness.auth_path();
         let mut arr = [pallas::Base::zero(); 24];
@@ -441,7 +442,7 @@ fn voting_flow_librustvoting_path() {
 
     let share_0_bundle = build_share_reveal(
         vc_auth_path,
-        3, // vc_position
+        2, // vc_position
         enc_c1_x,
         enc_c2_x,
         0, // share_index
