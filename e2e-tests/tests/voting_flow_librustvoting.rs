@@ -21,12 +21,14 @@ use e2e_tests::{
     setup::build_delegation_bundle_for_test,
 };
 use ff::PrimeField;
-use group::GroupEncoding;
+use group::{Curve, GroupEncoding};
 use librustvoting::{NoopProgressReporter, VotingRoundParams};
 use orchard::keys::SpendAuthorizingKey;
 use pasta_curves::{arithmetic::CurveAffine, pallas};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use orchard::share_reveal::builder::build_share_reveal;
+use orchard::share_reveal::{create_share_reveal_proof, verify_share_reveal_proof};
 use vote_commitment_tree::TreeClient;
 use vote_commitment_tree_client::http_sync_api::HttpTreeSyncApi;
 
@@ -384,10 +386,13 @@ fn voting_flow_librustvoting_path() {
     }
     log_step("Step 9", "share payloads built and validated");
 
-    // ---- Step 10: Submit reveal-share with first payload's enc_share ----
-    log_step("Step 10", "submitting reveal-share from built payloads");
+    // ---- Step 10: Build real ZKP #3 and submit reveal-share ----
+    log_step("Step 10", "building share reveal proof (ZKP #3, share 0)...");
 
-    // Get latest anchor height (tree now has 4 leaves after cast-vote)
+    // Resync tree to include cast-vote leaves (VAN_new at 2, VC at 3)
+    tree_client.mark_position(3); // VC position
+    tree_client.sync(&sync_api).expect("resync tree after cast-vote");
+
     let (_, tree_json) =
         get_json("/zally/v1/commitment-tree/latest").expect("GET tree latest");
     let reveal_anchor = tree_json
@@ -396,13 +401,72 @@ fn voting_flow_librustvoting_path() {
         .and_then(|h| h.as_u64())
         .unwrap_or(anchor_height as u64) as u32;
 
-    // Convert the first share's ciphertext to base64 (c1 || c2, 64 bytes)
+    // Build VC auth path from tree
+    let vc_witness = tree_client.witness(3, reveal_anchor).expect("VC tree witness");
+    let vc_auth_path: [pallas::Base; 24] = {
+        let path_hashes = vc_witness.auth_path();
+        let mut arr = [pallas::Base::zero(); 24];
+        for (i, h) in path_hashes.iter().enumerate() {
+            arr[i] = pallas::Base::from_repr(h.to_bytes()).unwrap();
+        }
+        arr
+    };
+
+    // Reconstruct enc_c1_x / enc_c2_x from all_enc_shares
+    let all_shares = &payloads[0].all_enc_shares;
+    let enc_c1_x: [pallas::Base; 4] = core::array::from_fn(|i| {
+        let pt: pallas::Affine = {
+            let c1_arr: [u8; 32] = all_shares[i].c1.as_slice().try_into().unwrap();
+            let opt: Option<pallas::Point> = pallas::Point::from_bytes(&c1_arr).into();
+            opt.expect("c1 decompression").to_affine()
+        };
+        *pt.coordinates().unwrap().x()
+    });
+    let enc_c2_x: [pallas::Base; 4] = core::array::from_fn(|i| {
+        let pt: pallas::Affine = {
+            let c2_arr: [u8; 32] = all_shares[i].c2.as_slice().try_into().unwrap();
+            let opt: Option<pallas::Point> = pallas::Point::from_bytes(&c2_arr).into();
+            opt.expect("c2 decompression").to_affine()
+        };
+        *pt.coordinates().unwrap().x()
+    });
+
+    // Parse voting_round_id from round_id bytes
+    let vri = {
+        let mut arr = [0u8; 32];
+        let len = round_id.len().min(32);
+        arr[..len].copy_from_slice(&round_id[..len]);
+        pallas::Base::from_repr(arr).unwrap()
+    };
+
+    let share_0_bundle = build_share_reveal(
+        vc_auth_path,
+        3, // vc_position
+        enc_c1_x,
+        enc_c2_x,
+        0, // share_index
+        pallas::Base::from(1u64), // proposal_id
+        pallas::Base::from(1u64), // vote_decision
+        vri,
+    );
+    let share_0_proof = create_share_reveal_proof(share_0_bundle.circuit.clone(), &share_0_bundle.instance);
+    verify_share_reveal_proof(&share_0_proof, &share_0_bundle.instance)
+        .expect("local share reveal proof verification must pass");
+    log_step("Step 10", "ZKP #3 verified locally, submitting reveal-share");
+
+    let share_0_nullifier = share_0_bundle.instance.share_nullifier.to_repr();
     let share = &payloads[0].enc_share;
     let enc_share_bytes: Vec<u8> = [share.c1.as_slice(), share.c2.as_slice()].concat();
-    let enc_share_b64 =
-        base64::engine::general_purpose::STANDARD.encode(&enc_share_bytes);
 
-    let reveal_body = reveal_share_payload(&round_id, reveal_anchor, &enc_share_b64, 1, 1);
+    let reveal_body = reveal_share_payload(
+        &round_id,
+        reveal_anchor,
+        share_0_nullifier.as_ref(),
+        &enc_share_bytes,
+        1, // proposal_id
+        1, // vote_decision
+        &share_0_proof,
+    );
     let (status, json) = post_json_accept_committed(
         "/zally/v1/reveal-share",
         &reveal_body,

@@ -18,12 +18,12 @@ use e2e_tests::{
     setup::{build_delegation_bundle_for_test, build_van_merkle_witness, build_vote_commitment_merkle_witness},
 };
 use ff::{Field, PrimeField};
-use group::Curve;
+use group::{Curve, GroupEncoding};
 use orchard::keys::SpendAuthorizingKey;
 use orchard::share_reveal::builder::build_share_reveal;
 use orchard::share_reveal::{create_share_reveal_proof, verify_share_reveal_proof};
 use orchard::vote_proof::build_vote_proof_from_delegation;
-use pasta_curves::pallas;
+use pasta_curves::{arithmetic::CurveAffine, pallas};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
@@ -396,13 +396,36 @@ fn voting_flow_full_lifecycle() {
         );
     }
 
+    // ----- Extract enc_c1_x / enc_c2_x from encrypted_shares -----
+    let enc_c1_x: [pallas::Base; 4] = core::array::from_fn(|i| {
+        let pt: pallas::Affine = {
+            let opt: Option<pallas::Point> = pallas::Point::from_bytes(&vote_bundle.encrypted_shares[i].c1).into();
+            opt.expect("c1 decompression").to_affine()
+        };
+        *pt.coordinates().unwrap().x()
+    });
+    let enc_c2_x: [pallas::Base; 4] = core::array::from_fn(|i| {
+        let pt: pallas::Affine = {
+            let opt: Option<pallas::Point> = pallas::Point::from_bytes(&vote_bundle.encrypted_shares[i].c2).into();
+            opt.expect("c2 decompression").to_affine()
+        };
+        *pt.coordinates().unwrap().x()
+    });
+    // Build compressed bytes (C1 || C2) for chain submission
+    let enc_shares_compressed: [[u8; 64]; 4] = core::array::from_fn(|i| {
+        let mut buf = [0u8; 64];
+        buf[..32].copy_from_slice(&vote_bundle.encrypted_shares[i].c1);
+        buf[32..].copy_from_slice(&vote_bundle.encrypted_shares[i].c2);
+        buf
+    });
+
     // ----- Step 6: Reveal share 0 (real ZKP #3) -----
     log_step("Step 6", "building share reveal proof (ZKP #3, share 0, K=14 may take 30-60s)...");
     let share_0_bundle = build_share_reveal(
         vc_auth_path,
         vc_position,
-        vote_bundle.enc_c1_x,
-        vote_bundle.enc_c2_x,
+        enc_c1_x,
+        enc_c2_x,
         0, // share_index
         pallas::Base::from(1u64), // proposal_id
         pallas::Base::from(1u64), // vote_decision
@@ -416,7 +439,7 @@ fn voting_flow_full_lifecycle() {
     log_step("Step 6", "local verification passed, submitting reveal-share");
 
     let share_0_nullifier = share_0_bundle.instance.share_nullifier.to_repr();
-    let enc_share_0_bytes = &vote_bundle.enc_shares_compressed[0];
+    let enc_share_0_bytes = &enc_shares_compressed[0];
     let reveal_body = reveal_share_payload(
         &round_id,
         anchor_height,
@@ -450,8 +473,8 @@ fn voting_flow_full_lifecycle() {
     let share_1_bundle = build_share_reveal(
         vc_auth_path,
         vc_position,
-        vote_bundle.enc_c1_x,
-        vote_bundle.enc_c2_x,
+        enc_c1_x,
+        enc_c2_x,
         1, // share_index
         pallas::Base::from(1u64), // proposal_id
         pallas::Base::from(1u64), // vote_decision
@@ -465,7 +488,7 @@ fn voting_flow_full_lifecycle() {
     log_step("Step 8", "local verification passed, submitting reveal-share");
 
     let share_1_nullifier = share_1_bundle.instance.share_nullifier.to_repr();
-    let enc_share_1_bytes = &vote_bundle.enc_shares_compressed[1];
+    let enc_share_1_bytes = &enc_shares_compressed[1];
     let expected_accumulated_b64 = {
         let ct0 = elgamal::unmarshal(enc_share_0_bytes).expect("unmarshal share 0");
         let ct1 = elgamal::unmarshal(enc_share_1_bytes).expect("unmarshal share 1");
