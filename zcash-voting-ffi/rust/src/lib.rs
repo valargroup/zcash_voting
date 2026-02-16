@@ -257,6 +257,8 @@ pub struct VoteCommitmentBundle {
     pub anchor_height: u32,
     /// Voting round ID (hex string).
     pub vote_round_id: String,
+    /// Poseidon hash of encrypted share x-coordinates (32 bytes).
+    pub shares_hash: Vec<u8>,
 }
 
 #[derive(Clone, uniffi::Record)]
@@ -464,6 +466,7 @@ impl From<voting::VoteCommitmentBundle> for VoteCommitmentBundle {
             enc_shares: b.enc_shares.into_iter().map(Into::into).collect(),
             anchor_height: b.anchor_height,
             vote_round_id: b.vote_round_id,
+            shares_hash: b.shares_hash,
         }
     }
 }
@@ -479,6 +482,7 @@ impl From<VoteCommitmentBundle> for voting::VoteCommitmentBundle {
             enc_shares: b.enc_shares.into_iter().map(Into::into).collect(),
             anchor_height: b.anchor_height,
             vote_round_id: b.vote_round_id,
+            shares_hash: b.shares_hash,
         }
     }
 }
@@ -798,12 +802,14 @@ impl VotingDatabase {
         &self,
         enc_shares: Vec<EncryptedShare>,
         commitment: VoteCommitmentBundle,
+        vote_decision: u32,
+        vc_tree_position: u64,
     ) -> Result<Vec<SharePayload>, VotingError> {
         let core_shares: Vec<voting::EncryptedShare> =
             enc_shares.into_iter().map(Into::into).collect();
         Ok(self
             .db
-            .build_share_payloads(&core_shares, &commitment.into())?
+            .build_share_payloads(&core_shares, &commitment.into(), vote_decision, vc_tree_position)?
             .into_iter()
             .map(Into::into)
             .collect())
@@ -1153,13 +1159,20 @@ pub fn build_vote_commitment(
 pub fn build_share_payloads(
     enc_shares: Vec<EncryptedShare>,
     commitment: VoteCommitmentBundle,
+    vote_decision: u32,
+    vc_tree_position: u64,
 ) -> Result<Vec<SharePayload>, VotingError> {
     let core_shares: Vec<voting::EncryptedShare> = enc_shares.into_iter().map(Into::into).collect();
     Ok(
-        voting::vote_commitment::build_share_payloads(&core_shares, &commitment.into())?
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        voting::vote_commitment::build_share_payloads(
+            &core_shares,
+            &commitment.into(),
+            vote_decision,
+            vc_tree_position,
+        )?
+        .into_iter()
+        .map(Into::into)
+        .collect(),
     )
 }
 

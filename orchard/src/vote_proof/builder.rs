@@ -61,6 +61,10 @@ pub struct VoteProofBundle {
     /// These are the exact ciphertexts committed in the vote commitment hash
     /// and must be used for reveal-share payloads.
     pub encrypted_shares: [EncryptedShareOutput; 4],
+    /// Poseidon hash of all encrypted share x-coordinates.
+    /// Intermediate value: vote_commitment = H(DOMAIN_VC, shares_hash, proposal_id, vote_decision).
+    /// Needed by the helper server to verify share payloads.
+    pub shares_hash: pallas::Base,
 }
 
 /// Errors that can occur during vote proof construction.
@@ -423,5 +427,6 @@ pub fn build_vote_proof_from_delegation(
         instance,
         r_vpk_bytes,
         encrypted_shares: enc_share_outputs,
+        shares_hash: shares_hash_val,
     })
 }

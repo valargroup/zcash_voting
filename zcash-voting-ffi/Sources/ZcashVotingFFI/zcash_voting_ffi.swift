@@ -557,7 +557,7 @@ public protocol VotingDatabaseProtocol: AnyObject, Sendable {
 
     func buildGovernancePczt(roundId: String, notes: [NoteInfo], fvkBytes: Data, hotkeyRawAddress: Data, consensusBranchId: UInt32, coinType: UInt32, seedFingerprint: Data, accountIndex: UInt32, roundName: String, addressIndex: UInt32) throws  -> GovernancePczt
 
-    func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteCommitmentBundle) throws  -> [SharePayload]
+    func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteCommitmentBundle, voteDecision: UInt32, vcTreePosition: UInt64) throws  -> [SharePayload]
 
     func buildVoteCommitment(roundId: String, hotkeySeed: Data, networkId: UInt32, proposalId: UInt32, choice: UInt32, vanAuthPath: [Data], vanPosition: UInt32, anchorHeight: UInt32, progress: ProofProgressReporter) throws  -> VoteCommitmentBundle
 
@@ -719,11 +719,13 @@ open func buildGovernancePczt(roundId: String, notes: [NoteInfo], fvkBytes: Data
 })
 }
 
-open func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteCommitmentBundle)throws  -> [SharePayload]  {
+open func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteCommitmentBundle, voteDecision: UInt32, vcTreePosition: UInt64)throws  -> [SharePayload]  {
     return try  FfiConverterSequenceTypeSharePayload.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_method_votingdatabase_build_share_payloads(self.uniffiClonePointer(),
         FfiConverterSequenceTypeEncryptedShare.lower(encShares),
-        FfiConverterTypeVoteCommitmentBundle_lower(commitment),$0
+        FfiConverterTypeVoteCommitmentBundle_lower(commitment),
+        FfiConverterUInt32.lower(voteDecision),
+        FfiConverterUInt64.lower(vcTreePosition),$0
     )
 })
 }
@@ -2170,6 +2172,10 @@ public struct VoteCommitmentBundle {
      * Voting round ID (hex string).
      */
     public var voteRoundId: String
+    /**
+     * Poseidon hash of encrypted share x-coordinates (32 bytes).
+     */
+    public var sharesHash: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2182,7 +2188,10 @@ public struct VoteCommitmentBundle {
          */anchorHeight: UInt32,
         /**
          * Voting round ID (hex string).
-         */voteRoundId: String) {
+         */voteRoundId: String,
+        /**
+         * Poseidon hash of encrypted share x-coordinates (32 bytes).
+         */sharesHash: Data) {
         self.vanNullifier = vanNullifier
         self.voteAuthorityNoteNew = voteAuthorityNoteNew
         self.voteCommitment = voteCommitment
@@ -2191,6 +2200,7 @@ public struct VoteCommitmentBundle {
         self.encShares = encShares
         self.anchorHeight = anchorHeight
         self.voteRoundId = voteRoundId
+        self.sharesHash = sharesHash
     }
 }
 
@@ -2225,6 +2235,9 @@ extension VoteCommitmentBundle: Equatable, Hashable {
         if lhs.voteRoundId != rhs.voteRoundId {
             return false
         }
+        if lhs.sharesHash != rhs.sharesHash {
+            return false
+        }
         return true
     }
 
@@ -2237,6 +2250,7 @@ extension VoteCommitmentBundle: Equatable, Hashable {
         hasher.combine(encShares)
         hasher.combine(anchorHeight)
         hasher.combine(voteRoundId)
+        hasher.combine(sharesHash)
     }
 }
 
@@ -2256,7 +2270,8 @@ public struct FfiConverterTypeVoteCommitmentBundle: FfiConverterRustBuffer {
                 proof: FfiConverterData.read(from: &buf),
                 encShares: FfiConverterSequenceTypeEncryptedShare.read(from: &buf),
                 anchorHeight: FfiConverterUInt32.read(from: &buf),
-                voteRoundId: FfiConverterString.read(from: &buf)
+                voteRoundId: FfiConverterString.read(from: &buf),
+                sharesHash: FfiConverterData.read(from: &buf)
         )
     }
 
@@ -2269,6 +2284,7 @@ public struct FfiConverterTypeVoteCommitmentBundle: FfiConverterRustBuffer {
         FfiConverterSequenceTypeEncryptedShare.write(value.encShares, into: &buf)
         FfiConverterUInt32.write(value.anchorHeight, into: &buf)
         FfiConverterString.write(value.voteRoundId, into: &buf)
+        FfiConverterData.write(value.sharesHash, into: &buf)
     }
 }
 
@@ -3212,11 +3228,13 @@ public func buildGovernancePczt(notes: [NoteInfo], params: VotingRoundParams, fv
     )
 })
 }
-public func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteCommitmentBundle)throws  -> [SharePayload]  {
+public func buildSharePayloads(encShares: [EncryptedShare], commitment: VoteCommitmentBundle, voteDecision: UInt32, vcTreePosition: UInt64)throws  -> [SharePayload]  {
     return try  FfiConverterSequenceTypeSharePayload.lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_func_build_share_payloads(
         FfiConverterSequenceTypeEncryptedShare.lower(encShares),
-        FfiConverterTypeVoteCommitmentBundle_lower(commitment),$0
+        FfiConverterTypeVoteCommitmentBundle_lower(commitment),
+        FfiConverterUInt32.lower(voteDecision),
+        FfiConverterUInt64.lower(vcTreePosition),$0
     )
 })
 }
@@ -3336,7 +3354,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zcash_voting_ffi_checksum_func_build_governance_pczt() != 33879) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zcash_voting_ffi_checksum_func_build_share_payloads() != 30529) {
+    if (uniffi_zcash_voting_ffi_checksum_func_build_share_payloads() != 52214) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_func_build_vote_commitment() != 43579) {
@@ -3375,7 +3393,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_governance_pczt() != 14517) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_share_payloads() != 44263) {
+    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_share_payloads() != 42149) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_vote_commitment() != 38351) {

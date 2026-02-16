@@ -446,12 +446,23 @@ impl VotingDb {
     }
 
     /// Build share payloads for helper server delegation.
+    ///
+    /// - `vote_decision`: The voter's choice (0=support, 1=oppose, 2=skip).
+    /// - `vc_tree_position`: Position of the Vote Commitment leaf in the VC tree,
+    ///   known after the cast-vote TX is confirmed on chain.
     pub fn build_share_payloads(
         &self,
         enc_shares: &[EncryptedShare],
         commitment: &VoteCommitmentBundle,
+        vote_decision: u32,
+        vc_tree_position: u64,
     ) -> Result<Vec<SharePayload>, VotingError> {
-        crate::vote_commitment::build_share_payloads(enc_shares, commitment)
+        crate::vote_commitment::build_share_payloads(
+            enc_shares,
+            commitment,
+            vote_decision,
+            vc_tree_position,
+        )
     }
 
     /// Store the VAN leaf position after delegation TX is confirmed on chain.
