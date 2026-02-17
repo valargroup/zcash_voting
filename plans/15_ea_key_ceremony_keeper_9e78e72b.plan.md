@@ -7,7 +7,7 @@ todos:
     status: done
   - id: step2-scaffolding
     content: "Step 2: Go scaffolding -- add CeremonyStateKey to keys.go, sentinel errors to errors.go, event types to events.go, register new msgs (MsgRegisterPallasKey, MsgDealExecutiveAuthorityKey, MsgAckExecutiveAuthorityKey) in codec.go"
-    status: pending
+    status: done
   - id: step3-keeper-crud
     content: "Step 3: Keeper CRUD -- implement GetCeremonyState/SetCeremonyState and helper functions in keeper_ceremony.go; write unit tests for round-trip storage"
     status: pending
