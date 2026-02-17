@@ -35,119 +35,24 @@ auto-tally via PrepareProposal
 
 **Rust layer**: Complete. `librustvoting` handles delegation, ZKP #2, cast-vote signing, and share payload construction. The FFI (`zcash-voting-ffi`) exposes all of this to Swift.
 
-**Zashi iOS**: Steps 1 through cast-vote work. Share submission is the gap — it currently posts directly to the chain with a mock proof instead of going through the helper server.
+**Zashi iOS**: Full pipeline wired — delegation (Keystone and non-Keystone), vote commitment, and share submission to the helper server.
 
-**Helper server**: Complete. Accepts shares, generates real ZKP #3, handles temporal delay for unlinkability, submits `MsgRevealShare` to chain.
+**Helper server**: Complete. Accepts shares, generates real ZKP #3 (Halo2 circuit from PR #71), handles temporal delay for unlinkability, submits `MsgRevealShare` to chain.
 
-### What's broken in Zashi
+### What's been fixed
 
-1. **Shares go to chain instead of helper server** — `VotingAPIClientLiveKey.swift:254-284` posts to `/zally/v1/reveal-share` with `"mock-reveal-share-proof"`
-2. **`allEncShares` dropped in Swift model** — FFI returns it (`zcash_voting_ffi.swift:2233`) but `VotingModels.swift:SharePayload` doesn't have the field, so it's lost before reaching the API client
-3. **Non-Keystone delegation not wired** — `VotingStore.swift` ~lines 466, 527 skip the delegation pipeline for software wallets
+1. **Non-Keystone delegation** — PR #77 fixed the wiring gap: `VotingStore` now calls `startDelegationProof` for software wallets
+2. **Real ZKP #3** — PR #71 added the Halo2 share reveal circuit to the helper server (no more mock proofs)
+3. **Helper server wiring** — `delegateShares` now POSTs to the helper server (`/api/v1/shares`) with the correct wire format including `allEncShares`, `shares_hash`, `tree_position`, and hex `vote_round_id`. The helper server generates ZKP #3 and submits reveal-share TXs to the chain.
 
-## What needs to change
+## What was changed
 
-### Task 1: Add `allEncShares` to Swift SharePayload
+All tasks from the original handoff are now complete:
 
-The helper server needs all 4 encrypted shares to generate ZKP #3 (they're circuit witnesses for `shares_hash` verification).
-
-**VotingModels.swift (~line 437)** — add the field:
-```swift
-public struct SharePayload: Equatable, Sendable {
-    public let sharesHash: Data
-    public let proposalId: UInt32
-    public let voteDecision: UInt32
-    public let encShare: EncryptedShare
-    public let treePosition: UInt64
-    public let allEncShares: [EncryptedShare]  // ADD THIS
-    // update init accordingly
-}
-```
-
-**VotingCryptoClientLiveKey.swift (~line 430)** — map it through:
-```swift
-return ffiPayloads.map {
-    SharePayload(
-        sharesHash: $0.sharesHash,
-        proposalId: $0.proposalId,
-        voteDecision: $0.voteDecision,
-        encShare: EncryptedShare(...),
-        treePosition: $0.treePosition,
-        allEncShares: $0.allEncShares.map { EncryptedShare(...) }  // ADD THIS
-    )
-}
-```
-
-### Task 2: Add helper server URL config
-
-The app needs a separate URL for the helper server (different from chain URL).
-
-**Suggested approach**: Add to `ZallyAPIConfig` or similar:
-```swift
-struct ZallyAPIConfig {
-    static var baseURL = "http://localhost:1318"        // chain
-    static var helperServerURL = "http://localhost:9091" // helper server
-}
-```
-
-This should eventually come from server config / round discovery, but hardcoded is fine for now.
-
-### Task 3: Rewrite `delegateShares` to POST to helper server
-
-**VotingAPIClientLiveKey.swift:254-284** — replace the current implementation.
-
-Current (posts to chain with mock proof):
-```swift
-let body: [String: Any] = [
-    "share_nullifier": nullifier.base64EncodedString(),
-    "enc_share": encShareBytes.base64EncodedString(),
-    "proposal_id": payload.proposalId,
-    "vote_decision": payload.voteDecision,
-    "proof": Data("mock-reveal-share-proof".utf8).base64EncodedString(),
-    "vote_round_id": roundIdBytes.base64EncodedString(),
-    "vote_comm_tree_anchor_height": anchorHeight
-]
-let json = try await postJSON("/zally/v1/reveal-share", body: body)
-```
-
-Required (posts to helper server):
-```swift
-let allEncSharesJSON = payload.allEncShares.map { share -> [String: Any] in
-    ["c1": share.c1.base64EncodedString(),
-     "c2": share.c2.base64EncodedString(),
-     "share_index": share.shareIndex]
-}
-let body: [String: Any] = [
-    "shares_hash": payload.sharesHash.base64EncodedString(),
-    "proposal_id": payload.proposalId,
-    "vote_decision": payload.voteDecision,
-    "enc_share": [
-        "c1": payload.encShare.c1.base64EncodedString(),
-        "c2": payload.encShare.c2.base64EncodedString(),
-        "share_index": payload.encShare.shareIndex
-    ],
-    "tree_position": payload.treePosition,
-    "vote_round_id": roundIdHex,  // hex string, NOT base64
-    "all_enc_shares": allEncSharesJSON
-]
-// POST to helper server, not chain
-let json = try await postJSON(ZallyAPIConfig.helperServerURL + "/api/v1/shares", body: body)
-```
-
-Key differences from current code:
-- **Endpoint**: helper server `/api/v1/shares` instead of chain `/zally/v1/reveal-share`
-- **vote_round_id**: hex string (not base64 bytes)
-- **No proof**: helper server generates ZKP #3
-- **No share_nullifier**: helper server derives it
-- **No anchor_height**: helper server determines its own
-- **all_enc_shares**: array of 4 shares with c1/c2/share_index
-- **tree_position**: included (helper server needs this for witness generation)
-
-The `delegateShares` method signature may also need to change — it currently takes `roundIdHex` and `anchorHeight`, but with the helper server, `anchorHeight` is no longer needed from the caller.
-
-### Task 4: Wire non-Keystone delegation (lower priority)
-
-`VotingStore.swift` ~lines 466 and 527: `witnessVerificationCompleted` and `delegationApproved` set `delegationProofStatus = .complete` without running the delegation pipeline for `!isKeystoneUser`. Need to call `startDelegationProof` so the non-Keystone path runs `buildAndProveDelegation`, submits the delegation TX, stores VAN position, then proceeds to proposals.
+- **Task 1** (allEncShares): `SharePayload` in `VotingModels.swift` now carries `allEncShares: [EncryptedShare]`, mapped through from FFI in `VotingCryptoClientLiveKey.swift`
+- **Task 2** (helper server URL): `ZallyAPIConfig.helperServerURL` added (`http://localhost:9091`), with a dedicated `postHelperJSON` helper
+- **Task 3** (delegateShares rewrite): `VotingAPIClientLiveKey.swift` now POSTs to helper server `/api/v1/shares` with correct wire format (hex round ID, all 4 enc shares, no proof/nullifier/anchor — helper server handles those). `anchorHeight` removed from the `delegateShares` signature.
+- **Task 4** (non-Keystone delegation): Fixed by PR #77
 
 The Rust layer already handles software-wallet signing — this is purely a Swift wiring gap.
 
