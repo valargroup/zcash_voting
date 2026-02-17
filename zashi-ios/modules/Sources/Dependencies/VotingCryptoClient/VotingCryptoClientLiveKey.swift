@@ -317,6 +317,23 @@ extension VotingCryptoClient: DependencyKey {
                                 networkId: networkId,
                                 accountIndex: accountIndex
                             )
+                            // Construct delegation action to generate and store alpha
+                            // before proof generation (mirrors buildGovernancePczt in Keystone path)
+                            let roundState = try db.getRoundState(roundId: roundId)
+                            let notes = try db.getWalletNotes(
+                                walletDbPath: walletDbPath,
+                                snapshotHeight: roundState.snapshotHeight,
+                                networkId: networkId
+                            )
+                            _ = try db.constructDelegationAction(
+                                roundId: roundId,
+                                notes: notes,
+                                fvkBytes: ffiInputs.fvkBytes,
+                                gDNewX: ffiInputs.gDNewX,
+                                pkDNewX: ffiInputs.pkDNewX,
+                                hotkeyRawAddress: ffiInputs.hotkeyRawAddress,
+                                addressIndex: accountIndex
+                            )
                             let result = try db.buildAndProveDelegation(
                                 roundId: roundId,
                                 walletDbPath: walletDbPath,
