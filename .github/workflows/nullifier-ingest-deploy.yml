@@ -80,4 +80,5 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
+            sudo chmod +x /opt/nullifier-ingest/query-server /opt/nullifier-ingest/ingest-nfs
             sudo systemctl restart nullifier-query-server || true
