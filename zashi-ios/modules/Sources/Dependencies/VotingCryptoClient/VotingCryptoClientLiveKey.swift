@@ -216,14 +216,15 @@ extension VotingCryptoClient: DependencyKey {
                     fvkBytes: ffiInputs.fvkBytes,
                     gDNewX: ffiInputs.gDNewX,
                     pkDNewX: ffiInputs.pkDNewX,
-                    hotkeyRawAddress: ffiInputs.hotkeyRawAddress
+                    hotkeyRawAddress: ffiInputs.hotkeyRawAddress,
+                    addressIndex: 1
                 )
                 return DelegationAction(
                     actionBytes: result.actionBytes,
                     rk: result.rk,
                     govNullifiers: result.govNullifiers,
                     van: result.van,
-                    govCommRand: result.govCommRand,
+                    vanCommRand: result.vanCommRand,
                     dummyNullifiers: result.dummyNullifiers,
                     rhoSigned: result.rhoSigned,
                     paddedCmx: result.paddedCmx,
@@ -270,7 +271,8 @@ extension VotingCryptoClient: DependencyKey {
                     coinType: coinType,
                     seedFingerprint: ffiInputs.seedFingerprint,
                     accountIndex: accountIndex,
-                    roundName: roundName
+                    roundName: roundName,
+                    addressIndex: 1
                 )
                 publishState(db: db, roundId: roundId)
                 return GovernancePcztResult(
@@ -281,7 +283,7 @@ extension VotingCryptoClient: DependencyKey {
                     cmxNew: result.cmxNew,
                     govNullifiers: result.govNullifiers,
                     van: result.van,
-                    govCommRand: result.govCommRand,
+                    vanCommRand: result.vanCommRand,
                     dummyNullifiers: result.dummyNullifiers,
                     rhoSigned: result.rhoSigned,
                     paddedCmx: result.paddedCmx,
@@ -348,27 +350,21 @@ extension VotingCryptoClient: DependencyKey {
                     )
                 }
             },
-            buildVoteCommitment: { roundId, proposalId, choice, encShares, vanWitness in
+            buildVoteCommitment: { roundId, hotkeySeed, networkId, proposalId, choice, vanAuthPath, vanPosition, anchorHeight in
                 AsyncThrowingStream { continuation in
                     Task.detached {
                         do {
                             let db = try await dbActor.database()
                             let reporter = VoteCommitmentProgressReporter(continuation)
-                            let ffiShares = encShares.map {
-                                ZcashVotingFFI.EncryptedShare(
-                                    c1: $0.c1,
-                                    c2: $0.c2,
-                                    shareIndex: $0.shareIndex,
-                                    plaintextValue: $0.plaintextValue,
-                                    randomness: $0.randomness
-                                )
-                            }
                             let result = try db.buildVoteCommitment(
                                 roundId: roundId,
+                                hotkeySeed: Data(hotkeySeed),
+                                networkId: networkId,
                                 proposalId: proposalId,
                                 choice: choice.ffiValue,
-                                encShares: ffiShares,
-                                vanWitness: vanWitness,
+                                vanAuthPath: vanAuthPath,
+                                vanPosition: vanPosition,
+                                anchorHeight: anchorHeight,
                                 progress: reporter
                             )
                             publishState(db: db, roundId: roundId)
@@ -378,12 +374,19 @@ extension VotingCryptoClient: DependencyKey {
                                 voteCommitment: result.voteCommitment,
                                 proposalId: proposalId,
                                 proof: result.proof,
-                                // TODO(gov-steps-phase-3-voting): Source this from canonical
-                                // round metadata once MsgCastVote fields are fully wired.
-                                voteRoundId: Data(repeating: 0, count: 32),
-                                // TODO(gov-steps-phase-3-voting): Replace with vote commitment
-                                // tree anchor height, not a local placeholder.
-                                voteCommTreeAnchorHeight: 0
+                                encShares: result.encShares.map {
+                                    VotingModels.EncryptedShare(
+                                        c1: $0.c1, c2: $0.c2,
+                                        shareIndex: $0.shareIndex,
+                                        plaintextValue: $0.plaintextValue,
+                                        randomness: $0.randomness
+                                    )
+                                },
+                                anchorHeight: result.anchorHeight,
+                                voteRoundId: result.voteRoundId,
+                                sharesHash: result.sharesHash,
+                                rVpkBytes: result.rVpkBytes,
+                                alphaV: result.alphaV
                             )
                             continuation.yield(.completed(bundle))
                             continuation.finish()
@@ -393,7 +396,7 @@ extension VotingCryptoClient: DependencyKey {
                     }
                 }
             },
-            buildSharePayloads: { encShares, commitment in
+            buildSharePayloads: { encShares, commitment, voteDecision, vcTreePosition in
                 let db = try await dbActor.database()
                 let ffiShares = encShares.map {
                     ZcashVotingFFI.EncryptedShare(
@@ -409,16 +412,24 @@ extension VotingCryptoClient: DependencyKey {
                     voteAuthorityNoteNew: commitment.voteAuthorityNoteNew,
                     voteCommitment: commitment.voteCommitment,
                     proposalId: commitment.proposalId,
-                    proof: commitment.proof
+                    proof: commitment.proof,
+                    encShares: ffiShares,
+                    anchorHeight: commitment.anchorHeight,
+                    voteRoundId: commitment.voteRoundId,
+                    sharesHash: commitment.sharesHash,
+                    rVpkBytes: commitment.rVpkBytes,
+                    alphaV: commitment.alphaV
                 )
                 let ffiPayloads = try db.buildSharePayloads(
                     encShares: ffiShares,
-                    commitment: ffiCommitment
+                    commitment: ffiCommitment,
+                    voteDecision: voteDecision.ffiValue,
+                    vcTreePosition: vcTreePosition
                 )
                 return ffiPayloads.map {
                     SharePayload(
                         sharesHash: $0.sharesHash,
-                        proposalId: commitment.proposalId,
+                        proposalId: $0.proposalId,
                         voteDecision: $0.voteDecision,
                         encShare: EncryptedShare(
                             c1: $0.encShare.c1,
@@ -427,15 +438,75 @@ extension VotingCryptoClient: DependencyKey {
                             plaintextValue: $0.encShare.plaintextValue,
                             randomness: $0.encShare.randomness
                         ),
-                        shareIndex: $0.encShare.shareIndex,
                         treePosition: $0.treePosition
                     )
                 }
+            },
+            getDelegationSubmission: { roundId, senderSeed, networkId, accountIndex in
+                let db = try await dbActor.database()
+                let ffi = try db.getDelegationSubmission(
+                    roundId: roundId,
+                    senderSeed: Data(senderSeed),
+                    networkId: networkId,
+                    accountIndex: accountIndex
+                )
+                // Map FFI DelegationSubmission → VotingModels DelegationRegistration
+                // voteRoundId is hex-encoded in FFI; decode to raw bytes for chain submission
+                let voteRoundIdBytes = Data(hexString: ffi.voteRoundId)
+                return DelegationRegistration(
+                    rk: ffi.rk,
+                    spendAuthSig: ffi.spendAuthSig,
+                    signedNoteNullifier: ffi.nfSigned,
+                    cmxNew: ffi.cmxNew,
+                    encMemo: ffi.encMemo,
+                    vanCmx: ffi.govComm,
+                    govNullifiers: ffi.govNullifiers,
+                    proof: ffi.proof,
+                    voteRoundId: voteRoundIdBytes,
+                    sighash: ffi.sighash
+                )
+            },
+            storeVanPosition: { roundId, position in
+                let db = try await dbActor.database()
+                try db.storeVanPosition(roundId: roundId, position: position)
+            },
+            syncVoteTree: { roundId, nodeUrl in
+                let db = try await dbActor.database()
+                return try db.syncVoteTree(roundId: roundId, nodeUrl: nodeUrl)
+            },
+            generateVanWitness: { roundId, anchorHeight in
+                let db = try await dbActor.database()
+                let ffiWitness = try db.generateVanWitness(roundId: roundId, anchorHeight: anchorHeight)
+                return VanWitness(
+                    authPath: ffiWitness.authPath,
+                    position: ffiWitness.position,
+                    anchorHeight: ffiWitness.anchorHeight
+                )
             },
             markVoteSubmitted: { roundId, proposalId in
                 let db = try await dbActor.database()
                 try db.markVoteSubmitted(roundId: roundId, proposalId: proposalId)
                 publishState(db: db, roundId: roundId)
+            },
+            signCastVote: { hotkeySeed, networkId, bundle in
+                let ffiSig = try ZcashVotingFFI.signCastVote(
+                    hotkeySeed: Data(hotkeySeed),
+                    networkId: networkId,
+                    voteRoundIdHex: bundle.voteRoundId,
+                    rVpkBytes: bundle.rVpkBytes,
+                    vanNullifier: bundle.vanNullifier,
+                    voteAuthorityNoteNew: bundle.voteAuthorityNoteNew,
+                    voteCommitment: bundle.voteCommitment,
+                    proposalId: bundle.proposalId,
+                    anchorHeight: bundle.anchorHeight,
+                    alphaV: bundle.alphaV
+                )
+                return CastVoteSignature(
+                    rVpkX: ffiSig.rVpkX,
+                    rVpkY: ffiSig.rVpkY,
+                    sighash: ffiSig.sighash,
+                    voteAuthSig: ffiSig.voteAuthSig
+                )
             }
         )
     }
@@ -503,6 +574,20 @@ private extension VoteChoice {
 public extension Data {
     public var hexString: String {
         map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Initialize Data from a hex-encoded string (e.g. "0a1b2c").
+    init(hexString: String) {
+        var data = Data()
+        var hex = hexString
+        while hex.count >= 2 {
+            let byteString = String(hex.prefix(2))
+            hex = String(hex.dropFirst(2))
+            if let byte = UInt8(byteString, radix: 16) {
+                data.append(byte)
+            }
+        }
+        self = data
     }
 }
 

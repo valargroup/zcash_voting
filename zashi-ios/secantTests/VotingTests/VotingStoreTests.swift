@@ -53,7 +53,7 @@ final class VotingStoreTests: XCTestCase {
             cmxNew: Data(repeating: 0x19, count: 32),
             govNullifiers: [Data](repeating: Data(repeating: 0x15, count: 32), count: 4),
             van: Data(repeating: 0x16, count: 32),
-            govCommRand: Data(repeating: 0x03, count: 32),
+            vanCommRand: Data(repeating: 0x03, count: 32),
             dummyNullifiers: [],
             rhoSigned: Data(repeating: 0x04, count: 32),
             paddedCmx: [],
