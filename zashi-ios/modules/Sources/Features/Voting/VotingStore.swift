@@ -193,10 +193,10 @@ public struct Voting {
             delegationProofStatus == .complete
         }
 
-        /// Whether the previous vote's VAN has landed in the vote commitment tree.
-        /// Always true in the prototype; real implementation checks tree sync.
+        /// Whether the user can confirm a vote: delegation proof must be complete
+        /// and no other vote can be in-flight (each vote needs the previous VAN committed).
         public var canConfirmVote: Bool {
-            true
+            isDelegationReady && !isSubmittingVote
         }
 
         public var nextUnvotedProposalId: UInt32? {
