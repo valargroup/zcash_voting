@@ -4,7 +4,6 @@
 //! snapshot_blockhash || proposals_hash || vote_end_time_BE ||
 //! nullifier_imt_root || nc_root).
 
-use crate::elgamal::{self, Ciphertext};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -187,27 +186,6 @@ pub fn cast_vote_payload_real(
     })
 }
 
-/// Build MsgRevealShare body with a real ZKP #3 proof and public inputs.
-pub fn reveal_share_payload(
-    round_id: &[u8],
-    anchor_height: u32,
-    share_nullifier: &[u8],
-    enc_share: &[u8], // 64 bytes: C1 || C2 compressed Pallas points
-    proposal_id: u32,
-    vote_decision: u32,
-    proof: &[u8],
-) -> Value {
-    json!({
-        "share_nullifier": to_base64(share_nullifier),
-        "enc_share": to_base64(enc_share),
-        "proposal_id": proposal_id,
-        "vote_decision": vote_decision,
-        "proof": to_base64(proof),
-        "vote_round_id": to_base64(round_id),
-        "vote_comm_tree_anchor_height": anchor_height,
-    })
-}
-
 /// Tally entry for MsgSubmitTally.
 pub struct TallyEntry {
     pub proposal_id: u32,
@@ -232,11 +210,6 @@ pub fn submit_tally_payload(round_id: &[u8], creator: &str, entries: &[TallyEntr
         "creator": creator,
         "entries": entries_json,
     })
-}
-
-/// Encode ElGamal ciphertext to base64 (64 bytes).
-pub fn ciphertext_to_base64(ct: &Ciphertext) -> String {
-    to_base64(&elgamal::marshal(ct))
 }
 
 /// Build a share payload for the helper server's POST /api/v1/shares endpoint.

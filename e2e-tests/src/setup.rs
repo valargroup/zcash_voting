@@ -21,12 +21,10 @@ use orchard::{
     note::{ExtractedNoteCommitment, Note, Rho},
     tree::{MerkleHashOrchard, MerklePath},
     value::NoteValue,
-    vote_proof::VOTE_COMM_TREE_DEPTH,
     NOTE_COMMITMENT_TREE_DEPTH,
 };
 use pasta_curves::pallas;
 use rand::rngs::OsRng;
-use vote_commitment_tree::TreeServer;
 
 const DEFAULT_E2E_VOTE_WINDOW_SECS: u64 = 180;
 const MIN_E2E_VOTE_WINDOW_SECS: u64 = 120;
@@ -267,87 +265,3 @@ pub fn build_delegation_bundle_for_test(
     Ok((payload, fields, vote_proof_data))
 }
 
-/// Build a vote commitment tree locally with the single van_cmx leaf from
-/// delegation (at position 0) and return the Merkle authentication path.
-/// cmx_new is NOT added to the tree — no subsequent proof references it.
-///
-/// The `checkpoint_height` should be the on-chain anchor height at which
-/// the delegation block was committed.
-///
-/// Returns `(auth_path, position, root)` suitable for the vote proof builder.
-pub fn build_van_merkle_witness(
-    van_cmx: pallas::Base,
-    checkpoint_height: u32,
-) -> ([pallas::Base; VOTE_COMM_TREE_DEPTH], u32, pallas::Base) {
-    let mut tree = TreeServer::empty();
-    tree.append(van_cmx);
-    tree.checkpoint(checkpoint_height);
-
-    let root = tree
-        .root_at_height(checkpoint_height)
-        .expect("checkpoint should exist");
-
-    let path = tree
-        .path(0, checkpoint_height)
-        .expect("VAN at position 0 should have a valid path");
-
-    // Convert MerkleHashVote siblings to pallas::Base for the circuit.
-    let auth_path_hashes = path.auth_path();
-    let mut auth_path = [pallas::Base::zero(); VOTE_COMM_TREE_DEPTH];
-    for (i, hash) in auth_path_hashes.iter().enumerate() {
-        auth_path[i] = hash.inner();
-    }
-
-    let position = path.position();
-
-    // Sanity: verify the path produces the expected root.
-    assert!(
-        path.verify(van_cmx, root),
-        "merkle path verification failed for VAN at position 0"
-    );
-
-    (auth_path, position, root)
-}
-
-/// Build a vote commitment tree locally with all 3 leaves from delegation + cast
-/// (van_cmx at 0, vote_authority_note_new at 1, vote_commitment at 2) and return
-/// the Merkle authentication path for vote_commitment at position 2.
-///
-/// Returns `(auth_path, position, root)` suitable for the share reveal builder (ZKP #3).
-pub fn build_vote_commitment_merkle_witness(
-    van_cmx: pallas::Base,
-    vote_authority_note_new: pallas::Base,
-    vote_commitment: pallas::Base,
-    checkpoint_height: u32,
-) -> ([pallas::Base; VOTE_COMM_TREE_DEPTH], u32, pallas::Base) {
-    let mut tree = TreeServer::empty();
-    tree.append(van_cmx); // position 0
-    tree.append(vote_authority_note_new); // position 1
-    tree.append(vote_commitment); // position 2
-    tree.checkpoint(checkpoint_height);
-
-    let root = tree
-        .root_at_height(checkpoint_height)
-        .expect("checkpoint should exist");
-
-    let path = tree
-        .path(2, checkpoint_height)
-        .expect("vote_commitment at position 2 should have a valid path");
-
-    // Convert MerkleHashVote siblings to pallas::Base for the circuit.
-    let auth_path_hashes = path.auth_path();
-    let mut auth_path = [pallas::Base::zero(); VOTE_COMM_TREE_DEPTH];
-    for (i, hash) in auth_path_hashes.iter().enumerate() {
-        auth_path[i] = hash.inner();
-    }
-
-    let position = path.position();
-
-    // Sanity: verify the path produces the expected root.
-    assert!(
-        path.verify(vote_commitment, root),
-        "merkle path verification failed for vote_commitment at position 2"
-    );
-
-    (auth_path, position, root)
-}
