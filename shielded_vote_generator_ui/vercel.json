@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/zally/:path*",
+      "destination": "http://46.101.255.48:1318/zally/:path*"
+    }
+  ]
+}

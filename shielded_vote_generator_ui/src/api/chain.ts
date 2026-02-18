@@ -11,17 +11,13 @@ export function setChainUrl(url: string) {
   localStorage.setItem(CHAIN_URL_KEY, url);
 }
 
-// Whether to use the Vite proxy (relative URLs) or direct chain URL.
-// In dev mode with Vite proxy configured, we can use relative paths.
-// In production or when pointing at a remote chain, use the full URL.
+// Use relative URLs when the chain URL is the default. Both the Vite dev
+// server (proxy config) and Vercel (rewrites in vercel.json) forward
+// /zally/* to the actual chain endpoint, avoiding mixed-content issues.
+// When the user overrides the URL via localStorage, use it directly.
 function apiBase(): string {
   const url = getChainUrl();
-  // If the chain URL points to the same host as the UI, use relative path via Vite proxy
-  if (
-    url === DEFAULT_CHAIN_URL &&
-    typeof window !== "undefined" &&
-    window.location.port === "5173"
-  ) {
+  if (url === DEFAULT_CHAIN_URL) {
     return "";
   }
   return url;
