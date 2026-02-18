@@ -128,7 +128,7 @@ function createDefaultRound(name: string): VotingRound {
     id: uuidv4(),
     name,
     status: "draft",
-    proposals: [],
+    proposals: [createDefaultProposal()],
     settings: {
       description: "",
       snapshotHeight: "",
@@ -176,7 +176,7 @@ export function useStore() {
     const round = createDefaultRound(name ?? "Untitled Round");
     setRounds((prev) => [round, ...prev]);
     setActiveRoundId(round.id);
-    setActiveProposalId(null);
+    setActiveProposalId(round.proposals[0]?.id ?? null);
     return round;
   }, []);
 

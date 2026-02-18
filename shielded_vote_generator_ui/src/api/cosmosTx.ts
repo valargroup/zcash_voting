@@ -1,6 +1,6 @@
 // Client-side Cosmos SDK transaction signing and REST broadcasting.
 //
-// MsgSetVoteManager (and MsgCreateVotingSession) are standard Cosmos SDK
+// MsgSetVoteManager and MsgCreateVotingSession are standard Cosmos SDK
 // transactions. Instead of relying on a server-side handler, we sign them
 // directly in the browser using cosmjs and broadcast via the chain's REST
 // API (/cosmos/tx/v1beta1/txs).
@@ -21,11 +21,10 @@ import type { BroadcastResult } from "./chain";
 const BECH32_PREFIX = "zvote";
 const DEFAULT_GAS = "200000";
 
-// ── Protobuf types for custom messages ──────────────────────────
+// ── Protobuf mini-writer ────────────────────────────────────────
 
 // Minimal protobuf Writer that produces valid wire-format bytes.
-// Only supports varint + length-delimited (string/bytes) fields,
-// which is sufficient for the message types below.
+// Supports varint, length-delimited (string/bytes), and embedded messages.
 class ProtoWriter {
   private parts: Uint8Array[] = [];
 
@@ -33,15 +32,38 @@ class ProtoWriter {
     return new ProtoWriter();
   }
 
+  /** Write a varint (tags, uint32 values, lengths). */
   uint32(value: number): this {
     this.writeVarint(value >>> 0);
     return this;
   }
 
+  /** Write a varint for uint64 values (safe up to Number.MAX_SAFE_INTEGER). */
+  uint64(value: number): this {
+    this.writeVarint(value);
+    return this;
+  }
+
+  /** Write a length-prefixed UTF-8 string. */
   string(value: string): this {
     const encoded = new TextEncoder().encode(value);
     this.writeVarint(encoded.length);
     this.parts.push(encoded);
+    return this;
+  }
+
+  /** Write length-prefixed raw bytes. */
+  bytes(value: Uint8Array): this {
+    this.writeVarint(value.length);
+    this.parts.push(new Uint8Array(value));
+    return this;
+  }
+
+  /** Encode a sub-message as a length-delimited field. */
+  sub(fieldNumber: number, subWriter: ProtoWriter): this {
+    const subBytes = subWriter.finish();
+    this.uint32((fieldNumber << 3) | 2);
+    this.bytes(subBytes);
     return this;
   }
 
@@ -57,30 +79,29 @@ class ProtoWriter {
     return result;
   }
 
+  // Uses Math.floor so values > 2^32 (e.g. Unix timestamps) encode correctly.
   private writeVarint(value: number) {
-    const bytes: number[] = [];
-    let v = value >>> 0;
+    const buf: number[] = [];
+    let v = value;
     while (v > 0x7f) {
-      bytes.push((v & 0x7f) | 0x80);
-      v >>>= 7;
+      buf.push((v & 0x7f) | 0x80);
+      v = Math.floor(v / 128);
     }
-    bytes.push(v);
-    this.parts.push(new Uint8Array(bytes));
+    buf.push(v & 0x7f);
+    this.parts.push(new Uint8Array(buf));
   }
 }
 
-// Proto: message MsgSetVoteManager { string creator = 1; string new_manager = 2; }
+// ── Protobuf type: MsgSetVoteManager ────────────────────────────
+
+// message MsgSetVoteManager { string creator = 1; string new_manager = 2; }
 const MsgSetVoteManagerProto = {
   encode(
     message: { creator: string; newManager: string },
     writer: ProtoWriter = ProtoWriter.create(),
   ): ProtoWriter {
-    if (message.creator !== "") {
-      writer.uint32(10).string(message.creator); // field 1, wire type 2
-    }
-    if (message.newManager !== "") {
-      writer.uint32(18).string(message.newManager); // field 2, wire type 2
-    }
+    if (message.creator !== "") writer.uint32(10).string(message.creator);
+    if (message.newManager !== "") writer.uint32(18).string(message.newManager);
     return writer;
   },
   decode(): { creator: string; newManager: string } {
@@ -89,17 +110,108 @@ const MsgSetVoteManagerProto = {
   fromPartial(
     object: Partial<{ creator: string; newManager: string }>,
   ): { creator: string; newManager: string } {
+    return { creator: object.creator ?? "", newManager: object.newManager ?? "" };
+  },
+};
+
+// ── Protobuf type: MsgCreateVotingSession ───────────────────────
+
+// message VoteOption { uint32 index = 1; string label = 2; }
+function encodeVoteOption(opt: { index: number; label: string }): ProtoWriter {
+  const w = ProtoWriter.create();
+  if (opt.index !== 0) w.uint32(8).uint32(opt.index);   // field 1, wire 0
+  if (opt.label !== "") w.uint32(18).string(opt.label);  // field 2, wire 2
+  return w;
+}
+
+// message Proposal { uint32 id = 1; string title = 2; string description = 3; repeated VoteOption options = 4; }
+function encodeProposal(p: {
+  id: number;
+  title: string;
+  description: string;
+  options: Array<{ index: number; label: string }>;
+}): ProtoWriter {
+  const w = ProtoWriter.create();
+  if (p.id !== 0) w.uint32(8).uint32(p.id);                // field 1, wire 0
+  if (p.title !== "") w.uint32(18).string(p.title);         // field 2, wire 2
+  if (p.description !== "") w.uint32(26).string(p.description); // field 3, wire 2
+  for (const opt of p.options) {
+    w.sub(4, encodeVoteOption(opt));                         // field 4, wire 2
+  }
+  return w;
+}
+
+export interface CreateVotingSessionValue {
+  creator: string;
+  snapshotHeight: number;
+  snapshotBlockhash: Uint8Array;
+  proposalsHash: Uint8Array;
+  voteEndTime: number;
+  nullifierImtRoot: Uint8Array;
+  ncRoot: Uint8Array;
+  vkZkp1: Uint8Array;
+  vkZkp2: Uint8Array;
+  vkZkp3: Uint8Array;
+  proposals: Array<{
+    id: number;
+    title: string;
+    description: string;
+    options: Array<{ index: number; label: string }>;
+  }>;
+  description: string;
+}
+
+// message MsgCreateVotingSession { ... } — see sdk/proto/zvote/v1/tx.proto
+const MsgCreateVotingSessionProto = {
+  encode(
+    m: CreateVotingSessionValue,
+    writer: ProtoWriter = ProtoWriter.create(),
+  ): ProtoWriter {
+    if (m.creator !== "")              writer.uint32(10).string(m.creator);              // 1 string
+    if (m.snapshotHeight !== 0)        writer.uint32(16).uint64(m.snapshotHeight);       // 2 uint64
+    if (m.snapshotBlockhash.length)    writer.uint32(26).bytes(m.snapshotBlockhash);     // 3 bytes
+    if (m.proposalsHash.length)        writer.uint32(34).bytes(m.proposalsHash);         // 4 bytes
+    if (m.voteEndTime !== 0)           writer.uint32(40).uint64(m.voteEndTime);          // 5 uint64
+    if (m.nullifierImtRoot.length)     writer.uint32(50).bytes(m.nullifierImtRoot);      // 6 bytes
+    if (m.ncRoot.length)               writer.uint32(58).bytes(m.ncRoot);                // 7 bytes
+    if (m.vkZkp1.length)              writer.uint32(66).bytes(m.vkZkp1);                // 8 bytes
+    if (m.vkZkp2.length)              writer.uint32(74).bytes(m.vkZkp2);                // 9 bytes
+    if (m.vkZkp3.length)              writer.uint32(82).bytes(m.vkZkp3);                // 10 bytes
+    for (const p of m.proposals) {
+      writer.sub(11, encodeProposal(p));                                                 // 11 repeated
+    }
+    if (m.description !== "")          writer.uint32(98).string(m.description);          // 12 string
+    return writer;
+  },
+  decode(): CreateVotingSessionValue {
+    throw new Error("decode not implemented");
+  },
+  fromPartial(object: Partial<CreateVotingSessionValue>): CreateVotingSessionValue {
     return {
       creator: object.creator ?? "",
-      newManager: object.newManager ?? "",
+      snapshotHeight: object.snapshotHeight ?? 0,
+      snapshotBlockhash: object.snapshotBlockhash ?? new Uint8Array(),
+      proposalsHash: object.proposalsHash ?? new Uint8Array(),
+      voteEndTime: object.voteEndTime ?? 0,
+      nullifierImtRoot: object.nullifierImtRoot ?? new Uint8Array(),
+      ncRoot: object.ncRoot ?? new Uint8Array(),
+      vkZkp1: object.vkZkp1 ?? new Uint8Array(),
+      vkZkp2: object.vkZkp2 ?? new Uint8Array(),
+      vkZkp3: object.vkZkp3 ?? new Uint8Array(),
+      proposals: object.proposals ?? [],
+      description: object.description ?? "",
     };
   },
 };
+
+// ── Registry ────────────────────────────────────────────────────
 
 function createRegistry(): Registry {
   const registry = new Registry();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registry.register("/zvote.v1.MsgSetVoteManager", MsgSetVoteManagerProto as any);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registry.register("/zvote.v1.MsgCreateVotingSession", MsgCreateVotingSessionProto as any);
   return registry;
 }
 
@@ -210,6 +322,23 @@ async function signAndBroadcast({
   return broadcastTxRest(apiBase, txBytes);
 }
 
+// ── Stub byte fields ────────────────────────────────────────────
+// Matching the e2e test pattern (see e2e-tests/src/payloads.rs).
+
+function filledBytes(byte: number, len: number): Uint8Array {
+  const arr = new Uint8Array(len);
+  arr.fill(byte);
+  return arr;
+}
+
+const STUB_SNAPSHOT_BLOCKHASH = filledBytes(0xaa, 32);
+const STUB_PROPOSALS_HASH     = filledBytes(0xbb, 32);
+const STUB_NULLIFIER_IMT_ROOT = filledBytes(0xcc, 32);
+const STUB_NC_ROOT            = filledBytes(0xdd, 32);
+const STUB_VK_ZKP1            = filledBytes(0xf1, 64);
+const STUB_VK_ZKP2            = filledBytes(0xf2, 64);
+const STUB_VK_ZKP3            = filledBytes(0xf3, 64);
+
 // ── Public API ──────────────────────────────────────────────────
 
 /**
@@ -234,7 +363,6 @@ export async function setVoteManager(
   newManager: string,
 ): Promise<BroadcastResult> {
   const signerAddress = await deriveAddress(privateKeyHex);
-
   return signAndBroadcast({
     apiBase,
     privateKeyHex,
@@ -242,6 +370,53 @@ export async function setVoteManager(
       {
         typeUrl: "/zvote.v1.MsgSetVoteManager",
         value: { creator: signerAddress, newManager },
+      },
+    ],
+  });
+}
+
+/**
+ * Sign and broadcast a MsgCreateVotingSession transaction.
+ *
+ * Byte fields (snapshot_blockhash, proposals_hash, nullifier_imt_root,
+ * nc_root, vk_zkp1/2/3) use stub values matching the e2e test defaults.
+ */
+export async function createVotingSession(
+  apiBase: string,
+  privateKeyHex: string,
+  params: {
+    snapshotHeight: number;
+    voteEndTime: number;
+    description: string;
+    proposals: Array<{
+      id: number;
+      title: string;
+      description: string;
+      options: Array<{ index: number; label: string }>;
+    }>;
+  },
+): Promise<BroadcastResult> {
+  const signerAddress = await deriveAddress(privateKeyHex);
+  return signAndBroadcast({
+    apiBase,
+    privateKeyHex,
+    messages: [
+      {
+        typeUrl: "/zvote.v1.MsgCreateVotingSession",
+        value: {
+          creator: signerAddress,
+          snapshotHeight: params.snapshotHeight,
+          snapshotBlockhash: STUB_SNAPSHOT_BLOCKHASH,
+          proposalsHash: STUB_PROPOSALS_HASH,
+          voteEndTime: params.voteEndTime,
+          nullifierImtRoot: STUB_NULLIFIER_IMT_ROOT,
+          ncRoot: STUB_NC_ROOT,
+          vkZkp1: STUB_VK_ZKP1,
+          vkZkp2: STUB_VK_ZKP2,
+          vkZkp3: STUB_VK_ZKP3,
+          proposals: params.proposals,
+          description: params.description,
+        } satisfies CreateVotingSessionValue,
       },
     ],
   });

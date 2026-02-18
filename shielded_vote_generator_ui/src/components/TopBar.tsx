@@ -51,6 +51,16 @@ export function TopBar({
     (p) => p.title.trim().length > 0 && p.options.length >= 2
   );
 
+  const publishDisabledReason = round.status === "published"
+    ? "Already published"
+    : round.proposals.length === 0
+      ? "Add at least one proposal"
+      : round.proposals.some((p) => !p.title.trim())
+        ? "All proposals need a title"
+        : round.proposals.some((p) => p.options.length < 2)
+          ? "All proposals need at least 2 options"
+          : "";
+
   return (
     <div className="flex items-center justify-between px-4 py-2.5 bg-surface-1 border-b border-border min-h-[48px]">
       {/* Left */}
@@ -110,6 +120,7 @@ export function TopBar({
         <button
           onClick={onPublish}
           disabled={!allValid || round.status === "published"}
+          title={publishDisabledReason}
           className="px-3 py-1.5 text-[11px] font-semibold rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-accent/90 hover:bg-accent text-surface-0"
         >
           Publish round

@@ -87,15 +87,60 @@ function App() {
 
   const handlePublishConfirm = useCallback(async () => {
     if (!publishModal) return;
-    const _round = store.rounds.find((r) => r.id === publishModal);
-    if (!_round) return;
+    const round = store.rounds.find((r) => r.id === publishModal);
+    if (!round) return;
 
-    setPublishStatus("error");
-    setPublishError(
-      "MsgCreateVotingSession is now a standard Cosmos SDK transaction that " +
-      "requires client-side signing. This publish flow has not been migrated yet. " +
-      "Use `zallyd tx sign/broadcast` or the e2e test tooling for now."
-    );
+    const privKey = localStorage.getItem("zally-vm-privkey-TEMP") ?? "";
+    if (!privKey || privKey.length !== 64) {
+      setPublishStatus("error");
+      setPublishError(
+        "Vote manager private key not configured. " +
+        "Go to Settings → Voting chain → Set VoteManager address and enter your 64-character hex key."
+      );
+      return;
+    }
+
+    const snapshotHeight = parseInt(round.settings.snapshotHeight, 10) || 0;
+    if (snapshotHeight === 0) {
+      setPublishStatus("error");
+      setPublishError("Snapshot height must be set to a non-zero value in Round Settings.");
+      return;
+    }
+
+    const voteEndTime = round.settings.endTime
+      ? Math.floor(new Date(round.settings.endTime).getTime() / 1000)
+      : Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
+
+    const proposals = round.proposals.map((p, i) => {
+      const options = p.options.map((opt, j) => ({ index: j, label: opt.label }));
+      if (p.allowAbstain) {
+        options.push({ index: options.length, label: "Abstain" });
+      }
+      return { id: i + 1, title: p.title, description: p.description, options };
+    });
+
+    setPublishStatus("publishing");
+    setPublishError("");
+    try {
+      const base = chainApi.getApiBase();
+      const result = await cosmosTx.createVotingSession(base, privKey, {
+        snapshotHeight,
+        voteEndTime,
+        proposals,
+        description: round.settings.description || round.name,
+      });
+      if (result.code !== 0) {
+        setPublishError(result.log || `Transaction failed with code ${result.code}`);
+        setPublishStatus("error");
+      } else {
+        setPublishResult(result.tx_hash);
+        setPublishStatus("ok");
+        store.setRoundStatus(publishModal, "published");
+      }
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : String(err));
+      setPublishStatus("error");
+    }
   }, [publishModal, store]);
 
   const handleNavigate = useCallback(
@@ -545,13 +590,23 @@ function SettingsPage() {
   const [ceremony, setCeremony] = useState<chainApi.CeremonyState | null>(null);
   const [helperStatus, setHelperStatus] = useState<chainApi.HelperStatus | null>(null);
   const [voteManager, setVoteManager] = useState<string>("");
-  const [vmPrivKey, setVmPrivKey] = useState("");
+  // TEMPORARY: persist vote manager private key in localStorage for dev convenience.
+  // Remove before production — private keys must never be stored in the browser.
+  const [vmPrivKey, setVmPrivKey] = useState(
+    () => localStorage.getItem("zally-vm-privkey-TEMP") ?? ""
+  );
   const [vmPrivKeyVisible, setVmPrivKeyVisible] = useState(false);
   const [vmDerivedAddr, setVmDerivedAddr] = useState("");
   const [vmNewAddr, setVmNewAddr] = useState("");
   const [vmStatus, setVmStatus] = useState<"idle" | "sending" | "ok" | "error">("idle");
   const [vmError, setVmError] = useState("");
   const [vmTxHash, setVmTxHash] = useState("");
+
+  // TEMPORARY: sync private key to localStorage (see useState initializer above).
+  const handleVmPrivKeyChange = (key: string) => {
+    setVmPrivKey(key);
+    localStorage.setItem("zally-vm-privkey-TEMP", key);
+  };
 
   const handleRpcChange = (url: string) => {
     setRpcUrl(url);
@@ -864,7 +919,7 @@ function SettingsPage() {
                       <input
                         type={vmPrivKeyVisible ? "text" : "password"}
                         value={vmPrivKey}
-                        onChange={(e) => setVmPrivKey(e.target.value.trim())}
+                        onChange={(e) => handleVmPrivKeyChange(e.target.value.trim())}
                         placeholder="64-character hex private key"
                         spellCheck={false}
                         autoComplete="off"
