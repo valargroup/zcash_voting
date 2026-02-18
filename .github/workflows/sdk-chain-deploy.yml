@@ -106,7 +106,7 @@ jobs:
           script: |
             sudo systemctl stop zallyd || true
             # Kill any orphaned zallyd processes not managed by systemd
-            sudo pkill -9 -f zallyd || true
+            sudo pkill -9 -x zallyd || true
             # Wait for ports 26657 and 6060 to be freed
             for i in $(seq 1 15); do
               if ! ss -tlnp | grep -qE ':26657|:6060'; then
