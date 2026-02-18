@@ -1,7 +1,7 @@
 // Chain API client for the Zally voting chain REST endpoints.
 
 const CHAIN_URL_KEY = "zally-chain-url";
-const DEFAULT_CHAIN_URL = "http://localhost:1318";
+const DEFAULT_CHAIN_URL = import.meta.env.VITE_CHAIN_URL || "http://localhost:1318";
 
 export function getChainUrl(): string {
   return localStorage.getItem(CHAIN_URL_KEY) || DEFAULT_CHAIN_URL;
