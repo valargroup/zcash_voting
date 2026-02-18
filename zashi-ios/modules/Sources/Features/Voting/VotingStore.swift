@@ -226,7 +226,10 @@ public struct Voting {
         }
 
         public init(
-            votingRound: VotingRound = MockVotingService.votingRound,
+            votingRound: VotingRound = VotingRound(
+                id: "", title: "", description: "", snapshotHeight: 0,
+                snapshotDate: .now, votingStart: .now, votingEnd: .now, proposals: []
+            ),
             votingWeight: UInt64 = 0,
             isKeystoneUser: Bool = false,
             roundId: String = ""
