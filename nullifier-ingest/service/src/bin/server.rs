@@ -12,9 +12,13 @@ use axum::{Json, Router};
 use ff::PrimeField as _;
 use pasta_curves::Fp;
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 use imt_tree::NullifierTree;
-use nullifier_service::{file_store, tree_db};
+use nullifier_service::download::connect_lwd;
+use nullifier_service::rpc::compact_tx_streamer_client::CompactTxStreamerClient;
+use nullifier_service::rpc::BlockId;
+use nullifier_service::{file_store, nc_root, tree_db};
 
 // ── JSON response types ─────────────────────────────────────────────────
 
@@ -60,6 +64,14 @@ struct ErrorJson {
 struct AppState {
     tree: NullifierTree,
     data_dir: PathBuf,
+    lwd_url: Option<String>,
+    lwd_client: Mutex<Option<CompactTxStreamerClient<tonic::transport::Channel>>>,
+}
+
+#[derive(Serialize)]
+struct NcRootJson {
+    nc_root: String,
+    height: u64,
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
@@ -163,6 +175,84 @@ async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     })
 }
 
+/// GET /nc-root/:height — fetch the Orchard note commitment tree root at a given block height.
+///
+/// Connects to lightwalletd, fetches the TreeState, and computes the real Sinsemilla root
+/// from the serialized frontier.
+async fn nc_root_handler(
+    State(state): State<Arc<AppState>>,
+    AxumPath(height): AxumPath<u64>,
+) -> impl IntoResponse {
+    let lwd_url = match &state.lwd_url {
+        Some(url) => url.clone(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorJson {
+                    error: "LWD_URL not configured — cannot fetch tree state".into(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Lazily connect to lightwalletd (reuse across requests).
+    let mut client_guard = state.lwd_client.lock().await;
+    if client_guard.is_none() {
+        match connect_lwd(&lwd_url).await {
+            Ok(c) => *client_guard = Some(c),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorJson {
+                        error: format!("failed to connect to lightwalletd: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+    let client = client_guard.as_mut().unwrap();
+
+    let tree_state = match client
+        .get_tree_state(BlockId {
+            height,
+            hash: Vec::new(),
+        })
+        .await
+    {
+        Ok(resp) => resp.into_inner(),
+        Err(e) => {
+            // Drop the client on error so the next request reconnects.
+            *client_guard = None;
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorJson {
+                    error: format!("lightwalletd GetTreeState failed: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    match nc_root::root_from_frontier_hex(&tree_state.orchard_tree) {
+        Ok(root_bytes) => {
+            let json = NcRootJson {
+                nc_root: format!("0x{}", hex::encode(root_bytes)),
+                height: tree_state.height,
+            };
+            (StatusCode::OK, Json(json)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorJson {
+                error: format!("failed to compute nc_root: {}", e),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -210,11 +300,28 @@ async fn main() -> Result<()> {
     );
 
     let data_dir = PathBuf::from(env::var("DATA_DIR").unwrap_or_else(|_| ".".into()));
-    let state = Arc::new(AppState { tree, data_dir });
+    let lwd_url = env::var("LWD_URL").ok().or_else(|| {
+        env::var("LWD_URLS").ok().and_then(|s| {
+            s.split(',').next().map(|u| u.trim().to_string())
+        })
+    });
+    if let Some(ref url) = lwd_url {
+        eprintln!("Lightwalletd URL for /nc-root: {}", url);
+    } else {
+        eprintln!("Warning: LWD_URL not set — /nc-root endpoint will be unavailable");
+    }
+
+    let state = Arc::new(AppState {
+        tree,
+        data_dir,
+        lwd_url,
+        lwd_client: Mutex::new(None),
+    });
 
     let app = Router::new()
         .route("/exclusion-proof/:nullifier", get(exclusion_proof))
         .route("/root", get(root))
+        .route("/nc-root/:height", get(nc_root_handler))
         .route("/health", get(health))
         .route("/status", get(status))
         .with_state(state);
