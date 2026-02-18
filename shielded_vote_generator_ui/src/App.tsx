@@ -7,7 +7,7 @@ import { JsonView } from "./components/JsonView";
 import { RoundEditor } from "./components/RoundEditor";
 import { RoundsList } from "./components/RoundsList";
 import { useStore } from "./store/useStore";
-import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server } from "lucide-react";
+import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server, Database } from "lucide-react";
 import type { Proposal, RoundSettings, RoundStatus, VotingRound } from "./types";
 import {
   LIGHTWALLETD_ENDPOINTS,
@@ -515,9 +515,45 @@ const CEREMONY_STATUS_NAMES: Record<number, string> = {
   3: "confirmed",
 };
 
+interface NullifierStatus {
+  latest_height: number | null;
+  nullifier_count: number;
+}
+
+function useNullifierStatus() {
+  const [data, setData] = useState<NullifierStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetch("/nullifier/status")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((json: NullifierStatus) => {
+        setData(json);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { data, loading, error, refresh };
+}
+
 function SettingsPage() {
   const [rpcUrl, setRpcUrl] = useState(getStoredRpc);
   const chain = useChainInfo();
+  const nullifier = useNullifierStatus();
   const isCustom = !LIGHTWALLETD_ENDPOINTS.some((e) => e.url === rpcUrl);
 
   // Voting chain state
@@ -676,6 +712,58 @@ function SettingsPage() {
             label="Block time"
             value="~75 seconds"
           />
+        </div>
+
+        {/* Nullifier service */}
+        <h2 className="text-xs font-semibold text-text-primary mb-3">
+          Nullifier service
+        </h2>
+        <div className="bg-surface-1 border border-border-subtle rounded-xl p-5 space-y-4 mb-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Database size={14} className="text-text-secondary" />
+              <span className="text-xs text-text-secondary">Status</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {nullifier.loading ? (
+                <RefreshCw size={12} className="text-text-muted animate-spin" />
+              ) : nullifier.error ? (
+                <span className="text-[11px] text-danger">{nullifier.error}</span>
+              ) : nullifier.data ? (
+                <span className="text-[11px] text-success flex items-center gap-1">
+                  <CheckCircle2 size={10} /> Connected
+                </span>
+              ) : null}
+              <button
+                onClick={nullifier.refresh}
+                className="p-1 hover:bg-surface-3 rounded text-text-muted hover:text-text-secondary cursor-pointer"
+                title="Refresh"
+              >
+                <RefreshCw size={12} />
+              </button>
+            </div>
+          </div>
+          {nullifier.data && (
+            <>
+              <SettingsStubRow
+                label="Latest ingested height"
+                value={
+                  nullifier.data.latest_height != null
+                    ? nullifier.data.latest_height.toLocaleString()
+                    : "—"
+                }
+              />
+              <SettingsStubRow
+                label="Nullifier count"
+                value={nullifier.data.nullifier_count.toLocaleString()}
+              />
+            </>
+          )}
+          {!nullifier.data && !nullifier.loading && !nullifier.error && (
+            <p className="text-[10px] text-text-muted">
+              Fetching nullifier service status...
+            </p>
+          )}
         </div>
 
         {/* Voting chain */}

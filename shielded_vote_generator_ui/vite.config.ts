@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const chainUrl = env.VITE_CHAIN_URL || 'http://localhost:1318'
+  const nullifierUrl = env.VITE_NULLIFIER_URL || 'http://localhost:3000'
 
   return {
     plugins: [react(), tailwindcss()],
@@ -13,6 +14,11 @@ export default defineConfig(({ mode }) => {
         '/zally': {
           target: chainUrl,
           changeOrigin: true,
+        },
+        '/nullifier': {
+          target: nullifierUrl,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/nullifier/, ''),
         },
       },
     },

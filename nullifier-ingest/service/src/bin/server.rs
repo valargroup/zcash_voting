@@ -1,6 +1,6 @@
 use std::env;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,7 +14,7 @@ use pasta_curves::Fp;
 use serde::Serialize;
 
 use imt_tree::NullifierTree;
-use nullifier_service::tree_db;
+use nullifier_service::{file_store, tree_db};
 
 // ── JSON response types ─────────────────────────────────────────────────
 
@@ -45,6 +45,12 @@ struct HealthJson {
 }
 
 #[derive(Serialize)]
+struct StatusJson {
+    latest_height: Option<u64>,
+    nullifier_count: u64,
+}
+
+#[derive(Serialize)]
 struct ErrorJson {
     error: String,
 }
@@ -53,6 +59,7 @@ struct ErrorJson {
 
 struct AppState {
     tree: NullifierTree,
+    data_dir: PathBuf,
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
@@ -142,6 +149,20 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthJson> {
     })
 }
 
+async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let latest_height = file_store::load_checkpoint(&state.data_dir)
+        .ok()
+        .flatten()
+        .map(|(h, _)| h);
+
+    let nullifier_count = file_store::nullifier_count(&state.data_dir).unwrap_or(0);
+
+    Json(StatusJson {
+        latest_height,
+        nullifier_count,
+    })
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -188,12 +209,14 @@ async fn main() -> Result<()> {
         fp_hex(&tree.root())
     );
 
-    let state = Arc::new(AppState { tree });
+    let data_dir = PathBuf::from(env::var("DATA_DIR").unwrap_or_else(|_| ".".into()));
+    let state = Arc::new(AppState { tree, data_dir });
 
     let app = Router::new()
         .route("/exclusion-proof/:nullifier", get(exclusion_proof))
         .route("/root", get(root))
         .route("/health", get(health))
+        .route("/status", get(status))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
