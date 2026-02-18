@@ -328,13 +328,15 @@ function filledBytes(byte: number, len: number): Uint8Array {
   return arr;
 }
 
-const STUB_SNAPSHOT_BLOCKHASH = filledBytes(0xaa, 32);
+const STUB_SNAPSHOT_BLOCKHASH  = filledBytes(0xaa, 32);
+const STUB_NULLIFIER_IMT_ROOT = filledBytes(0xcc, 32);
+const STUB_NC_ROOT            = filledBytes(0xdd, 32);
 const STUB_PROPOSALS_HASH     = filledBytes(0xbb, 32);
 const STUB_VK_ZKP1            = filledBytes(0xf1, 64);
 const STUB_VK_ZKP2            = filledBytes(0xf2, 64);
 const STUB_VK_ZKP3            = filledBytes(0xf3, 64);
 
-// ── Nullifier service helpers ───────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────
 
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
@@ -345,31 +347,41 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
-async function fetchNullifierImtRoot(nullifierApiBase: string): Promise<Uint8Array> {
-  const resp = await fetch(`${nullifierApiBase}/root`);
-  if (!resp.ok) {
-    throw new Error(`Failed to fetch IMT root: HTTP ${resp.status}`);
-  }
-  const data: { root: string } = await resp.json();
-  const bytes = hexToBytes(data.root);
-  if (bytes.length !== 32) {
-    throw new Error(`IMT root is ${bytes.length} bytes, expected 32`);
-  }
-  return bytes;
-}
+/**
+ * Fetch real snapshot data (nc_root, nullifier_imt_root, blockhash) from the
+ * chain's snapshot-data endpoint. Falls back to stubs if the endpoint fails.
+ */
+async function fetchSnapshotData(
+  apiBase: string,
+  snapshotHeight: number,
+): Promise<{
+  ncRoot: Uint8Array;
+  nullifierImtRoot: Uint8Array;
+  snapshotBlockhash: Uint8Array;
+}> {
+  try {
+    const resp = await fetch(`${apiBase}/zally/v1/snapshot-data/${snapshotHeight}`);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data: { nc_root: string; nullifier_imt_root: string; snapshot_blockhash: string } =
+      await resp.json();
 
-async function fetchNcRoot(nullifierApiBase: string, height: number): Promise<Uint8Array> {
-  const resp = await fetch(`${nullifierApiBase}/nc-root/${height}`);
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Failed to fetch nc_root: HTTP ${resp.status} – ${text}`);
+    return {
+      ncRoot: hexToBytes(data.nc_root),
+      nullifierImtRoot: hexToBytes(data.nullifier_imt_root),
+      snapshotBlockhash: hexToBytes(data.snapshot_blockhash),
+    };
+  } catch (e) {
+    console.warn(
+      `[createVotingSession] snapshot-data fetch failed (${e}), using stubs`,
+    );
+    return {
+      ncRoot: STUB_NC_ROOT,
+      nullifierImtRoot: STUB_NULLIFIER_IMT_ROOT,
+      snapshotBlockhash: STUB_SNAPSHOT_BLOCKHASH,
+    };
   }
-  const data: { nc_root: string; height: number } = await resp.json();
-  const bytes = hexToBytes(data.nc_root);
-  if (bytes.length !== 32) {
-    throw new Error(`nc_root is ${bytes.length} bytes, expected 32`);
-  }
-  return bytes;
 }
 
 // ── Public API ──────────────────────────────────────────────────
@@ -401,8 +413,9 @@ export async function setVoteManager(
 /**
  * Sign and broadcast a MsgCreateVotingSession transaction.
  *
- * Fetches the real nullifier_imt_root and nc_root from the nullifier service.
- * Byte fields (snapshot_blockhash, proposals_hash, vk_zkp1/2/3) still use stubs.
+ * Fetches real nc_root and nullifier_imt_root from the chain's snapshot-data
+ * endpoint (which calls lightwalletd and the IMT server). Falls back to stubs
+ * if the endpoint is unavailable.
  */
 export async function createVotingSession(
   apiBase: string,
@@ -422,10 +435,8 @@ export async function createVotingSession(
 ): Promise<BroadcastResult> {
   const [account] = await signer.getAccounts();
 
-  const [nullifierImtRoot, ncRoot] = await Promise.all([
-    fetchNullifierImtRoot(params.nullifierApiBase),
-    fetchNcRoot(params.nullifierApiBase, params.snapshotHeight),
-  ]);
+  // Fetch real snapshot data (nc_root, nullifier_imt_root, blockhash).
+  const snapshot = await fetchSnapshotData(apiBase, params.snapshotHeight);
 
   return signAndBroadcast({
     apiBase,
@@ -436,11 +447,11 @@ export async function createVotingSession(
         value: {
           creator: account.address,
           snapshotHeight: params.snapshotHeight,
-          snapshotBlockhash: STUB_SNAPSHOT_BLOCKHASH,
+          snapshotBlockhash: snapshot.snapshotBlockhash,
           proposalsHash: STUB_PROPOSALS_HASH,
           voteEndTime: params.voteEndTime,
-          nullifierImtRoot,
-          ncRoot,
+          nullifierImtRoot: snapshot.nullifierImtRoot,
+          ncRoot: snapshot.ncRoot,
           vkZkp1: STUB_VK_ZKP1,
           vkZkp2: STUB_VK_ZKP2,
           vkZkp3: STUB_VK_ZKP3,
