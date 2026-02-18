@@ -375,11 +375,11 @@ public struct Voting {
                     let finalizedRounds = allRounds.filter { $0.status == .finalized }
 
                     let selectedSession: VotingSession?
-                    if let active = activeRounds.first {
+                    if let active = activeRounds.max(by: { $0.snapshotHeight < $1.snapshotHeight }) {
                         selectedSession = active
-                    } else if let tallying = tallyingRounds.first {
+                    } else if let tallying = tallyingRounds.max(by: { $0.snapshotHeight < $1.snapshotHeight }) {
                         selectedSession = tallying
-                    } else if let finalized = finalizedRounds.last {
+                    } else if let finalized = finalizedRounds.max(by: { $0.snapshotHeight < $1.snapshotHeight }) {
                         selectedSession = finalized
                     } else {
                         selectedSession = nil
