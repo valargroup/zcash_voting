@@ -439,11 +439,12 @@ pub fn load_multi_validator_info() -> Vec<ValidatorInfo> {
 ///
 /// Handles various starting states after `init_multi.sh`:
 /// - Active REGISTERING/DEALT: wait for EndBlocker timeout to reset (~120–150s)
-/// - CONFIRMED: send `POST /reinitialize-ea`
+/// - CONFIRMED: broadcast MsgReInitializeElectionAuthority
 /// - Idle REGISTERING/nil: already ready
 pub fn ensure_ceremony_idle(validators: &[ValidatorInfo]) {
     use crate::api::{
-        get_ceremony_state_json, get_ceremony_status, post_json, wait_for_ceremony_status,
+        broadcast_cosmos_msg, default_cosmos_tx_config,
+        get_ceremony_state_json, get_ceremony_status, wait_for_ceremony_status,
         CEREMONY_STATUS_CONFIRMED, CEREMONY_STATUS_DEALT, CEREMONY_STATUS_REGISTERING,
     };
     use crate::payloads::reinitialize_ea_payload;
@@ -499,8 +500,11 @@ pub fn ensure_ceremony_idle(validators: &[ValidatorInfo]) {
         Some(s) if s == CEREMONY_STATUS_CONFIRMED => {
             eprintln!("[E2E] Ceremony is CONFIRMED, sending reinitialize-ea...");
             let body = reinitialize_ea_payload(&validators[0].operator_address);
-            let (http_status, json) = post_json("/zally/v1/reinitialize-ea", &body)
-                .expect("POST reinitialize-ea");
+            let mut msg = body;
+            msg["@type"] = serde_json::json!("/zvote.v1.MsgReInitializeElectionAuthority");
+            let config = default_cosmos_tx_config();
+            let (http_status, json) = broadcast_cosmos_msg(&msg, &config)
+                .expect("broadcast reinitialize-ea");
             assert!(
                 http_status == 200
                     && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
@@ -537,22 +541,31 @@ pub fn bootstrap_ceremony_multi(
     ea_sk_bytes: &[u8],
     ea_pk_bytes: &[u8],
 ) {
-    use crate::api::{post_json, wait_for_ceremony_confirmed};
+    use crate::api::{broadcast_cosmos_msg, CosmosTxConfig, wait_for_ceremony_confirmed};
     use crate::ecies;
     use crate::payloads::{deal_ea_key_payload, register_pallas_key_payload, DealerPayloadInput};
 
     let mut rng = OsRng;
 
     // Step 1: Register all validators' Pallas keys.
+    // Each validator signs with their own keyring from their own home dir.
     for (i, val) in validators.iter().enumerate() {
         eprintln!(
             "[E2E] Registering Pallas key for validator {} ({})...",
             i + 1,
             val.operator_address
         );
-        let body = register_pallas_key_payload(&val.operator_address, &val.pallas_pk);
-        let (status, json) = post_json("/zally/v1/register-pallas-key", &body)
-            .expect("POST register-pallas-key");
+        let mut msg = register_pallas_key_payload(&val.operator_address, &val.pallas_pk);
+        msg["@type"] = serde_json::json!("/zvote.v1.MsgRegisterPallasKey");
+        let config = CosmosTxConfig {
+            key_name: "validator".to_string(),
+            home_dir: val.home_dir.clone(),
+            chain_id: "zvote-1".to_string(),
+            node_url: std::env::var("ZALLY_NODE_URL")
+                .unwrap_or_else(|_| "tcp://localhost:26157".to_string()),
+        };
+        let (status, json) = broadcast_cosmos_msg(&msg, &config)
+            .expect("broadcast register-pallas-key");
         assert!(
             status == 200 && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
             "register-pallas-key failed for val{}: HTTP {}, body={:?}",
@@ -591,8 +604,17 @@ pub fn bootstrap_ceremony_multi(
         ea_pk_bytes,
         &dealer_payloads,
     );
+    let mut msg = body;
+    msg["@type"] = serde_json::json!("/zvote.v1.MsgDealExecutiveAuthorityKey");
+    let config = CosmosTxConfig {
+        key_name: "validator".to_string(),
+        home_dir: validators[0].home_dir.clone(),
+        chain_id: "zvote-1".to_string(),
+        node_url: std::env::var("ZALLY_NODE_URL")
+            .unwrap_or_else(|_| "tcp://localhost:26157".to_string()),
+    };
     let (status, json) =
-        post_json("/zally/v1/deal-ea-key", &body).expect("POST deal-ea-key");
+        broadcast_cosmos_msg(&msg, &config).expect("broadcast deal-ea-key");
     assert!(
         status == 200 && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
         "deal-ea-key failed: HTTP {}, body={:?}",
@@ -633,7 +655,8 @@ pub fn bootstrap_ceremony_multi(
 /// `ea_pk_bytes` is the 32-byte compressed EA public key.
 pub fn bootstrap_ceremony(ea_sk_bytes: &[u8], ea_pk_bytes: &[u8]) {
     use crate::api::{
-        get_ceremony_status, get_validator_operator_address, post_json,
+        broadcast_cosmos_msg, default_cosmos_tx_config,
+        get_ceremony_status, get_validator_operator_address,
         wait_for_ceremony_confirmed, CEREMONY_STATUS_CONFIRMED,
     };
     use crate::ecies;
@@ -673,13 +696,15 @@ pub fn bootstrap_ceremony(ea_sk_bytes: &[u8], ea_pk_bytes: &[u8]) {
         pallas_pk_bytes.len()
     );
 
+    let config = default_cosmos_tx_config();
     let mut rng = OsRng;
 
     // Step 1: Register the validator's Pallas key.
     eprintln!("[E2E] Ceremony: registering Pallas key...");
-    let body = register_pallas_key_payload(&validator_addr, &pallas_pk_bytes);
-    let (status, json) = post_json("/zally/v1/register-pallas-key", &body)
-        .expect("POST register-pallas-key");
+    let mut msg = register_pallas_key_payload(&validator_addr, &pallas_pk_bytes);
+    msg["@type"] = serde_json::json!("/zvote.v1.MsgRegisterPallasKey");
+    let (status, json) = broadcast_cosmos_msg(&msg, &config)
+        .expect("broadcast register-pallas-key");
     assert!(
         status == 200
             && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
@@ -707,8 +732,10 @@ pub fn bootstrap_ceremony(ea_sk_bytes: &[u8], ea_pk_bytes: &[u8]) {
     };
 
     let body = deal_ea_key_payload(&validator_addr, ea_pk_bytes, &[dealer_payload]);
+    let mut msg = body;
+    msg["@type"] = serde_json::json!("/zvote.v1.MsgDealExecutiveAuthorityKey");
     let (status, json) =
-        post_json("/zally/v1/deal-ea-key", &body).expect("POST deal-ea-key");
+        broadcast_cosmos_msg(&msg, &config).expect("broadcast deal-ea-key");
     assert!(
         status == 200
             && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,

@@ -56,7 +56,7 @@ fn to_base64(bytes: &[u8]) -> String {
 /// If session_override is Some, use those fields (e.g. from delegation bundle);
 /// otherwise use synthetic values with vote_end_time = now + expires_in_sec.
 pub fn create_voting_session_payload(
-    ea_pk: &[u8],
+    creator: &str,
     expires_in_sec: u64,
     session_override: Option<SetupRoundFields>,
 ) -> (Value, SetupRoundFields, [u8; 32]) {
@@ -76,14 +76,13 @@ pub fn create_voting_session_payload(
     });
     let round_id = derive_round_id(&fields);
     let body = json!({
-        "creator": "zvote1admin",
+        "creator": creator,
         "snapshot_height": fields.snapshot_height,
         "snapshot_blockhash": to_base64(&fields.snapshot_blockhash),
         "proposals_hash": to_base64(&fields.proposals_hash),
         "vote_end_time": fields.vote_end_time,
         "nullifier_imt_root": to_base64(&fields.nullifier_imt_root),
         "nc_root": to_base64(&fields.nc_root),
-        "ea_pk": to_base64(ea_pk),
         "vk_zkp1": to_base64(&[0xf1u8; 64]),
         "vk_zkp2": to_base64(&[0xf2u8; 64]),
         "vk_zkp3": to_base64(&[0xf3u8; 64]),

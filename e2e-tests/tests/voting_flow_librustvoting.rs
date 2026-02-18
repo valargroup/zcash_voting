@@ -13,14 +13,15 @@ use base64::Engine;
 use blake2b_simd::Params as Blake2bParams;
 use e2e_tests::{
     api::{
-        self, commitment_tree_next_index, get_json, get_validator_operator_address,
-        helper_server_url, post_json, post_json_accept_committed, post_helper_json,
-        tally_has_proposal, wait_for_round_status, SESSION_STATUS_FINALIZED,
+        self, broadcast_cosmos_msg, commitment_tree_next_index, default_cosmos_tx_config,
+        get_json, helper_server_url, import_hex_key,
+        post_json_accept_committed, post_helper_json, tally_has_proposal,
+        wait_for_round_status, SESSION_STATUS_ACTIVE, SESSION_STATUS_FINALIZED,
         SESSION_STATUS_TALLYING,
     },
     payloads::{
         cast_vote_payload_real, create_voting_session_payload, delegate_vote_payload,
-        helper_share_payload, set_vote_manager_payload,
+        helper_share_payload,
     },
     setup::build_delegation_bundle_for_test,
 };
@@ -35,6 +36,12 @@ use vote_commitment_tree::TreeClient;
 use vote_commitment_tree_client::http_sync_api::HttpTreeSyncApi;
 
 const BLOCK_WAIT_MS: u64 = 6000;
+
+/// Default vote manager secp256k1 private key (set in genesis).
+const VOTE_MANAGER_PRIVKEY_HEX: &str =
+    "b7e910eded435dd4e19c581b9a0b8e65104dcc4ebca8a1d55aa5c803e72ba2ee";
+/// Bech32 address derived from VOTE_MANAGER_PRIVKEY_HEX with the "zvote" prefix.
+const VOTE_MANAGER_ADDRESS: &str = "zvote15fjfr6rrs60vu4st6arrd94w5j6z7f6kxr92cg";
 
 fn log_step(step: &str, msg: &str) {
     eprintln!("[E2E-lib] {}: {}", step, msg);
@@ -68,28 +75,14 @@ fn voting_flow_librustvoting_path() {
     e2e_tests::setup::bootstrap_ceremony(&ea_sk_bytes, &ea_pk_bytes);
     log_step("Step 0", "ceremony CONFIRMED");
 
-    // ---- Step 0b: Set vote manager ----
-    // CreateVotingSession requires the caller to be the VoteManager.
-    // Use the genesis validator to bootstrap the VoteManager to "zvote1admin".
-    log_step("Step 0b", "setting vote manager to zvote1admin...");
-    let val_addr = get_validator_operator_address()
-        .expect("failed to query validator operator address");
-    let vm_body = set_vote_manager_payload(&val_addr, "zvote1admin");
-    let (vm_status, vm_json) =
-        post_json("/zally/v1/set-vote-manager", &vm_body).expect("POST set-vote-manager");
-    assert_eq!(
-        vm_status, 200,
-        "set-vote-manager: HTTP {}, body={:?}",
-        vm_status, vm_json
-    );
-    assert_eq!(
-        vm_json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1),
-        0,
-        "set-vote-manager rejected: {:?}",
-        vm_json.get("log")
-    );
-    block_wait();
-    log_step("Step 0b", "vote manager set ✓");
+    // ---- Step 0b: Import vote manager key ----
+    // The genesis sets the vote manager to VOTE_MANAGER_ADDRESS.
+    // Import the corresponding private key into the keyring so we can sign
+    // MsgCreateVotingSession as a standard Cosmos SDK transaction.
+    log_step("Step 0b", "importing vote manager key into keyring...");
+    let config = default_cosmos_tx_config();
+    import_hex_key("vote-manager", VOTE_MANAGER_PRIVKEY_HEX, &config.home_dir);
+    log_step("Step 0b", "vote manager key imported ✓");
 
     let mut rng = ChaCha20Rng::seed_from_u64(43);
 
@@ -104,14 +97,22 @@ fn voting_flow_librustvoting_path() {
 
     // Save fields we need for DB before session_fields is consumed
     let fields_for_db = session_fields.clone();
-    let (body, _, round_id) =
-        create_voting_session_payload(&ea_pk_bytes, 120, Some(session_fields));
+    let (mut body, _, round_id) =
+        create_voting_session_payload(VOTE_MANAGER_ADDRESS, 120, Some(session_fields));
     let round_id_hex = hex::encode(&round_id);
 
     // ---- Step 1: Create voting session ----
-    log_step("Step 1", "create voting session");
+    // MsgCreateVotingSession is a standard Cosmos SDK tx signed by the vote manager.
+    log_step("Step 1", "create voting session (Cosmos SDK tx)");
+    body["@type"] = serde_json::json!("/zvote.v1.MsgCreateVotingSession");
+    let vm_config = e2e_tests::api::CosmosTxConfig {
+        key_name: "vote-manager".to_string(),
+        home_dir: config.home_dir.clone(),
+        chain_id: config.chain_id.clone(),
+        node_url: config.node_url.clone(),
+    };
     let (status, json) =
-        post_json("/zally/v1/create-voting-session", &body).expect("POST create-voting-session");
+        broadcast_cosmos_msg(&body, &vm_config).expect("broadcast create-voting-session");
     assert_eq!(
         status, 200,
         "create session: HTTP {}, body={:?}",
@@ -123,7 +124,12 @@ fn voting_flow_librustvoting_path() {
         "create session rejected: {:?}",
         json.get("log")
     );
-    block_wait();
+    // Wait for the round to actually be committed on-chain (not just accepted
+    // into mempool). broadcast_tx_sync only guarantees CheckTx passed; the tx
+    // may still be waiting for the next block.
+    log_step("Step 1b", &format!("waiting for round {} to appear on-chain", &round_id_hex));
+    wait_for_round_status(&round_id_hex, SESSION_STATUS_ACTIVE, 30_000, 1_000)
+        .expect("round should become ACTIVE after session creation");
 
     // ---- Step 2: Delegate vote (real ZKP #1) ----
     // The commitment tree is global across rounds/tests. Capture the current

@@ -344,6 +344,211 @@ where
     Ok((status, json))
 }
 
+// ---------------------------------------------------------------------------
+// Standard Cosmos SDK tx signing and broadcasting via `zallyd` CLI
+// ---------------------------------------------------------------------------
+
+/// Configuration for signing and broadcasting standard Cosmos SDK transactions.
+pub struct CosmosTxConfig {
+    /// Name of the signing key in the keyring (e.g. "validator").
+    pub key_name: String,
+    /// Path to the node's home directory (e.g. "$HOME/.zallyd").
+    pub home_dir: String,
+    /// Chain ID (e.g. "zvote-1").
+    pub chain_id: String,
+    /// CometBFT RPC endpoint (e.g. "tcp://localhost:26657").
+    pub node_url: String,
+}
+
+/// Returns a default CosmosTxConfig for the single-validator dev chain setup.
+pub fn default_cosmos_tx_config() -> CosmosTxConfig {
+    let home = std::env::var("HOME").expect("HOME env var must be set");
+    let home_dir = std::env::var("ZALLY_HOME")
+        .unwrap_or_else(|_| format!("{}/.zallyd", home));
+    let node_url = std::env::var("ZALLY_NODE_URL")
+        .unwrap_or_else(|_| "tcp://localhost:26657".to_string());
+    CosmosTxConfig {
+        key_name: "validator".to_string(),
+        home_dir,
+        chain_id: "zvote-1".to_string(),
+        node_url,
+    }
+}
+
+/// Sign and broadcast a standard Cosmos SDK transaction containing the given
+/// message. The message must include an `@type` field with the full protobuf
+/// type URL (e.g. "/zvote.v1.MsgRegisterPallasKey").
+///
+/// Returns `(200, json)` on successful broadcast or an error.
+pub fn broadcast_cosmos_msg(
+    msg: &Value,
+    config: &CosmosTxConfig,
+) -> Result<(u16, Value), Box<dyn std::error::Error + Send + Sync>> {
+    use std::io::Write;
+    use std::process::Command;
+
+    let unsigned_tx = serde_json::json!({
+        "body": {
+            "messages": [msg],
+            "memo": "",
+            "timeout_height": "0",
+            "extension_options": [],
+            "non_critical_extension_options": []
+        },
+        "auth_info": {
+            "signer_infos": [],
+            "fee": {
+                "amount": [],
+                "gas_limit": "200000",
+                "payer": "",
+                "granter": ""
+            }
+        },
+        "signatures": []
+    });
+
+    let tmp_dir = std::env::temp_dir();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let unsigned_path = tmp_dir.join(format!("zally_unsigned_{}.json", ts));
+    let signed_path = tmp_dir.join(format!("zally_signed_{}.json", ts));
+
+    // Write unsigned tx to temp file.
+    {
+        let mut f = std::fs::File::create(&unsigned_path)?;
+        f.write_all(serde_json::to_string_pretty(&unsigned_tx)?.as_bytes())?;
+    }
+
+    // Sign via zallyd tx sign.
+    let sign_output = Command::new("zallyd")
+        .args([
+            "tx", "sign",
+            unsigned_path.to_str().unwrap(),
+            "--from", &config.key_name,
+            "--keyring-backend", "test",
+            "--chain-id", &config.chain_id,
+            "--home", &config.home_dir,
+            "--node", &config.node_url,
+            "--output-document", signed_path.to_str().unwrap(),
+            "--yes",
+        ])
+        .output()?;
+
+    // Clean up unsigned file.
+    let _ = std::fs::remove_file(&unsigned_path);
+
+    if !sign_output.status.success() {
+        let _ = std::fs::remove_file(&signed_path);
+        let stderr = String::from_utf8_lossy(&sign_output.stderr);
+        return Err(format!("zallyd tx sign failed: {}", stderr).into());
+    }
+
+    // Broadcast via zallyd tx broadcast.
+    let broadcast_output = Command::new("zallyd")
+        .args([
+            "tx", "broadcast",
+            signed_path.to_str().unwrap(),
+            "--node", &config.node_url,
+            "--output", "json",
+        ])
+        .output()?;
+
+    // Clean up signed file.
+    let _ = std::fs::remove_file(&signed_path);
+
+    if !broadcast_output.status.success() {
+        let stderr = String::from_utf8_lossy(&broadcast_output.stderr);
+        return Err(format!("zallyd tx broadcast failed: {}", stderr).into());
+    }
+
+    let stdout = String::from_utf8_lossy(&broadcast_output.stdout);
+    let mut result: Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("failed to parse broadcast output: {} (raw: {})", e, stdout))?;
+
+    // Normalize field names for compatibility with existing test assertions:
+    // zallyd outputs "txhash" and "raw_log"; tests expect "tx_hash" and "log".
+    if let Some(obj) = result.as_object_mut() {
+        if let Some(txhash) = obj.remove("txhash") {
+            obj.insert("tx_hash".to_string(), txhash);
+        }
+        if let Some(raw_log) = obj.remove("raw_log") {
+            obj.insert("log".to_string(), raw_log);
+        }
+    }
+
+    Ok((200, result))
+}
+
+/// Import a hex-encoded secp256k1 private key into the zallyd test keyring.
+///
+/// Runs `zallyd keys import-hex <name> <hex> --keyring-backend test --home <home>`.
+/// Silently succeeds if the key already exists (duplicate import).
+pub fn import_hex_key(name: &str, hex_privkey: &str, home_dir: &str) {
+    use std::process::Command;
+
+    let output = Command::new("zallyd")
+        .args([
+            "keys", "import-hex",
+            name,
+            hex_privkey,
+            "--keyring-backend", "test",
+            "--home", home_dir,
+        ])
+        .output()
+        .expect("failed to run zallyd keys import-hex");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // "duplicated address" or "already exists" means the key was previously imported.
+        if stderr.contains("duplicated") || stderr.contains("already exists") || stderr.contains("overwrite") {
+            eprintln!("[E2E] Key '{}' already in keyring, skipping import", name);
+            return;
+        }
+        panic!(
+            "zallyd keys import-hex failed: {}",
+            stderr
+        );
+    }
+    eprintln!("[E2E] Imported key '{}' into keyring at {}", name, home_dir);
+}
+
+/// Sign and broadcast a ceremony message via standard Cosmos SDK tx flow,
+/// with retries on transient failures (same retry logic as post_json).
+pub fn broadcast_cosmos_msg_with_retries(
+    msg: &Value,
+    config: &CosmosTxConfig,
+) -> Result<(u16, Value), Box<dyn std::error::Error + Send + Sync>> {
+    let mut last_err = None;
+    for attempt in 0..3u32 {
+        match broadcast_cosmos_msg(msg, config) {
+            Ok((status, json)) => {
+                let code = json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+                if code == 0 {
+                    return Ok((status, json));
+                }
+                // Non-zero code: return immediately (not a transient failure).
+                return Ok((status, json));
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                eprintln!(
+                    "[E2E] broadcast_cosmos_msg attempt {}/{}: {}",
+                    attempt + 1,
+                    3,
+                    msg
+                );
+                last_err = Some(e);
+                if attempt < 2 {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 /// Poll GET /zally/v1/round/{round_id_hex} until status equals expected or timeout.
 pub fn wait_for_round_status(
     round_id_hex: &str,

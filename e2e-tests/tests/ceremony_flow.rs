@@ -15,8 +15,9 @@
 use base64::Engine;
 use e2e_tests::{
     api::{
+        broadcast_cosmos_msg, default_cosmos_tx_config,
         get_all_validator_operator_addresses, get_ceremony_state_json, get_ceremony_status,
-        post_json, CEREMONY_STATUS_CONFIRMED, CEREMONY_STATUS_REGISTERING,
+        CEREMONY_STATUS_CONFIRMED, CEREMONY_STATUS_REGISTERING,
     },
     payloads::reinitialize_ea_payload,
     setup::{bootstrap_ceremony_multi, ensure_ceremony_idle, load_multi_validator_info},
@@ -40,7 +41,7 @@ fn block_wait() {
 ///   3. Deal EA key (ECIES-encrypt ea_sk to each validator's Pallas PK)
 ///   4. Wait for 3 auto-acks via PrepareProposal → CONFIRMED (fast path: all acked)
 ///   5. Verify CONFIRMED state: ea_pk, 3 validators, 3 acks
-///   6. POST /reinitialize-ea
+///   6. Broadcast MsgReInitializeElectionAuthority
 ///   7. Verify idle REGISTERING with all fields cleared
 #[test]
 #[ignore = "requires running 3-validator chain (make init-multi)"]
@@ -149,10 +150,12 @@ fn ceremony_lifecycle_multi_validator() {
     log_step("Phase 2", "ceremony CONFIRMED with 3 validators + 3 acks ✓");
 
     // ---- Phase 3: Reinitialize ----
-    log_step("Phase 3", "sending POST /reinitialize-ea...");
-    let body = reinitialize_ea_payload(&validators[0].operator_address);
+    log_step("Phase 3", "broadcasting MsgReInitializeElectionAuthority...");
+    let mut msg = reinitialize_ea_payload(&validators[0].operator_address);
+    msg["@type"] = serde_json::json!("/zvote.v1.MsgReInitializeElectionAuthority");
+    let config = default_cosmos_tx_config();
     let (http_status, json) =
-        post_json("/zally/v1/reinitialize-ea", &body).expect("POST reinitialize-ea");
+        broadcast_cosmos_msg(&msg, &config).expect("broadcast reinitialize-ea");
     assert!(
         http_status == 200 && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
         "reinitialize-ea failed: HTTP {}, body={:?}",
