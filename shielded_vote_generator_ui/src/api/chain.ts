@@ -1,4 +1,5 @@
 // Chain API client for the Zally voting chain REST endpoints.
+// Uses relative paths by default; proxied via Vite (dev) or Vercel rewrites (prod).
 
 const CHAIN_URL_KEY = "zally-chain-url";
 const DEFAULT_CHAIN_URL = import.meta.env.VITE_CHAIN_URL || "http://localhost:1318";
