@@ -2,6 +2,14 @@
 
 Zally is a shielded voting protocol built on a Cosmos SDK chain. Votes are zero-knowledge proofs (Halo2 circuits + RedPallas signatures) that prove eligibility without revealing the voter's identity. Orchard nullifiers are ingested from the Zcash chain and used to generate non-inclusion proofs that prevent double-voting.
 
+## Infrastructure Setup
+
+| Guide | Purpose |
+|---|---|
+| [SETUP_GENESIS.md](SETUP_GENESIS.md) | Bootstrap the genesis validator — build the binary, initialise the chain, open P2P, and record the node identity |
+| [SETUP_JOIN.md](SETUP_JOIN.md) | Add a new validator — sync a post-genesis node, fund it, and submit `MsgCreateValidatorWithPallasKey` |
+| [SETUP_CEREMONY.md](SETUP_CEREMONY.md) | Run the EA key ceremony — register Pallas keys, deal the encrypted EA secret key to all validators, and confirm |
+
 ## Architecture
 
 | Component | Language | Description |
