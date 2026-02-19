@@ -12,7 +12,12 @@ on:
     branches: [main]
     paths:
       - 'sdk/**'
-  workflow_dispatch: # allow manual run
+  workflow_dispatch:
+    inputs:
+      reset_chain:
+        description: "Reset chain state (wipes existing data and reinitializes)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -97,7 +102,7 @@ jobs:
           source: "zallyd,init.sh"
           target: ${{ env.DEPLOY_PATH }}
 
-      - name: Stop service before reinit
+      - name: Stop service
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -121,7 +126,8 @@ jobs:
               sleep 1
             done
 
-      - name: Initialize chain
+      - name: Reset chain (reinitialize)
+        if: ${{ inputs.reset_chain == true }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
