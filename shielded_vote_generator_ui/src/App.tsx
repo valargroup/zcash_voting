@@ -214,7 +214,6 @@ function App() {
             onFilterChange={setFilter}
             onSelectRound={handleSelectRound}
             onDuplicate={(id) => store.duplicateRound(id)}
-            onArchive={(id) => store.setRoundStatus(id, "archived")}
             onDelete={(id) => store.deleteRound(id)}
           />
         )}
@@ -231,9 +230,6 @@ function App() {
               onPublish={() => handlePublish(store.activeRound!.id)}
               onPreview={() => setSection("preview")}
               onDuplicate={() => store.duplicateRound(store.activeRound!.id)}
-              onArchive={() =>
-                store.setRoundStatus(store.activeRound!.id, "archived")
-              }
               onDelete={() => {
                 store.deleteRound(store.activeRound!.id);
                 setSection("rounds");
@@ -1411,17 +1407,11 @@ function formatTokens(raw: string | undefined): string {
   return n.toLocaleString();
 }
 
-function formatCommission(rate: string | undefined): string {
-  if (!rate) return "—";
-  const pct = parseFloat(rate) * 100;
-  return `${pct.toFixed(1)}%`;
-}
-
 function ValidatorsView() {
   const [validators, setValidators] = useState<chainApi.Validator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [sortBy, setSortBy] = useState<"power" | "commission" | "moniker">("power");
+  const [sortBy, setSortBy] = useState<"power" | "moniker">("power");
   const [ceremony, setCeremony] = useState<chainApi.CeremonyState | null>(null);
 
   const fetchValidators = async () => {
@@ -1454,11 +1444,6 @@ function ValidatorsView() {
   const sorted = [...validators].sort((a, b) => {
     if (sortBy === "power") {
       return Number(BigInt(b.tokens ?? "0") - BigInt(a.tokens ?? "0"));
-    }
-    if (sortBy === "commission") {
-      const aRate = parseFloat(a.commission?.commission_rates?.rate ?? "0");
-      const bRate = parseFloat(b.commission?.commission_rates?.rate ?? "0");
-      return aRate - bRate;
     }
     // moniker
     const aName = (a.description?.moniker ?? "").toLowerCase();
@@ -1561,7 +1546,7 @@ function ValidatorsView() {
         {!loading && validators.length > 0 && (
           <div className="flex items-center gap-2 mb-3">
             <span className="text-[10px] text-text-muted uppercase tracking-wider">Sort by</span>
-            {(["power", "commission", "moniker"] as const).map((key) => (
+            {(["power", "moniker"] as const).map((key) => (
               <button
                 key={key}
                 onClick={() => setSortBy(key)}
@@ -1571,7 +1556,7 @@ function ValidatorsView() {
                     : "text-text-muted hover:text-text-secondary hover:bg-surface-2"
                 }`}
               >
-                {key === "power" ? "Voting power" : key === "commission" ? "Commission" : "Name"}
+                {key === "power" ? "Voting power" : "Name"}
               </button>
             ))}
           </div>
@@ -1585,7 +1570,6 @@ function ValidatorsView() {
               label: val.status ?? "Unknown",
               color: "bg-surface-3 text-text-muted",
             };
-            const commission = formatCommission(val.commission?.commission_rates?.rate);
             const tokens = val.tokens ?? "0";
             const powerPct =
               totalPower > BigInt(0) && val.status === "BOND_STATUS_BONDED"
@@ -1644,10 +1628,6 @@ function ValidatorsView() {
                           <span className="text-text-muted ml-1">({powerPct.toFixed(1)}%)</span>
                         )}
                       </p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-text-muted">Commission</p>
-                      <p className="text-[11px] text-text-primary">{commission}</p>
                     </div>
                   </div>
                 </div>

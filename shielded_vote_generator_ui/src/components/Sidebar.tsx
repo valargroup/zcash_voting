@@ -4,7 +4,6 @@ import {
   LayoutList,
   Clock,
   FileText,
-  Archive,
   Code2,
   Shield,
   Info,
@@ -51,7 +50,6 @@ const NAV_ITEMS: NavItem[] = [
   { label: "All rounds", icon: <LayoutList size={15} />, filter: "all" },
   { label: "In progress", icon: <Clock size={15} />, filter: "in_progress" },
   { label: "Drafts", icon: <FileText size={15} />, filter: "draft" },
-  { label: "Archived", icon: <Archive size={15} />, filter: "archived" },
 ];
 
 const RESULTS_ITEMS: NavItem[] = [
