@@ -109,6 +109,21 @@ function App() {
       return;
     }
 
+    // Block submission if snapshot height doesn't match the nullifier service NH.
+    try {
+      const nhStatus = await chainApi.getNullifierStatus();
+      const nhHeight = nhStatus.latest_height;
+      if (nhHeight != null && nhHeight !== snapshotHeight) {
+        setPublishStatus("error");
+        setPublishError(
+          `Snapshot height ${snapshotHeight.toLocaleString()} doesn't match NH (Nullifier Service Snapshot Height: ${nhHeight.toLocaleString()}). Ensure that your nullifier service snapshot is synced to the selected height.`
+        );
+        return;
+      }
+    } catch {
+      // If the nullifier service is unreachable, proceed with a warning — don't hard-block.
+    }
+
     const voteEndTime = round.settings.endTime
       ? Math.floor(new Date(round.settings.endTime).getTime() / 1000)
       : Math.floor(Date.now() / 1000) + 7 * 24 * 3600;

@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { Settings2, X, Clock, RefreshCw } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { Settings2, X, Clock, RefreshCw, AlertTriangle } from "lucide-react";
 import type { VotingRound, RoundSettings } from "../types";
 import {
   useChainInfo,
@@ -106,27 +106,50 @@ function formatTimestamp(d: Date): string {
 
 export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEditorProps) {
   const [showCustom, setShowCustom] = useState(false);
-  const [imtLoading, setImtLoading] = useState(false);
-  const [imtError, setImtError] = useState<string | null>(null);
+  const [nhLoading, setNhLoading] = useState(false);
+  const [nhError, setNhError] = useState<string | null>(null);
+  const [nhHeight, setNhHeight] = useState<number | null>(null);
   const endTime = round.settings.endTime;
   const hasEndTime = endTime.length > 0;
 
   const chain = useChainInfo();
 
-  const handleUseImtHeight = useCallback(async () => {
-    setImtLoading(true);
-    setImtError(null);
+  const fetchNh = useCallback(async () => {
+    setNhLoading(true);
+    setNhError(null);
     try {
       const status = await getNullifierStatus();
       const height = status.latest_height;
-      if (height == null) throw new Error("IMT height unavailable");
-      onUpdateSettings({ snapshotHeight: String(height) });
+      if (height == null) throw new Error("NH unavailable");
+      setNhHeight(height);
     } catch (err) {
-      setImtError(err instanceof Error ? err.message : "Failed to fetch");
+      setNhError(err instanceof Error ? err.message : "Failed to fetch");
     } finally {
-      setImtLoading(false);
+      setNhLoading(false);
     }
-  }, [onUpdateSettings]);
+  }, []);
+
+  // Auto-fetch NH on mount so the mismatch warning is shown immediately.
+  useEffect(() => {
+    fetchNh();
+  }, [fetchNh]);
+
+  const handleUseNhHeight = useCallback(() => {
+    if (nhHeight != null) {
+      onUpdateSettings({ snapshotHeight: String(nhHeight) });
+    } else {
+      fetchNh().then(() => {
+        // nhHeight will be set via state; user can click again if needed.
+      });
+    }
+  }, [nhHeight, fetchNh, onUpdateSettings]);
+
+  const snapshotHeightNum = parseInt(round.settings.snapshotHeight, 10);
+  const nhMismatch =
+    nhHeight != null &&
+    !isNaN(snapshotHeightNum) &&
+    snapshotHeightNum > 0 &&
+    snapshotHeightNum !== nhHeight;
 
   const snapshotHeight = parseInt(round.settings.snapshotHeight, 10);
   const isValidHeight = !isNaN(snapshotHeight) && snapshotHeight > 0;
@@ -169,13 +192,13 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             </label>
             <div className="flex items-center gap-2">
               <button
-                onClick={handleUseImtHeight}
-                disabled={imtLoading}
+                onClick={handleUseNhHeight}
+                disabled={nhLoading}
                 className="text-[10px] text-accent hover:text-accent-glow disabled:opacity-50 cursor-pointer flex items-center gap-0.5"
-                title="Set to current IMT anchor height from the helper service"
+                title="NH — Nullifier Service Snapshot Height: the latest Zcash block the nullifier service has indexed. Voters must have shielded notes at or before this height."
               >
-                <RefreshCw size={10} className={imtLoading ? "animate-spin" : ""} />
-                Use IMT height
+                <RefreshCw size={10} className={nhLoading ? "animate-spin" : ""} />
+                Use NH
               </button>
               {chain.latestHeight && (
                 <span className="text-[10px] text-text-muted flex items-center gap-1">
@@ -218,6 +241,27 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             </div>
           )}
 
+          {/* NH mismatch warning — blocks submission */}
+          {nhMismatch && (
+            <div className="flex items-start gap-2 mt-2 px-2.5 py-2 bg-warning/10 border border-warning/40 rounded-md">
+              <AlertTriangle size={12} className="text-warning shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[10px] text-warning font-semibold leading-snug">
+                  Snapshot height doesn't match NH
+                </p>
+                <p className="text-[10px] text-text-secondary leading-snug mt-0.5">
+                  Ensure that your nullifier service snapshot is synced to the selected height.
+                </p>
+                <p className="text-[10px] text-text-muted mt-1">
+                  Current NH:{" "}
+                  <span className="font-mono text-text-secondary">
+                    {nhHeight!.toLocaleString()}
+                  </span>
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Chain error */}
           {chain.error && (
             <p className="text-[10px] text-danger mt-1">
@@ -225,15 +269,18 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             </p>
           )}
 
-          {/* IMT error */}
-          {imtError && (
+          {/* NH fetch error */}
+          {nhError && (
             <p className="text-[10px] text-danger mt-1">
-              IMT error: {imtError}
+              NH error: {nhError}
             </p>
           )}
 
           <p className="text-[10px] text-text-muted mt-1">
-            The block height at which balances are captured for vote weighting.
+            The block height at which balances are captured for vote weighting.{" "}
+            <span className="text-text-muted/70">
+              NH = Nullifier Service Snapshot Height — the latest Zcash block the nullifier service has indexed.
+            </span>
           </p>
         </div>
 
