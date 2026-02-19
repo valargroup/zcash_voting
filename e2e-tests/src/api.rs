@@ -274,6 +274,38 @@ pub fn get_validator_operator_address() -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Returns all validators registered in the ceremony state as
+/// `(operator_address, pallas_pk_bytes)` pairs.
+pub fn get_ceremony_validators() -> Option<Vec<(String, Vec<u8>)>> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine;
+
+    let (status, json) = get_json("/zally/v1/ceremony").ok()?;
+    if status != 200 {
+        return None;
+    }
+    let validators = json
+        .get("ceremony")?
+        .get("validators")?
+        .as_array()?;
+
+    let result: Vec<(String, Vec<u8>)> = validators
+        .iter()
+        .filter_map(|v| {
+            let addr = v.get("validator_address")?.as_str()?.to_string();
+            let pk_b64 = v.get("pallas_pk")?.as_str()?;
+            let pk_bytes = B64.decode(pk_b64).ok()?;
+            Some((addr, pk_bytes))
+        })
+        .collect();
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
 /// Returns ALL validator operator addresses from the staking module.
 pub fn get_all_validator_operator_addresses() -> Option<Vec<String>> {
     let (status, json) = get_json("/cosmos/staking/v1beta1/validators").ok()?;
