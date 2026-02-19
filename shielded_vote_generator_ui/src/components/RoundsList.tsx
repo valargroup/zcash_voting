@@ -26,7 +26,6 @@ interface RoundsListProps {
 const FILTERS: { label: string; value: RoundStatus | "all" }[] = [
   { label: "All", value: "all" },
   { label: "Draft", value: "draft" },
-  { label: "In progress", value: "in_progress" },
   { label: "Published", value: "published" },
 ];
 

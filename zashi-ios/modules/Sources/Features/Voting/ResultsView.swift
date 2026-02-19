@@ -64,20 +64,37 @@ struct ResultsView: View {
 
     // MARK: - Round Header
 
+    private var statusLabel: String {
+        switch store.activeSession?.status {
+        case .active: return "Active"
+        case .tallying: return "Tallying"
+        case .finalized: return "Finalized"
+        default: return "Unknown"
+        }
+    }
+
+    private var statusColor: Color {
+        switch store.activeSession?.status {
+        case .active: return .green
+        case .tallying: return .orange
+        case .finalized: return .blue
+        default: return .secondary
+        }
+    }
+
     @ViewBuilder
     private func roundHeaderCard() -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(store.votingRound.title)
+            // Title: "Round 1"
+            Text("Round 1")
                 .zFont(.semiBold, size: 18, style: Design.Text.primary)
 
-            // Status pill
-            Text("Finalized")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.accentColor.opacity(0.12))
-                .clipShape(Capsule())
+            // Round description
+            if !store.votingRound.description.isEmpty {
+                Text(store.votingRound.description)
+                    .zFont(.regular, size: 13, style: Design.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             // Detail pills
             HStack(spacing: 0) {
@@ -91,10 +108,19 @@ struct ResultsView: View {
                     value: store.votingRound.votingEnd.formatted(date: .abbreviated, time: .omitted)
                 )
                 Spacer()
-                detailPill(
-                    label: "Proposals",
-                    value: "\(store.votingRound.proposals.count)"
-                )
+                // Status pill
+                VStack(spacing: 2) {
+                    Text("Status")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(statusLabel)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(Capsule())
+                }
             }
         }
         .padding(16)
@@ -147,6 +173,13 @@ struct ResultsView: View {
                 Text(proposal.title)
                     .zFont(.semiBold, size: 15, style: Design.Text.primary)
                     .lineLimit(2)
+            }
+
+            // Proposal description
+            if !proposal.description.isEmpty {
+                Text(proposal.description)
+                    .zFont(.regular, size: 12, style: Design.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Winner highlight

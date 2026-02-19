@@ -217,6 +217,7 @@ private func parseVotingSession(from round: [String: Any]) throws -> VotingSessi
         ncRoot: parseBase64(round["nc_root"]),
         nullifierIMTRoot: parseBase64(round["nullifier_imt_root"]),
         creator: round["creator"] as? String ?? "",
+        description: round["description"] as? String ?? "",
         proposals: proposals,
         status: SessionStatus(rawValue: statusRaw) ?? .unspecified
     )

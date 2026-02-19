@@ -533,6 +533,7 @@ public struct Voting {
                     ncRoot: session.ncRoot,
                     nullifierIMTRoot: session.nullifierIMTRoot,
                     creator: session.creator,
+                    description: session.description,
                     proposals: session.proposals,
                     status: newStatus
                 )
@@ -1188,7 +1189,7 @@ public struct Voting {
         return VotingRound(
             id: session.voteRoundId.hexString,
             title: fallback.title,
-            description: fallback.description,
+            description: session.description.isEmpty ? fallback.description : session.description,
             snapshotHeight: session.snapshotHeight,
             snapshotDate: fallback.snapshotDate,
             votingStart: fallback.votingStart,

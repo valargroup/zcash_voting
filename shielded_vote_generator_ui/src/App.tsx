@@ -187,7 +187,6 @@ function App() {
         onFilterChange={setFilter}
         onSelectRound={handleSelectRound}
         onCreateRound={handleCreateRound}
-        onImportJson={handleImportJson}
         onNavigate={handleNavigate}
         onDeleteRound={store.deleteRound}
         currentSection={section}
@@ -912,6 +911,8 @@ function SettingsPage({ wallet }: { wallet: UseWallet }) {
                       placeholder="64-character hex private key"
                       spellCheck={false}
                       autoComplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       className="w-full px-3 py-2 pr-9 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
                     />
                     <button
@@ -1670,10 +1671,10 @@ function ValidatorsView() {
 const STATUS_MAP: Record<string | number, { label: string; color: string }> = {
   SESSION_STATUS_ACTIVE: { label: "Active", color: "bg-success/20 text-success" },
   SESSION_STATUS_TALLYING: { label: "Tallying", color: "bg-warning/20 text-warning" },
-  SESSION_STATUS_FINALIZED: { label: "Finalized", color: "bg-success/20 text-success" },
+  SESSION_STATUS_FINALIZED: { label: "Finalized", color: "bg-blue-500/20 text-blue-400" },
   1: { label: "Active", color: "bg-success/20 text-success" },
   2: { label: "Tallying", color: "bg-warning/20 text-warning" },
-  3: { label: "Finalized", color: "bg-success/20 text-success" },
+  3: { label: "Finalized", color: "bg-blue-500/20 text-blue-400" },
 };
 
 
@@ -1819,7 +1820,8 @@ function VoteStatusView() {
         )}
 
         <div className="space-y-6">
-          {rounds.map((round, roundIdx) => {
+          {[...rounds].reverse().map((round, i) => {
+            const roundIdx = rounds.length - 1 - i;
             const roundId = round.vote_round_id ?? "";
             const summary = summaries[roundId];
             const statusKey = summary?.status ?? round.status ?? "";
@@ -1957,10 +1959,15 @@ function VoteStatusView() {
                             <span className="text-[10px] font-bold text-text-muted bg-surface-3 rounded px-1.5 py-0.5">
                               {String(prop.id ?? 0).padStart(2, "0")}
                             </span>
-                            <span className="text-xs font-semibold text-text-primary">
+                            <span className="text-xs font-semibold text-text-primary flex-1">
                               {prop.title || "Untitled"}
                             </span>
                           </div>
+                          {prop.description && (
+                            <p className="text-[11px] text-text-secondary mb-2 leading-relaxed">
+                              {prop.description}
+                            </p>
+                          )}
 
                           {/* Winner banner — only when finalized */}
                           {isFinalized && winnerIndices.size > 0 && (
@@ -2077,10 +2084,15 @@ function VoteStatusView() {
                           <span className="text-[10px] font-bold text-text-muted bg-surface-3 rounded px-1.5 py-0.5">
                             {String(p.id).padStart(2, "0")}
                           </span>
-                          <span className="text-xs text-text-primary">
+                          <span className="text-xs text-text-primary flex-1">
                             {p.title || "Untitled"}
                           </span>
                         </div>
+                        {p.description && (
+                          <p className="text-[11px] text-text-secondary mt-2 leading-relaxed">
+                            {p.description}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>

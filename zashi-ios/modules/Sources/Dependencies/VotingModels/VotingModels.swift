@@ -17,6 +17,7 @@ public struct VotingSession: Equatable, Sendable {
     public let ncRoot: Data
     public let nullifierIMTRoot: Data
     public let creator: String
+    public let description: String
     public let proposals: [Proposal]
     public let status: SessionStatus
 
@@ -33,6 +34,7 @@ public struct VotingSession: Equatable, Sendable {
         ncRoot: Data,
         nullifierIMTRoot: Data,
         creator: String,
+        description: String = "",
         proposals: [Proposal],
         status: SessionStatus
     ) {
@@ -48,6 +50,7 @@ public struct VotingSession: Equatable, Sendable {
         self.ncRoot = ncRoot
         self.nullifierIMTRoot = nullifierIMTRoot
         self.creator = creator
+        self.description = description
         self.proposals = proposals
         self.status = status
     }

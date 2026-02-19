@@ -1,12 +1,9 @@
 import {
   Plus,
-  Upload,
   LayoutList,
-  Clock,
   FileText,
-  Code2,
+  Upload,
   Shield,
-  Info,
   Settings,
   BarChart3,
   Trash2,
@@ -16,14 +13,12 @@ import type { VotingRound, RoundStatus } from "../types";
 
 const STATUS_COLORS: Record<RoundStatus, string> = {
   draft: "bg-surface-3 text-text-secondary",
-  in_progress: "bg-accent-dim/40 text-accent-glow",
   published: "bg-success/20 text-success",
   archived: "bg-surface-3 text-text-muted",
 };
 
 const STATUS_LABELS: Record<RoundStatus, string> = {
   draft: "Draft",
-  in_progress: "In Progress",
   published: "Published",
   archived: "Archived",
 };
@@ -48,15 +43,10 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: "All rounds", icon: <LayoutList size={15} />, filter: "all" },
-  { label: "In progress", icon: <Clock size={15} />, filter: "in_progress" },
+  { label: "Published", icon: <Upload size={15} />, filter: "published" },
   { label: "Drafts", icon: <FileText size={15} />, filter: "draft" },
 ];
 
-const RESULTS_ITEMS: NavItem[] = [
-  { label: "Validators", icon: <Users size={15} />, section: "validators" },
-  { label: "Vote status", icon: <BarChart3 size={15} />, section: "vote-status" },
-  { label: "Raw JSON", icon: <Code2 size={15} />, section: "json" },
-];
 
 interface SidebarProps {
   rounds: VotingRound[];
@@ -65,7 +55,6 @@ interface SidebarProps {
   onFilterChange: (filter: RoundStatus | "all") => void;
   onSelectRound: (id: string) => void;
   onCreateRound: () => void;
-  onImportJson: () => void;
   onNavigate: (section: string) => void;
   onDeleteRound: (id: string) => void;
   currentSection: string;
@@ -78,7 +67,6 @@ export function Sidebar({
   onFilterChange,
   onSelectRound,
   onCreateRound,
-  onImportJson,
   onNavigate,
   onDeleteRound,
   currentSection,
@@ -112,28 +100,35 @@ export function Sidebar({
           <Plus size={14} />
           New voting round
         </button>
-        <button
-          onClick={onImportJson}
-          className="flex items-center gap-2 px-3 py-2 bg-surface-2 hover:bg-surface-3 text-text-secondary rounded-lg text-xs transition-colors border border-border-subtle cursor-pointer"
-        >
-          <Upload size={14} />
-          Import JSON
-        </button>
       </div>
 
       {/* Navigation */}
       <nav className="px-3 flex-1 overflow-y-auto">
-        {/* About */}
+        <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-3 mb-1">
+          Monitor
+        </p>
         <button
-          onClick={() => onNavigate("about")}
-          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer mt-1 ${
-            currentSection === "about"
+          onClick={() => onNavigate("vote-status")}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer ${
+            currentSection === "vote-status"
               ? "bg-surface-3 text-text-primary"
               : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
           }`}
         >
-          <Info size={15} />
-          About
+          <BarChart3 size={15} />
+          Vote status
+        </button>
+
+        <button
+          onClick={() => onNavigate("validators")}
+          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer ${
+            currentSection === "validators"
+              ? "bg-surface-3 text-text-primary"
+              : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+          }`}
+        >
+          <Users size={15} />
+          Validators
         </button>
 
         <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-3 mb-1">
@@ -157,26 +152,12 @@ export function Sidebar({
           </button>
         ))}
 
-        <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-4 mb-1">
-          Results & exports
-        </p>
-        {RESULTS_ITEMS.map((item) => (
-          <button
-            key={item.label}
-            onClick={() => onNavigate(item.section!)}
-            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs transition-colors cursor-pointer ${
-              currentSection === item.section
-                ? "bg-surface-3 text-text-primary"
-                : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
-            }`}
-          >
-            {item.icon}
-            {item.label}
-          </button>
-        ))}
 
-        {/* Recent rounds */}
-        <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-4 mb-1">
+      </nav>
+
+      {/* Recent rounds — bottom-aligned */}
+      <div className="px-3 border-t border-border-subtle">
+        <p className="text-[10px] uppercase tracking-wider text-text-muted px-2 mt-3 mb-1">
           Recent rounds
         </p>
         {recentRounds.length === 0 ? (
@@ -206,7 +187,7 @@ export function Sidebar({
                       {round.name}
                     </span>
                     <span
-                      className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_COLORS[round.status]}`}
+                      className={`shrink-0 text-[9px] w-[62px] text-center py-1 leading-none rounded-full ${STATUS_COLORS[round.status]}`}
                     >
                       {STATUS_LABELS[round.status]}
                     </span>
@@ -228,7 +209,7 @@ export function Sidebar({
                       onDeleteRound(round.id);
                     }}
                     title="Delete round"
-                    className="opacity-0 group-hover:opacity-100 shrink-0 flex items-center justify-center px-2 text-text-muted hover:text-danger transition-opacity cursor-pointer"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 flex items-center justify-center p-1.5 text-text-muted hover:text-danger transition-opacity cursor-pointer"
                   >
                     <Trash2 size={12} />
                   </button>
@@ -237,7 +218,7 @@ export function Sidebar({
             ))}
           </div>
         )}
-      </nav>
+      </div>
 
       {/* Settings at bottom */}
       <div className="p-3 border-t border-border-subtle">
