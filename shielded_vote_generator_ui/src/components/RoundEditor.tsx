@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Settings2, X, Clock, RefreshCw } from "lucide-react";
 import type { VotingRound, RoundSettings } from "../types";
 import {
   useChainInfo,
   estimateTimestamp,
 } from "../store/rpc";
+import { getHelperStatus } from "../api/chain";
 
 interface RoundEditorProps {
   round: VotingRound;
@@ -105,10 +106,27 @@ function formatTimestamp(d: Date): string {
 
 export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEditorProps) {
   const [showCustom, setShowCustom] = useState(false);
+  const [imtLoading, setImtLoading] = useState(false);
+  const [imtError, setImtError] = useState<string | null>(null);
   const endTime = round.settings.endTime;
   const hasEndTime = endTime.length > 0;
 
   const chain = useChainInfo();
+
+  const handleUseImtHeight = useCallback(async () => {
+    setImtLoading(true);
+    setImtError(null);
+    try {
+      const status = await getHelperStatus();
+      const height = status.tree?.anchor_height;
+      if (height == null) throw new Error("IMT height unavailable");
+      onUpdateSettings({ snapshotHeight: String(height) });
+    } catch (err) {
+      setImtError(err instanceof Error ? err.message : "Failed to fetch");
+    } finally {
+      setImtLoading(false);
+    }
+  }, [onUpdateSettings]);
 
   const snapshotHeight = parseInt(round.settings.snapshotHeight, 10);
   const isValidHeight = !isNaN(snapshotHeight) && snapshotHeight > 0;
@@ -149,18 +167,29 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
             <label className="text-[11px] text-text-secondary">
               Snapshot height
             </label>
-            {chain.latestHeight && (
-              <span className="text-[10px] text-text-muted flex items-center gap-1">
-                tip: {chain.latestHeight.toLocaleString()}
-                <button
-                  onClick={chain.refresh}
-                  className="p-0.5 hover:text-text-secondary cursor-pointer"
-                  title="Refresh"
-                >
-                  <RefreshCw size={10} className={chain.loading ? "animate-spin" : ""} />
-                </button>
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleUseImtHeight}
+                disabled={imtLoading}
+                className="text-[10px] text-accent hover:text-accent-glow disabled:opacity-50 cursor-pointer flex items-center gap-0.5"
+                title="Set to current IMT anchor height from the helper service"
+              >
+                <RefreshCw size={10} className={imtLoading ? "animate-spin" : ""} />
+                Use IMT height
+              </button>
+              {chain.latestHeight && (
+                <span className="text-[10px] text-text-muted flex items-center gap-1">
+                  tip: {chain.latestHeight.toLocaleString()}
+                  <button
+                    onClick={chain.refresh}
+                    className="p-0.5 hover:text-text-secondary cursor-pointer"
+                    title="Refresh"
+                  >
+                    <RefreshCw size={10} className={chain.loading ? "animate-spin" : ""} />
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
           <input
             type="text"
@@ -193,6 +222,13 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings }: RoundEdit
           {chain.error && (
             <p className="text-[10px] text-danger mt-1">
               RPC error: {chain.error}
+            </p>
+          )}
+
+          {/* IMT error */}
+          {imtError && (
+            <p className="text-[10px] text-danger mt-1">
+              IMT error: {imtError}
             </p>
           )}
 
