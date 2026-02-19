@@ -7,7 +7,8 @@ INGEST_DIR  = nullifier-ingest
 	fixtures-ts circuits circuits-test fixtures \
 	test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi \
 	ingest ingest-status ingest-test ingest-proof ingest-clean ingest-serve \
-	ingest-test-integration
+	ingest-test-integration \
+	up
 
 install:
 	$(MAKE) -C $(SDK_DIR) install
@@ -83,10 +84,10 @@ test-all-ffi:
 
 # ── Nullifier Ingestion ──────────────────────────────────────────────
 
-ingest: ## Ingest Orchard nullifiers from chain into SQLite
+ingest: ## Ingest Orchard nullifiers from chain into flat binary files (incremental)
 	$(MAKE) -C $(INGEST_DIR) ingest
 
-ingest-status: ## Show nullifier count, last synced height, DB size
+ingest-status: ## Show nullifier count, last synced height, file sizes
 	$(MAKE) -C $(INGEST_DIR) status
 
 ingest-test: ## Run nullifier-tree unit tests
@@ -103,3 +104,10 @@ ingest-clean: ## Remove nullifier build artifacts and database
 
 ingest-test-integration: ## Run IMT ↔ delegation-circuit ZK integration test
 	$(MAKE) -C $(INGEST_DIR) test-integration
+
+# ── Full Stack ───────────────────────────────────────────────────────
+
+up: ## Init SDK, ingest nullifiers, then run ingest-serve and start in parallel
+	$(MAKE) init
+	$(MAKE) ingest
+	$(MAKE) ingest-serve & $(MAKE) start
