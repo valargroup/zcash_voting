@@ -16,10 +16,10 @@ The first source that succeeds wins. This means a TestFlight build works out of 
 {
   "version": 1,
   "vote_servers": [
-    { "url": "http://46.101.255.48:1318", "label": "Primary" }
+    { "url": "https://46-101-255-48.sslip.io", "label": "Primary" }
   ],
   "nullifier_providers": [
-    { "url": "http://46.101.255.48:3000", "label": "Primary" }
+    { "url": "https://46-101-255-48.sslip.io/nullifier", "label": "Primary" }
   ]
 }
 ```

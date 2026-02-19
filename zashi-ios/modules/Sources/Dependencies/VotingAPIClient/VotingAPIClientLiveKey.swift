@@ -10,11 +10,11 @@ actor ZallyAPIConfigStore {
     static let shared = ZallyAPIConfigStore()
 
     /// Primary vote server URL (serves both chain API and helper endpoints).
-    var baseURL = "http://46.101.255.48:1318"
+    var baseURL = "https://46-101-255-48.sslip.io"
     /// All vote server URLs from CDN config (used for share distribution).
-    var voteServerURLs: [String] = ["http://46.101.255.48:1318"]
+    var voteServerURLs: [String] = ["https://46-101-255-48.sslip.io"]
     /// Primary nullifier IMT provider URL.
-    var nullifierProviderURL = "http://46.101.255.48:3000"
+    var nullifierProviderURL = "https://46-101-255-48.sslip.io/nullifier"
 
     func configure(from config: VotingServiceConfig) {
         if let first = config.voteServers.first {

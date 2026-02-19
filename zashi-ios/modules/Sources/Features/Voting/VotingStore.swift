@@ -802,7 +802,7 @@ public struct Voting {
                 let isKeystoneUser = state.isKeystoneUser
                 let roundName = state.votingRound.title
                 // IMT server URL from resolved service config
-                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "http://46.101.255.48:3000"
+                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "https://46-101-255-48.sslip.io/nullifier"
                 return .merge(
                     // Subscribe to DB state stream (follows SDKSynchronizer pattern)
                     .publisher {
@@ -941,7 +941,7 @@ public struct Voting {
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 let accountIndex: UInt32 = 0
                 // IMT server URL from resolved service config
-                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "http://46.101.255.48:3000"
+                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "https://46-101-255-48.sslip.io/nullifier"
                 return .run { [votingCrypto, votingAPI, mnemonic, walletStorage] send in
                     let senderPhrase = try walletStorage.exportWallet().seedPhrase.value()
                     let senderSeed = try mnemonic.toSeed(senderPhrase)
@@ -1039,7 +1039,7 @@ public struct Voting {
                 let network = zcashSDKEnvironment.network
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 let nextId = nextUnvotedId(after: proposalId, in: state)
-                let chainNodeUrl = state.serviceConfig?.voteServers.first?.url ?? "http://46.101.255.48:1318"
+                let chainNodeUrl = state.serviceConfig?.voteServers.first?.url ?? "https://46-101-255-48.sslip.io"
 
                 return .run { [votingAPI, votingCrypto, mnemonic, walletStorage] send in
                     // Derive hotkey seed (same seed used during delegation)
