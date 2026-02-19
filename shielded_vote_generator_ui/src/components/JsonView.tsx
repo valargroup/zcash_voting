@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Copy, Download, CheckCircle2, AlertTriangle, Check } from "lucide-react";
+import { Copy, Download, CheckCircle2, AlertTriangle, Check, ArrowLeft } from "lucide-react";
 import type { VotingRound } from "../types";
 
 interface JsonViewProps {
   round: VotingRound;
+  onBack?: () => void;
 }
 
 function generateExportJson(round: VotingRound) {
@@ -43,7 +44,7 @@ function validateRound(round: VotingRound): string[] {
   return issues;
 }
 
-export function JsonView({ round }: JsonViewProps) {
+export function JsonView({ round, onBack }: JsonViewProps) {
   const [copied, setCopied] = useState(false);
   const [validated, setValidated] = useState<string[] | null>(null);
 
@@ -74,6 +75,15 @@ export function JsonView({ round }: JsonViewProps) {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="px-6 py-4 border-b border-border">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="flex items-center gap-1 text-[11px] text-text-muted hover:text-accent-glow transition-colors cursor-pointer mb-2"
+          >
+            <ArrowLeft size={12} />
+            Back to builder
+          </button>
+        )}
         <h2 className="text-sm font-semibold text-text-primary">Raw JSON</h2>
         <p className="text-[11px] text-text-muted mt-0.5">
           This is the canonical export format for this round.

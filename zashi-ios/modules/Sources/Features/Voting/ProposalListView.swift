@@ -102,19 +102,18 @@ struct ProposalListView: View {
 
     @ViewBuilder
     private func roundInfoCard() -> some View {
-        HStack(spacing: 0) {
+        VStack(spacing: 10) {
             Text(store.votingRound.title)
                 .zFont(.semiBold, size: 15, style: Design.Text.primary)
                 .lineLimit(1)
-                .layoutPriority(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 12)
-
-            HStack(spacing: 16) {
+            HStack(spacing: 0) {
                 detailPill(
                     label: "Snapshot",
                     value: store.votingRound.snapshotDate.formatted(date: .abbreviated, time: .omitted)
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .onTapGesture {
                     showSnapshotHeight = true
                 }
@@ -132,11 +131,13 @@ struct ProposalListView: View {
                     label: "Ends",
                     value: store.votingRound.votingEnd.formatted(date: .abbreviated, time: .omitted)
                 )
+                .frame(maxWidth: .infinity)
 
                 detailPill(
                     label: "Eligible",
                     value: "\(store.votingWeightZECString) ZEC"
                 )
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(.horizontal, 16)

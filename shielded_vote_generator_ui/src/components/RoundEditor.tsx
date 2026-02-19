@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { Settings2, X, Clock, RefreshCw, AlertTriangle, Lock } from "lucide-react";
+import { X, Clock, RefreshCw, AlertTriangle } from "lucide-react";
 import type { VotingRound, RoundSettings } from "../types";
 import {
   useChainInfo,
@@ -169,20 +169,7 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, isReadonly 
       : null;
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
-        <Settings2 size={14} className="text-text-muted" />
-        <h3 className="text-xs font-semibold text-text-primary">
-          Round Settings
-        </h3>
-        {isReadonly && (
-          <span className="ml-auto flex items-center gap-1 text-[10px] text-text-muted">
-            <Lock size={10} /> Read-only
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div className="space-y-4">
         {/* Round name */}
         <div>
           <label className="block text-[11px] text-text-secondary mb-1">
@@ -413,7 +400,6 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, isReadonly 
             className={`w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 resize-none ${isReadonly ? "opacity-60 cursor-default" : ""}`}
           />
         </div>
-      </div>
     </div>
   );
 }

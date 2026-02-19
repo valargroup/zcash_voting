@@ -71,7 +71,9 @@ export function Sidebar({
   onDeleteRound,
   currentSection,
 }: SidebarProps) {
-  const recentRounds = rounds.slice(0, 5);
+  const recentRounds = [...rounds]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 5);
 
   return (
     <aside className="w-[280px] min-w-[280px] h-screen bg-surface-1 border-r border-border flex flex-col">

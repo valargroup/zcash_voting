@@ -47,19 +47,25 @@ export function TopBar({
     }
   };
 
-  const allValid = round.proposals.length > 0 && round.proposals.every(
+  const hasEndTime = round.settings.endTime.length > 0;
+  const hasSnapshot = parseInt(round.settings.snapshotHeight, 10) > 0;
+  const hasProposals = round.proposals.length > 0;
+  const proposalsValid = round.proposals.every(
     (p) => p.title.trim().length > 0 && p.options.length >= 2
   );
+  const canPublish = hasEndTime && hasSnapshot && hasProposals && proposalsValid && round.status !== "published";
 
   const publishDisabledReason = round.status === "published"
     ? "Already published"
-    : round.proposals.length === 0
-      ? "Add at least one proposal"
-      : round.proposals.some((p) => !p.title.trim())
-        ? "All proposals need a title"
-        : round.proposals.some((p) => p.options.length < 2)
-          ? "All proposals need at least 2 options"
-          : "";
+    : !hasEndTime
+      ? "Set a voting end time"
+      : !hasSnapshot
+        ? "Set a snapshot height"
+        : !hasProposals
+          ? "Add at least one proposal"
+          : !proposalsValid
+            ? "Fix incomplete proposals"
+            : "";
 
   return (
     <div className="flex items-center justify-between px-4 py-2.5 bg-surface-1 border-b border-border min-h-[48px]">
@@ -120,9 +126,13 @@ export function TopBar({
         </button>
         <button
           onClick={onPublish}
-          disabled={!allValid || round.status === "published"}
+          disabled={!canPublish}
           title={publishDisabledReason}
-          className="px-3 py-1.5 text-[11px] font-semibold rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-accent/90 hover:bg-accent text-surface-0"
+          className={`px-3 py-1.5 text-[11px] font-semibold rounded-md transition-colors ${
+            canPublish
+              ? "bg-accent/90 hover:bg-accent text-surface-0 cursor-pointer"
+              : "bg-surface-3 text-text-muted cursor-not-allowed"
+          }`}
         >
           Publish round
         </button>

@@ -1,16 +1,15 @@
 import { useState } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, Copy, Lock } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { Proposal, ProposalType } from "../types";
 
 interface ProposalEditorProps {
   proposal: Proposal;
   onUpdate: (patch: Partial<Proposal>) => void;
-  onDelete: () => void;
   readonly?: boolean;
 }
 
-export function ProposalEditor({ proposal, onUpdate, onDelete, readonly = false }: ProposalEditorProps) {
+export function ProposalEditor({ proposal, onUpdate, readonly = false }: ProposalEditorProps) {
   const [descTab, setDescTab] = useState<"write" | "preview">("write");
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -53,19 +52,7 @@ export function ProposalEditor({ proposal, onUpdate, onDelete, readonly = false 
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
-        <h3 className="text-xs font-semibold text-text-primary">
-          {readonly ? "View Proposal" : "Edit Proposal"}
-        </h3>
-        {readonly && (
-          <span className="ml-auto flex items-center gap-1 text-[10px] text-text-muted">
-            <Lock size={10} /> Read-only
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div className="space-y-4">
         {/* Title */}
         <div>
           <label className="block text-[11px] text-text-secondary mb-1">
@@ -259,23 +246,6 @@ export function ProposalEditor({ proposal, onUpdate, onDelete, readonly = false 
             </div>
           )}
         </div>
-      </div>
-
-      {/* Footer */}
-      {!readonly && (
-        <div className="px-4 py-3 border-t border-border-subtle flex items-center justify-between">
-          <button
-            onClick={onDelete}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-danger hover:bg-danger/10 rounded-md transition-colors cursor-pointer"
-          >
-            <Trash2 size={12} />
-            Delete Proposal
-          </button>
-          <button className="px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-md text-[11px] font-semibold transition-colors cursor-pointer">
-            Save
-          </button>
-        </div>
-      )}
     </div>
   );
 }

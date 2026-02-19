@@ -1,13 +1,14 @@
+// Tailwind safelist for dynamically-constructed binary-vote classes:
+// bg-success bg-success/10 bg-success/60 bg-danger bg-danger/10 bg-danger/60 text-success text-danger
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
-import { ProposalList } from "./components/ProposalList";
 import { ProposalEditor } from "./components/ProposalEditor";
 import { JsonView } from "./components/JsonView";
 import { RoundEditor } from "./components/RoundEditor";
 import { RoundsList } from "./components/RoundsList";
 import { useStore } from "./store/useStore";
-import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, X, Loader2, Server, Database, Eye, EyeOff, Wallet, Unplug, BarChart3, Copy, Check, Users, ExternalLink, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Shield, Plus, FileText, Settings, Settings2, RefreshCw, CheckCircle2, AlertCircle, AlertTriangle, X, Loader2, Server, Database, Eye, EyeOff, Wallet, Unplug, BarChart3, Copy, Check, Users, ExternalLink, ShieldAlert, ShieldCheck, GripVertical, MoreHorizontal, Trash2, Lock, ChevronDown } from "lucide-react";
 import type { Proposal, RoundSettings, RoundStatus, VotingRound } from "./types";
 import {
   LIGHTWALLETD_ENDPOINTS,
@@ -33,6 +34,7 @@ function App() {
   const [publishStatus, setPublishStatus] = useState<"idle" | "publishing" | "ok" | "error">("idle");
   const [publishResult, setPublishResult] = useState<string>("");
   const [publishError, setPublishError] = useState("");
+  const [expectedRoundCount, setExpectedRoundCount] = useState<number | null>(null);
 
   const handleSelectRound = useCallback(
     (id: string) => {
@@ -124,9 +126,13 @@ function App() {
       // If the nullifier service is unreachable, proceed with a warning — don't hard-block.
     }
 
-    const voteEndTime = round.settings.endTime
-      ? Math.floor(new Date(round.settings.endTime).getTime() / 1000)
-      : Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
+    if (!round.settings.endTime) {
+      setPublishStatus("error");
+      setPublishError("Voting end time must be set in Round Settings.");
+      return;
+    }
+
+    const voteEndTime = Math.floor(new Date(round.settings.endTime).getTime() / 1000);
 
     const proposals = round.proposals.map((p, i) => {
       const options = p.options.map((opt, j) => ({ index: j, label: opt.label }));
@@ -154,6 +160,13 @@ function App() {
         setPublishResult(result.tx_hash);
         setPublishStatus("ok");
         store.setRoundStatus(publishModal, "published");
+        // Tell VoteStatusView to poll until a new round appears.
+        try {
+          const resp = await chainApi.listRounds();
+          setExpectedRoundCount((resp.rounds ?? []).length + 1);
+        } catch {
+          setExpectedRoundCount(null);
+        }
       }
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : String(err));
@@ -236,54 +249,34 @@ function App() {
               onNavigate={handleNavigate}
               isReadonly={store.activeRound.status === "published"}
             />
-            <div className="flex flex-1 overflow-hidden">
-              <div className="w-[380px] min-w-[320px] border-r border-border bg-surface-0 overflow-hidden">
-                <ProposalList
-                  proposals={store.activeRound.proposals}
-                  activeProposalId={store.activeProposalId}
-                  onSelectProposal={(id) => store.setActiveProposalId(id)}
-                  onAddProposal={() =>
-                    store.addProposal(store.activeRound!.id)
-                  }
-                  onDuplicateProposal={(id) =>
-                    store.duplicateProposal(store.activeRound!.id, id)
-                  }
-                  onDeleteProposal={(id) =>
-                    store.deleteProposal(store.activeRound!.id, id)
-                  }
-                  onReorder={(from, to) =>
-                    store.reorderProposals(store.activeRound!.id, from, to)
-                  }
-                  isReadonly={store.activeRound.status === "published"}
-                />
-              </div>
-              <RightPanel
-                round={store.activeRound}
-                activeProposal={store.activeProposal}
-                onUpdateRoundName={(name) =>
-                  store.updateRound(store.activeRound!.id, { name })
-                }
-                onUpdateRoundSettings={(patch) =>
-                  store.updateRound(store.activeRound!.id, {
-                    settings: { ...store.activeRound!.settings, ...patch },
-                  })
-                }
-                onUpdateProposal={(patch) =>
-                  store.updateProposal(
-                    store.activeRound!.id,
-                    store.activeProposal!.id,
-                    patch
-                  )
-                }
-                onDeleteProposal={() =>
-                  store.deleteProposal(
-                    store.activeRound!.id,
-                    store.activeProposal!.id
-                  )
-                }
-                readonly={store.activeRound.status === "published"}
-              />
-            </div>
+            <BuilderView
+              round={store.activeRound}
+              expandedProposalId={store.activeProposalId}
+              onExpandProposal={(id) => store.setActiveProposalId(id)}
+              onUpdateRoundName={(name) =>
+                store.updateRound(store.activeRound!.id, { name })
+              }
+              onUpdateRoundSettings={(patch) =>
+                store.updateRound(store.activeRound!.id, {
+                  settings: { ...store.activeRound!.settings, ...patch },
+                })
+              }
+              onUpdateProposal={(proposalId, patch) =>
+                store.updateProposal(store.activeRound!.id, proposalId, patch)
+              }
+              onAddProposal={() => store.addProposal(store.activeRound!.id)}
+              onDuplicateProposal={(id) =>
+                store.duplicateProposal(store.activeRound!.id, id)
+              }
+              onDeleteProposal={(id) =>
+                store.deleteProposal(store.activeRound!.id, id)
+              }
+              onReorder={(from, to) =>
+                store.reorderProposals(store.activeRound!.id, from, to)
+              }
+              onPublish={() => handlePublish(store.activeRound!.id)}
+              isReadonly={store.activeRound.status === "published"}
+            />
           </>
         )}
 
@@ -306,7 +299,7 @@ function App() {
 
         {/* JSON view */}
         {section === "json" && store.activeRound && (
-          <JsonView round={store.activeRound} />
+          <JsonView round={store.activeRound} onBack={() => setSection("builder")} />
         )}
         {section === "json" && !store.activeRound && (
           <div className="flex items-center justify-center h-full">
@@ -334,7 +327,7 @@ function App() {
         {section === "validators" && <ValidatorsView />}
 
         {/* Vote status */}
-        {section === "vote-status" && <VoteStatusView />}
+        {section === "vote-status" && <VoteStatusView expectRoundCount={expectedRoundCount} />}
 
         {/* Settings */}
         {section === "settings" && <SettingsPage wallet={wallet} />}
@@ -348,7 +341,11 @@ function App() {
             result={publishResult}
             error={publishError}
             onConfirm={handlePublishConfirm}
-            onClose={() => setPublishModal(null)}
+            onClose={() => {
+              const wasSuccess = publishStatus === "ok";
+              setPublishModal(null);
+              if (wasSuccess) setSection("vote-status");
+            }}
           />
         )}
       </main>
@@ -356,78 +353,269 @@ function App() {
   );
 }
 
-/* ── Right panel (round settings / proposal editor) ──────────── */
+/* ── Unified builder view (single scrollable column) ─────────── */
 
-function RightPanel({
+function isProposalValid(p: Proposal): boolean {
+  return p.title.trim().length > 0 && p.options.length >= 2;
+}
+
+function BuilderView({
   round,
-  activeProposal,
+  expandedProposalId,
+  onExpandProposal,
   onUpdateRoundName,
   onUpdateRoundSettings,
   onUpdateProposal,
+  onAddProposal,
+  onDuplicateProposal,
   onDeleteProposal,
-  readonly = false,
+  onReorder,
+  onPublish,
+  isReadonly = false,
 }: {
   round: VotingRound;
-  activeProposal: Proposal | null;
+  expandedProposalId: string | null;
+  onExpandProposal: (id: string | null) => void;
   onUpdateRoundName: (name: string) => void;
   onUpdateRoundSettings: (patch: Partial<RoundSettings>) => void;
-  onUpdateProposal: (patch: Partial<Proposal>) => void;
-  onDeleteProposal: () => void;
-  readonly?: boolean;
+  onUpdateProposal: (proposalId: string, patch: Partial<Proposal>) => void;
+  onAddProposal: () => void;
+  onDuplicateProposal: (id: string) => void;
+  onDeleteProposal: (id: string) => void;
+  onReorder: (from: number, to: number) => void;
+  onPublish: () => void;
+  isReadonly?: boolean;
 }) {
-  const [tab, setTab] = useState<"proposal" | "round">(
-    activeProposal ? "proposal" : "round"
-  );
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const dragItem = useRef<number | null>(null);
+  const dragOver = useRef<number | null>(null);
 
-  // If a proposal gets selected, switch to proposal tab
-  const effectiveTab = activeProposal ? tab : "round";
+  const handleDragStart = (index: number) => {
+    dragItem.current = index;
+  };
+
+  const handleDragEnter = (index: number) => {
+    dragOver.current = index;
+  };
+
+  const handleDragEnd = () => {
+    if (
+      dragItem.current !== null &&
+      dragOver.current !== null &&
+      dragItem.current !== dragOver.current
+    ) {
+      onReorder(dragItem.current, dragOver.current);
+    }
+    dragItem.current = null;
+    dragOver.current = null;
+  };
 
   return (
-    <div className="flex-1 bg-surface-0 overflow-hidden flex flex-col">
-      {/* Tab bar */}
-      <div className="flex border-b border-border-subtle bg-surface-0 shrink-0">
-        <button
-          onClick={() => setTab("round")}
-          className={`flex items-center gap-1.5 px-4 py-2 text-[11px] transition-colors cursor-pointer border-b-2 ${
-            effectiveTab === "round"
-              ? "border-accent text-accent-glow"
-              : "border-transparent text-text-muted hover:text-text-secondary"
-          }`}
-        >
-          <Settings2 size={12} />
-          Round
-        </button>
-        <button
-          onClick={() => setTab("proposal")}
-          disabled={!activeProposal}
-          className={`flex items-center gap-1.5 px-4 py-2 text-[11px] transition-colors cursor-pointer border-b-2 disabled:opacity-30 disabled:cursor-not-allowed ${
-            effectiveTab === "proposal"
-              ? "border-accent text-accent-glow"
-              : "border-transparent text-text-muted hover:text-text-secondary"
-          }`}
-        >
-          Proposal
-        </button>
-      </div>
-
-      {/* Panel content */}
-      <div className="flex-1 overflow-hidden">
-        {effectiveTab === "round" && (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-[720px] mx-auto px-6 py-6 space-y-6">
+        {/* Round Settings */}
+        <section className="bg-surface-1 border border-border-subtle rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Settings2 size={14} className="text-text-muted" />
+            <h3 className="text-xs font-semibold text-text-primary">
+              Round Settings
+            </h3>
+            {isReadonly && (
+              <span className="ml-auto flex items-center gap-1 text-[10px] text-text-muted">
+                <Lock size={10} /> Read-only
+              </span>
+            )}
+          </div>
           <RoundEditor
             round={round}
             onUpdateName={onUpdateRoundName}
             onUpdateSettings={onUpdateRoundSettings}
-            isReadonly={readonly}
+            isReadonly={isReadonly}
           />
+        </section>
+
+        {/* Proposals header */}
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-text-primary">
+            Proposals ({round.proposals.length})
+          </h3>
+        </div>
+
+        {/* Proposal cards */}
+        {round.proposals.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center px-6 py-12 bg-surface-1 border border-border-subtle rounded-xl">
+            <div className="w-12 h-12 rounded-full bg-surface-3 flex items-center justify-center mb-3">
+              <Plus size={20} className="text-text-muted" />
+            </div>
+            <p className="text-xs text-text-muted mb-3">
+              {isReadonly ? "No proposals" : "Add your first proposal"}
+            </p>
+            {!isReadonly && (
+              <button
+                onClick={onAddProposal}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                <Plus size={12} />
+                Add Support/Oppose proposal
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {round.proposals.map((proposal, index) => {
+              const isExpanded = expandedProposalId === proposal.id;
+              const valid = isProposalValid(proposal);
+              return (
+                <div
+                  key={proposal.id}
+                  draggable={!isReadonly && !isExpanded}
+                  onDragStart={
+                    isReadonly ? undefined : () => handleDragStart(index)
+                  }
+                  onDragEnter={
+                    isReadonly ? undefined : () => handleDragEnter(index)
+                  }
+                  onDragEnd={isReadonly ? undefined : handleDragEnd}
+                  onDragOver={
+                    isReadonly ? undefined : (e) => e.preventDefault()
+                  }
+                  className="bg-surface-1 border border-border-subtle rounded-xl overflow-hidden"
+                >
+                  {/* Card header (always visible) */}
+                  <div
+                    onClick={() =>
+                      onExpandProposal(isExpanded ? null : proposal.id)
+                    }
+                    className="group flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-surface-2/50 transition-colors"
+                  >
+                    {!isReadonly && (
+                      <GripVertical
+                        size={14}
+                        className="text-text-muted opacity-0 group-hover:opacity-100 transition-opacity cursor-grab shrink-0"
+                      />
+                    )}
+                    <span className="text-[10px] font-bold text-text-muted bg-surface-2 rounded px-1.5 py-0.5 shrink-0">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="text-xs text-text-primary truncate flex-1 min-w-0">
+                      {proposal.title || "Untitled proposal"}
+                    </span>
+                    <span className="text-[9px] text-text-muted shrink-0">
+                      {proposal.type === "binary" ? "Binary" : "Multi-Choice"}
+                    </span>
+                    {valid ? (
+                      <CheckCircle2 size={13} className="text-success shrink-0" />
+                    ) : (
+                      <AlertTriangle
+                        size={13}
+                        className="text-warning shrink-0"
+                      />
+                    )}
+                    <ChevronDown
+                      size={14}
+                      className={`text-text-muted shrink-0 transition-transform ${
+                        isExpanded ? "" : "-rotate-90"
+                      }`}
+                    />
+                    {!isReadonly && (
+                      <div className="relative shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMenuOpen(
+                              menuOpen === proposal.id ? null : proposal.id
+                            );
+                          }}
+                          className="p-0.5 rounded hover:bg-surface-3 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                        >
+                          <MoreHorizontal size={14} />
+                        </button>
+                        {menuOpen === proposal.id && (
+                          <div className="absolute right-0 top-6 z-10 bg-surface-2 border border-border rounded-lg shadow-lg py-1 min-w-[130px]">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDuplicateProposal(proposal.id);
+                                setMenuOpen(null);
+                              }}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-text-secondary hover:bg-surface-3 hover:text-text-primary cursor-pointer"
+                            >
+                              <Copy size={12} /> Duplicate
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteProposal(proposal.id);
+                                setMenuOpen(null);
+                              }}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-danger hover:bg-surface-3 cursor-pointer"
+                            >
+                              <Trash2 size={12} /> Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Expanded: full proposal editor inline */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-1 border-t border-border-subtle">
+                      <ProposalEditor
+                        key={proposal.id}
+                        proposal={proposal}
+                        onUpdate={(patch) =>
+                          onUpdateProposal(proposal.id, patch)
+                        }
+                        readonly={isReadonly}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
-        {effectiveTab === "proposal" && activeProposal && (
-          <ProposalEditor
-            key={activeProposal.id}
-            proposal={activeProposal}
-            onUpdate={onUpdateProposal}
-            onDelete={onDeleteProposal}
-            readonly={readonly}
-          />
+
+        {/* Bottom actions */}
+        {round.proposals.length > 0 && (
+          <div className="flex items-center gap-2">
+            {!isReadonly && (
+              <button
+                onClick={onAddProposal}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 border border-dashed border-border-subtle hover:border-accent/40 rounded-xl text-[11px] text-text-muted hover:text-accent-glow transition-colors cursor-pointer"
+              >
+                <Plus size={12} />
+                Add Proposal
+              </button>
+            )}
+            {(() => {
+              const hasEndTime = round.settings.endTime.length > 0;
+              const hasSnapshot = parseInt(round.settings.snapshotHeight, 10) > 0;
+              const hasProposals = round.proposals.length > 0;
+              const allValid = round.proposals.every(isProposalValid);
+              const canPublish = hasEndTime && hasSnapshot && hasProposals && allValid;
+              return (
+                <button
+                  onClick={onPublish}
+                  disabled={!canPublish}
+                  title={!canPublish ? [
+                    !hasEndTime && "Set a voting end time",
+                    !hasSnapshot && "Set a snapshot height",
+                    !hasProposals && "Add at least one proposal",
+                    hasProposals && !allValid && "Fix incomplete proposals",
+                  ].filter(Boolean).join(", ") : undefined}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[11px] font-semibold transition-colors ${
+                    canPublish
+                      ? "bg-accent/90 hover:bg-accent text-surface-0 cursor-pointer"
+                      : "bg-surface-3 text-text-muted cursor-not-allowed"
+                  }`}
+                >
+                  Publish Round
+                </button>
+              );
+            })()}
+          </div>
         )}
       </div>
     </div>
@@ -905,7 +1093,7 @@ function SettingsPage({ wallet }: { wallet: UseWallet }) {
                 <div className="mt-2 space-y-2">
                   <div className="relative">
                     <input
-                      type={devKeyVisible ? "text" : "password"}
+                      type="text"
                       value={devKey}
                       onChange={(e) => setDevKey(e.target.value.trim())}
                       placeholder="64-character hex private key"
@@ -913,6 +1101,7 @@ function SettingsPage({ wallet }: { wallet: UseWallet }) {
                       autoComplete="off"
                       data-1p-ignore
                       data-lpignore="true"
+                      style={devKeyVisible ? undefined : { WebkitTextSecurity: "disc" } as React.CSSProperties}
                       className="w-full px-3 py-2 pr-9 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
                     />
                     <button
@@ -1328,12 +1517,15 @@ function PublishModal({
                 <div className="mt-2 space-y-2">
                   <div className="relative">
                     <input
-                      type={devKeyVisible ? "text" : "password"}
+                      type="text"
                       value={devKey}
                       onChange={(e) => setDevKey(e.target.value.trim())}
                       placeholder="64-character hex private key"
                       spellCheck={false}
                       autoComplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
+                      style={devKeyVisible ? undefined : { WebkitTextSecurity: "disc" } as React.CSSProperties}
                       className="w-full px-3 py-2 pr-9 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
                     />
                     <button
@@ -1725,21 +1917,26 @@ function CopyableField({ label, value, mono = true }: { label: string; value: st
 
 /* ── Vote status view ────────────────────────────────────────── */
 
-function VoteStatusView() {
+function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null }) {
   const [rounds, setRounds] = useState<chainApi.ChainRound[]>([]);
   const [summaries, setSummaries] = useState<Record<string, chainApi.VoteSummaryResponse>>({});
   const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const zcashChain = useChainInfo();
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     setLoading(true);
     setError("");
     setSummaryErrors({});
     try {
       const resp = await chainApi.listRounds();
-      const allRounds = resp.rounds ?? [];
+      const allRounds = (resp.rounds ?? []).sort((a, b) => {
+        const ta = Number(a.vote_end_time ?? 0);
+        const tb = Number(b.vote_end_time ?? 0);
+        return ta - tb;
+      });
       setRounds(allRounds);
 
       // Fetch vote summary for each round in parallel.
@@ -1767,16 +1964,42 @@ function VoteStatusView() {
       }
       setSummaries(map);
       setSummaryErrors(errs);
+      return allRounds.length;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return -1;
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchAll();
   }, []);
+
+  // Poll until the expected round count is reached after a publish.
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 15; // ~15 seconds max
+
+    const poll = async () => {
+      const count = await fetchAll();
+      if (cancelled) return;
+      if (
+        expectRoundCount != null &&
+        count >= 0 &&
+        count < expectRoundCount &&
+        attempts < maxAttempts
+      ) {
+        attempts++;
+        pollingRef.current = setTimeout(poll, 1000);
+      }
+    };
+
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (pollingRef.current) clearTimeout(pollingRef.current);
+    };
+  }, [expectRoundCount, fetchAll]);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1942,6 +2165,28 @@ function VoteStatusView() {
                         return winnerIndices.size > 1;
                       })();
 
+                      // Detect binary (Support/Oppose) proposals
+                      const optionLabels = options.map((o) => (o.label ?? "").toLowerCase());
+                      const isBinary =
+                        options.length === 2 &&
+                        optionLabels.includes("support") &&
+                        optionLabels.includes("oppose");
+
+                      // Color helpers for binary votes
+                      const binaryColor = (label: string) => {
+                        const l = (label ?? "").toLowerCase();
+                        if (l === "support") return { bg: "bg-success", text: "text-success" };
+                        return { bg: "bg-danger", text: "text-danger" };
+                      };
+
+                      // Winner color for banner
+                      const winnerColor = (() => {
+                        if (!isBinary || winnerIndices.size === 0) return { bg: "bg-accent/10", text: "text-accent" };
+                        const winnerOpt = options.find((o) => winnerIndices.has(o.index ?? 0));
+                        const c = binaryColor(winnerOpt?.label ?? "");
+                        return { bg: `${c.bg}/10`, text: c.text };
+                      })();
+
                       const totalValue = isFinalized
                         ? options.reduce((sum, o) => sum + Number(o.total_value ?? 0), 0)
                         : null;
@@ -1971,9 +2216,9 @@ function VoteStatusView() {
 
                           {/* Winner banner — only when finalized */}
                           {isFinalized && winnerIndices.size > 0 && (
-                            <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-accent/10 rounded-md">
-                              <span className="text-accent text-xs">{isTied ? "⚖" : "✓"}</span>
-                              <span className="text-[11px] font-semibold text-accent">
+                            <div className={`flex items-center gap-1.5 mb-2 px-2 py-1 ${winnerColor.bg} rounded-md`}>
+                              <span className={`${winnerColor.text} text-xs`}>{isTied ? "⚖" : "✓"}</span>
+                              <span className={`text-[11px] font-semibold ${winnerColor.text}`}>
                                 {isTied ? "Tie: " : "Winner: "}
                                 {options
                                   .filter((o) => winnerIndices.has(o.index ?? 0))
@@ -2006,7 +2251,7 @@ function VoteStatusView() {
                                     <span
                                       className={`text-[11px] ${
                                         isWinner
-                                          ? "font-semibold text-text-primary"
+                                          ? `font-semibold ${isBinary ? binaryColor(opt.label ?? "").text : "text-text-primary"}`
                                           : "text-text-secondary"
                                       }`}
                                     >
@@ -2015,12 +2260,7 @@ function VoteStatusView() {
                                     </span>
                                     <span className="text-[11px] font-mono text-text-primary">
                                       {isFinalized ? (
-                                        <>
-                                          {value.toLocaleString()}{" "}
-                                          <span className="text-text-muted">
-                                            ({ballotsToZEC(value)})
-                                          </span>
-                                        </>
+                                        <>{ballotsToZEC(value)}</>
                                       ) : (
                                         <>
                                           {shares} share{shares !== 1 ? "s" : ""}
@@ -2031,11 +2271,15 @@ function VoteStatusView() {
                                   <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
                                     <div
                                       className={`h-full rounded-full transition-all duration-500 ${
-                                        isWinner
-                                          ? "bg-accent"
-                                          : isFinalized
-                                            ? "bg-accent/70"
-                                            : "bg-accent/60"
+                                        isBinary
+                                          ? isWinner
+                                            ? binaryColor(opt.label ?? "").bg
+                                            : `${binaryColor(opt.label ?? "").bg}/60`
+                                          : isWinner
+                                            ? "bg-accent"
+                                            : isFinalized
+                                              ? "bg-accent/70"
+                                              : "bg-accent/60"
                                       }`}
                                       style={{
                                         width: `${Math.max(barValue > 0 ? 2 : 0, pct)}%`,
@@ -2051,7 +2295,7 @@ function VoteStatusView() {
                           {isFinalized && totalValue !== null && totalValue > 0 ? (
                             <div className="mt-2 pt-2 border-t border-border-subtle">
                               <span className="text-[10px] text-text-muted">
-                                Total: {totalValue.toLocaleString()} ({ballotsToZEC(totalValue)})
+                                Total: {ballotsToZEC(totalValue)}
                               </span>
                             </div>
                           ) : totalShares > 0 ? (
