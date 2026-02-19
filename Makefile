@@ -2,7 +2,7 @@
 SDK_DIR     = sdk
 INGEST_DIR  = nullifier-ingest
 
-.PHONY: install install-ffi init init-ffi start clean build fmt lint \
+.PHONY: install install-ffi init start clean build fmt lint \
 	test test-unit test-integration test-api test-api-restart test-api-reinit test-e2e \
 	fixtures-ts circuits circuits-test fixtures \
 	test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi \
@@ -20,9 +20,6 @@ build:
 
 init:
 	$(MAKE) -C $(SDK_DIR) init
-
-init-ffi:
-	$(MAKE) -C $(SDK_DIR) init-ffi
 
 start:
 	$(MAKE) -C $(SDK_DIR) start
