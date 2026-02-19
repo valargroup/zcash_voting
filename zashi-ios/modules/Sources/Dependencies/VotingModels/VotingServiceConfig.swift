@@ -31,8 +31,8 @@ public struct VotingServiceConfig: Codable, Equatable, Sendable {
         case nullifierProviders = "nullifier_providers"
     }
 
-    /// CDN URL for the production config (auto-deployed via Vercel).
-    public static let cdnURL = URL(string: "https://zally-phi.vercel.app/voting-config.json")!
+    /// CDN URL for the production config (served from Vercel Edge Config).
+    public static let cdnURL = URL(string: "https://zally-phi.vercel.app/api/voting-config")!
 
     /// Filename for a local override bundled in the app (takes priority over CDN).
     public static let localOverrideFilename = "voting-config-local.json"
