@@ -1,5 +1,10 @@
-# Deploy zallyd chain to a remote host on every push to main,
-# then bootstrap the EA key ceremony so the chain is ready for use.
+# Deploy a 3-validator zallyd chain to a single remote host on every push to
+# main, then bootstrap the EA key ceremony so the chain is ready for use.
+#
+# Port layout (all validators on one host):
+#   Val1: P2P 26156  RPC 26157  API 1418  pprof 6160
+#   Val2: P2P 26256  RPC 26257  API 1518  pprof 6260
+#   Val3: P2P 26356  RPC 26357  API 1618  pprof 6360
 #
 # Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, SSH_PASSWORD,
 # CEREMONY_SSH_KEY (ed25519 private key for key-based SSH).
@@ -15,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       reset_chain:
-        description: "Reset chain state (wipes existing data and reinitializes)"
+        description: "Reset chain state (wipes existing data and reinitializes all 3 validators)"
         type: boolean
         default: false
 
@@ -61,8 +66,11 @@ jobs:
       - name: Build zallyd with FFI
         run: make build-ffi
 
+      - name: Build create-val-tx helper
+        run: go build -o create-val-tx ./scripts/create-val-tx
+
       - name: Copy init script to build root
-        run: cp scripts/init.sh init.sh
+        run: cp scripts/init_multi_ci.sh init_multi_ci.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -70,7 +78,8 @@ jobs:
           name: sdk-chain-binaries
           path: |
             sdk/zallyd
-            sdk/init.sh
+            sdk/create-val-tx
+            sdk/init_multi_ci.sh
 
   deploy:
     name: Deploy to remote
@@ -82,8 +91,8 @@ jobs:
         with:
           name: sdk-chain-binaries
 
-      - name: Make binary executable
-        run: chmod +x zallyd
+      - name: Make binaries executable
+        run: chmod +x zallyd create-val-tx
 
       - name: Create deploy directory
         uses: appleboy/ssh-action@v1.0.3
@@ -93,40 +102,42 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           script: mkdir -p ${{ env.DEPLOY_PATH }}
 
-      - name: Deploy via SSH
+      - name: Deploy via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          source: "zallyd,init.sh"
+          source: "zallyd,create-val-tx,init_multi_ci.sh"
           target: ${{ env.DEPLOY_PATH }}
 
-      - name: Stop service
+      - name: Stop services
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            sudo systemctl stop zallyd || true
+            for svc in zallyd-val1 zallyd-val2 zallyd-val3; do
+              sudo systemctl stop "$svc" || true
+            done
             # Kill any orphaned zallyd processes not managed by systemd
             sudo pkill -9 -x zallyd || true
-            # Wait for ports 26657 and 6060 to be freed
-            for i in $(seq 1 15); do
-              if ! ss -tlnp | grep -qE ':26657|:6060'; then
+            # Wait for all validator ports to be freed
+            for i in $(seq 1 20); do
+              if ! ss -tlnp | grep -qE ':26156|:26256|:26356|:6160|:6260|:6360'; then
                 echo "Ports freed"
                 break
               fi
-              if [ "$i" = "15" ]; then
-                echo "WARN: ports still bound after 15s, forcing..."
-                sudo fuser -k 26657/tcp 6060/tcp || true
+              if [ "$i" = "20" ]; then
+                echo "WARN: ports still bound after 20s, forcing..."
+                sudo fuser -k 26156/tcp 26256/tcp 26356/tcp 6160/tcp 6260/tcp 6360/tcp || true
                 sleep 1
               fi
               sleep 1
             done
 
-      - name: Reset chain (reinitialize)
+      - name: Reset chain (reinitialize all validators)
         if: ${{ inputs.reset_chain == true }}
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -135,19 +146,57 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
             export HOME=${{ env.DEPLOY_PATH }} PATH=${{ env.DEPLOY_PATH }}:$PATH
-            chmod +x ${{ env.DEPLOY_PATH }}/zallyd
-            bash ${{ env.DEPLOY_PATH }}/init.sh
+            chmod +x ${{ env.DEPLOY_PATH }}/zallyd ${{ env.DEPLOY_PATH }}/create-val-tx
+            bash ${{ env.DEPLOY_PATH }}/init_multi_ci.sh
 
-      - name: Start service
+      - name: Start services
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            sudo systemctl start zallyd
+            for svc in zallyd-val1 zallyd-val2 zallyd-val3; do
+              sudo systemctl start "$svc"
+            done
 
-      - name: Verify systemd service active
+      - name: Register post-genesis validators (val2 and val3)
+        if: ${{ inputs.reset_chain == true }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            export HOME=${{ env.DEPLOY_PATH }} PATH=${{ env.DEPLOY_PATH }}:$PATH
+            # Wait up to 60s for val1 API to be ready before registering
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:1418/zally/v1/commitment-tree/latest > /dev/null 2>&1; then
+                echo "Val1 API ready"
+                break
+              fi
+              if [ "$i" = "30" ]; then
+                echo "FAIL: val1 API not responding after 60s"
+                sudo journalctl -u zallyd-val1 --no-pager -n 50
+                exit 1
+              fi
+              sleep 2
+            done
+            # Register val2
+            ${{ env.DEPLOY_PATH }}/create-val-tx \
+              --home "$HOME/.zallyd-val2" \
+              --moniker val2 \
+              --amount 10000000stake \
+              --rpc-url tcp://localhost:26157
+            sleep 2
+            # Register val3
+            ${{ env.DEPLOY_PATH }}/create-val-tx \
+              --home "$HOME/.zallyd-val3" \
+              --moniker val3 \
+              --amount 10000000stake \
+              --rpc-url tcp://localhost:26157
+
+      - name: Verify all services active
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -155,12 +204,14 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
             sleep 5
-            if ! sudo systemctl is-active --quiet zallyd; then
-              echo "FAIL: zallyd service not active"
-              sudo systemctl status zallyd --no-pager
-              sudo journalctl -u zallyd --no-pager -n 100
-              exit 1
-            fi
+            for svc in zallyd-val1 zallyd-val2 zallyd-val3; do
+              if ! sudo systemctl is-active --quiet "$svc"; then
+                echo "FAIL: $svc not active"
+                sudo systemctl status "$svc" --no-pager
+                sudo journalctl -u "$svc" --no-pager -n 100
+                exit 1
+              fi
+            done
 
       - name: Verify services healthy
         uses: appleboy/ssh-action@v1.0.3
@@ -169,29 +220,29 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            # Wait up to 60s for zallyd to start serving
+            # Wait up to 60s for val1 chain API to respond
             for i in $(seq 1 30); do
-              if curl -sf http://localhost:1318/zally/v1/commitment-tree/latest > /dev/null 2>&1; then
-                echo "Chain API healthy (port 1318)"
+              if curl -sf http://localhost:1418/zally/v1/commitment-tree/latest > /dev/null 2>&1; then
+                echo "Chain API healthy (val1 port 1418)"
                 break
               fi
               if [ "$i" = "30" ]; then
                 echo "FAIL: Chain API not responding after 60s"
-                sudo journalctl -u zallyd --no-pager -n 50
+                sudo journalctl -u zallyd-val1 --no-pager -n 50
                 exit 1
               fi
               sleep 2
             done
 
-            # Verify helper server endpoint responds
+            # Verify helper server endpoint responds on val1
             for i in $(seq 1 15); do
-              if curl -sf http://localhost:1318/api/v1/status > /dev/null 2>&1; then
+              if curl -sf http://localhost:1418/api/v1/status > /dev/null 2>&1; then
                 echo "Helper server healthy"
                 break
               fi
               if [ "$i" = "15" ]; then
                 echo "FAIL: Helper server /api/v1/status not responding after 30s"
-                sudo journalctl -u zallyd --no-pager -n 50
+                sudo journalctl -u zallyd-val1 --no-pager -n 50
                 exit 1
               fi
               sleep 2
@@ -238,4 +289,7 @@ jobs:
           EOF
 
       - name: Run ceremony bootstrap
-        run: ./scripts/remote-ceremony.sh ceremony-remote
+        run: |
+          ZALLY_REMOTE_HOME=/opt/zally-chain/.zallyd-val1 \
+          ZALLY_NODE_URL=tcp://localhost:26157 \
+          ./scripts/remote-ceremony.sh ceremony-remote
