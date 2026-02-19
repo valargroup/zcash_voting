@@ -45,7 +45,7 @@ extension HomeView {
             
             ActionRow(
                 icon: Image(systemName: "checkmark.shield"),
-                title: "NU7 Sentiment Poll",
+                title: "Governance",
                 desc: "Vote on proposed network upgrades",
                 divider: true
             ) {
