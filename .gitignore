@@ -42,6 +42,7 @@ keystone-qr/.build/
 zcash-voting-ffi/releases/zcash_voting_ffiFFI.xcframework/
 
 # Nullifier service data
+nullifier-ingest/service/nullifiers.bin
 nullifier-ingest/service/nullifiers.checkpoint
 nullifier-ingest/service/nullifiers.tree
 

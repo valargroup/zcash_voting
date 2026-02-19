@@ -231,16 +231,79 @@ pub fn wait_for_ceremony_status(
 /// Returns the first validator's operator address from the staking module.
 /// Queries the standard Cosmos SDK endpoint at the same base URL.
 pub fn get_validator_operator_address() -> Option<String> {
+    // Allow explicit override so callers in multi-validator setups can pin a
+    // specific validator without relying on staking query ordering.
+    if let Ok(addr) = std::env::var("ZALLY_VALIDATOR_ADDR") {
+        if !addr.is_empty() {
+            return Some(addr);
+        }
+    }
+
     let (status, json) = get_json("/cosmos/staking/v1beta1/validators").ok()?;
     if status != 200 {
         return None;
     }
+
+    // If a moniker filter is set, prefer the matching validator.
+    if let Ok(moniker) = std::env::var("ZALLY_VALIDATOR_MONIKER") {
+        if !moniker.is_empty() {
+            if let Some(addr) = json
+                .get("validators")?
+                .as_array()?
+                .iter()
+                .find(|v| {
+                    v.get("description")
+                        .and_then(|d| d.get("moniker"))
+                        .and_then(|m| m.as_str())
+                        == Some(moniker.as_str())
+                })
+                .and_then(|v| v.get("operator_address"))
+                .and_then(|a| a.as_str())
+                .map(|s| s.to_string())
+            {
+                return Some(addr);
+            }
+        }
+    }
+
     json.get("validators")?
         .as_array()?
         .first()?
         .get("operator_address")?
         .as_str()
         .map(|s| s.to_string())
+}
+
+/// Returns all validators registered in the ceremony state as
+/// `(operator_address, pallas_pk_bytes)` pairs.
+pub fn get_ceremony_validators() -> Option<Vec<(String, Vec<u8>)>> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine;
+
+    let (status, json) = get_json("/zally/v1/ceremony").ok()?;
+    if status != 200 {
+        return None;
+    }
+    let validators = json
+        .get("ceremony")?
+        .get("validators")?
+        .as_array()?;
+
+    let result: Vec<(String, Vec<u8>)> = validators
+        .iter()
+        .filter_map(|v| {
+            let addr = v.get("validator_address")?.as_str()?.to_string();
+            let pk_b64 = v.get("pallas_pk")?.as_str()?;
+            let pk_bytes = B64.decode(pk_b64).ok()?;
+            Some((addr, pk_bytes))
+        })
+        .collect();
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 /// Returns ALL validator operator addresses from the staking module.

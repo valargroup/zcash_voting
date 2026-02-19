@@ -1,31 +1,26 @@
 #!/bin/bash
-# init_multi.sh — Initialize a 3-validator Zally chain on localhost.
+# init_multi_ci.sh — Initialize a 3-validator Zally chain for CI/remote deployment.
 #
-# Validator 1 (genesis): starts the chain solo via gentx.
-# Validators 2 & 3: join via CreateValidatorWithPallasKey after chain start.
+# Like init_multi.sh, but does NOT start any processes and does NOT register
+# post-genesis validators. Those steps are handled externally:
+#   - Validators are started via systemd (zallyd-val1, zallyd-val2, zallyd-val3)
+#   - Val2 and val3 are registered after chain start via the create-val-tx binary
 #
-# Each validator uses a separate home directory and unique port set.
 # Usage:
-#   bash scripts/init_multi.sh
-#   # or: make init-multi
+#   HOME=/opt/zally-chain bash init_multi_ci.sh
 set -e
-
-# Ensure Go toolchain matches go.mod (system may have a newer default).
-export GOTOOLCHAIN=go1.23.12
 
 CHAIN_ID="zvote-1"
 BINARY="zallyd"
 DENOM="stake"
-NUM_VALIDATORS=3
 
-# Home directories.
+# Home directories (rooted under $HOME set by the caller).
 HOME_VAL1="$HOME/.zallyd-val1"
 HOME_VAL2="$HOME/.zallyd-val2"
 HOME_VAL3="$HOME/.zallyd-val3"
 HOMES=("$HOME_VAL1" "$HOME_VAL2" "$HOME_VAL3")
 
-# Port allocation per validator (all offset from defaults to avoid conflicts
-# with other local processes like Cursor IDE which may bind default ports).
+# Port allocation per validator.
 #                        Val1    Val2    Val3
 # CometBFT P2P:         26156   26256   26356
 # CometBFT RPC:         26157   26257   26357
@@ -40,37 +35,16 @@ GRPC_WEB_PORTS=(9391 9491 9591)
 API_PORTS=(1418 1518 1618)
 PPROF_PORTS=(6160 6260 6360)
 
-# Self-delegation amount for each validator.
 SELF_DELEGATION="10000000${DENOM}"
-
-# Genesis account balance (enough for self-delegation + gas).
 GENESIS_BALANCE="100000000${DENOM}"
-
-# PID file to track background processes for stop-multi.
-PID_FILE="$HOME/.zallyd-multi-pids"
 
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
 echo "=== Cleaning up previous multi-validator data ==="
-
-# Kill any running zallyd processes for these home directories (catches stale
-# processes from previous sessions that aren't tracked in the PID file).
-for home in "${HOMES[@]}"; do
-    pkill -f "zallyd start --home ${home}" 2>/dev/null || true
-done
-# Also kill PIDs from the PID file if it exists.
-if [ -f "$PID_FILE" ]; then
-    while read -r pid; do
-        kill "$pid" 2>/dev/null || true
-    done < "$PID_FILE"
-fi
-sleep 1
-
 for home in "${HOMES[@]}"; do
     rm -rf "$home"
 done
-rm -f "$PID_FILE"
 
 # ---------------------------------------------------------------------------
 # Helper: configure config.toml ports
@@ -96,7 +70,6 @@ configure_config_toml() {
     sed -i.bak 's/^timeout_broadcast_tx_commit = .*/timeout_broadcast_tx_commit = "120s"/' "$config_toml"
 
     # Allow non-routable addresses (127.0.0.1) in the address book.
-    # Required for local multi-validator setups where all nodes run on localhost.
     sed -i.bak 's/^addr_book_strict = true/addr_book_strict = false/' "$config_toml"
 
     # Allow multiple peers from the same IP (all validators share 127.0.0.1).
@@ -158,6 +131,48 @@ VOTECFG
 }
 
 # ---------------------------------------------------------------------------
+# Helper: append helper server config (val1 only)
+# ---------------------------------------------------------------------------
+configure_helper() {
+    local home="$1"
+    local api_port="$2"
+
+    local app_toml="$home/config/app.toml"
+    cat >> "$app_toml" <<HELPERCFG
+
+###############################################################################
+###                         Helper Server                                   ###
+###############################################################################
+
+[helper]
+
+# Set to true to disable the helper server.
+disable = false
+
+# Optional auth token for POST /api/v1/shares (sent via X-Helper-Token header).
+# Empty disables token auth.
+api_token = ""
+
+# Path to the SQLite database file. Empty = default ($home/helper.db).
+db_path = ""
+
+# Mean of the exponential delay distribution (seconds).
+# Shares are delayed by Exp(1/mean) for temporal unlinkability, capped at vote end time.
+# Use a short value for testing; production default is 43200 (12 hours).
+mean_delay = 60
+
+# How often to check for shares ready to submit (seconds).
+process_interval = 5
+
+# Port of the chain's REST API (used for MsgRevealShare submission).
+chain_api_port = ${api_port}
+
+# Maximum concurrent proof generation goroutines.
+max_concurrent_proofs = 2
+HELPERCFG
+}
+
+# ---------------------------------------------------------------------------
 # Helper: set persistent_peers in config.toml
 # ---------------------------------------------------------------------------
 set_persistent_peers() {
@@ -206,7 +221,7 @@ for i in 2 3; do
     ADDR=$($BINARY keys show validator -a --keyring-backend test --home "$home")
     echo "Val${i} address: $ADDR"
 
-    # Save the address for the Go helper to read later.
+    # Save the address for create-val-tx to read.
     echo "$ADDR" > "$home/validator_address.txt"
 done
 
@@ -241,9 +256,12 @@ $BINARY genesis validate-genesis --home "$HOME_VAL1"
 $BINARY ea-keygen --home "$HOME_VAL1"
 $BINARY pallas-keygen --home "$HOME_VAL1"
 
-# Configure ports.
+# Configure ports and vote module for val1.
 configure_config_toml "$HOME_VAL1" "${P2P_PORTS[0]}" "${RPC_PORTS[0]}" "${PPROF_PORTS[0]}"
 configure_app_toml "$HOME_VAL1" "${API_PORTS[0]}" "${GRPC_PORTS[0]}" "${GRPC_WEB_PORTS[0]}" "${RPC_PORTS[0]}"
+
+# Enable helper server on val1 only.
+configure_helper "$HOME_VAL1" "${API_PORTS[0]}"
 
 # ---------------------------------------------------------------------------
 # Step 2: Configure Validators 2 and 3 (copy genesis, set peers)
@@ -279,87 +297,23 @@ for i in 2 3; do
 done
 
 # ---------------------------------------------------------------------------
-# Step 3: Start all validators
-# ---------------------------------------------------------------------------
-echo ""
-echo "=== Starting Validator 1 ==="
-$BINARY start --home "$HOME_VAL1" > "$HOME_VAL1/node.log" 2>&1 &
-VAL1_PID=$!
-echo "$VAL1_PID" > "$PID_FILE"
-echo "Val1 PID: $VAL1_PID"
-
-# Wait for val1 to produce its first block.
-echo "Waiting for Validator 1 to start producing blocks..."
-for i in $(seq 1 30); do
-    if curl -s "http://127.0.0.1:${RPC_PORTS[0]}/status" 2>/dev/null | grep -q '"latest_block_height"'; then
-        BLOCK_HEIGHT=$(curl -s "http://127.0.0.1:${RPC_PORTS[0]}/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['sync_info']['latest_block_height'])" 2>/dev/null || echo "0")
-        if [ "$BLOCK_HEIGHT" != "0" ]; then
-            echo "Val1 is up. Block height: $BLOCK_HEIGHT"
-            break
-        fi
-    fi
-    sleep 1
-done
-
-# Start validators 2 and 3.
-for i in 2 3; do
-    idx=$((i - 1))
-    home="${HOMES[$idx]}"
-
-    echo ""
-    echo "=== Starting Validator ${i} ==="
-    $BINARY start --home "$home" > "$home/node.log" 2>&1 &
-    PID=$!
-    echo "$PID" >> "$PID_FILE"
-    echo "Val${i} PID: $PID"
-done
-
-# Wait for nodes 2 and 3 to sync.
-echo ""
-echo "Waiting for Validators 2 and 3 to sync..."
-sleep 5
-
-# ---------------------------------------------------------------------------
-# Step 4: Register Validators 2 and 3 via CreateValidatorWithPallasKey
-# ---------------------------------------------------------------------------
-echo ""
-echo "=== Registering Validators 2 and 3 ==="
-
-for i in 2 3; do
-    idx=$((i - 1))
-    home="${HOMES[$idx]}"
-
-    echo ""
-    echo "--- Registering Validator ${i} via CreateValidatorWithPallasKey ---"
-    go run ./scripts/create-val-tx \
-        --home "$home" \
-        --moniker "val${i}" \
-        --amount "$SELF_DELEGATION" \
-        --api-url "http://localhost:${API_PORTS[0]}"
-
-    # Small delay between registrations.
-    sleep 2
-done
-
-# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
-echo "========================================="
-echo "=== Multi-Validator Chain Initialized ==="
-echo "========================================="
+echo "============================================="
+echo "=== Multi-Validator Chain Initialized OK  ==="
+echo "============================================="
 echo ""
-echo "Validators:"
+echo "Validators (start via systemd: zallyd-val1/2/3):"
 for i in 1 2 3; do
     idx=$((i - 1))
     echo "  Val${i}:"
-    echo "    Home:     ${HOMES[$idx]}"
-    echo "    RPC:      http://127.0.0.1:${RPC_PORTS[$idx]}"
-    echo "    API:      http://localhost:${API_PORTS[$idx]}"
-    echo "    P2P:      ${P2P_PORTS[$idx]}"
-    echo "    Log:      ${HOMES[$idx]}/node.log"
+    echo "    Home:  ${HOMES[$idx]}"
+    echo "    RPC:   http://127.0.0.1:${RPC_PORTS[$idx]}"
+    echo "    API:   http://localhost:${API_PORTS[$idx]}"
+    echo "    P2P:   ${P2P_PORTS[$idx]}"
 done
 echo ""
-echo "PIDs saved to: $PID_FILE"
-echo "Stop all: make stop-multi  (or kill \$(cat $PID_FILE))"
-echo "Logs: tail -f ~/.zallyd-val1/node.log"
+echo "After chain start, register val2 and val3:"
+echo "  create-val-tx --home $HOME_VAL2 --moniker val2 --amount $SELF_DELEGATION --rpc-url tcp://localhost:${RPC_PORTS[0]}"
+echo "  create-val-tx --home $HOME_VAL3 --moniker val3 --amount $SELF_DELEGATION --rpc-url tcp://localhost:${RPC_PORTS[0]}"

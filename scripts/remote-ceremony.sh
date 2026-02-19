@@ -20,7 +20,7 @@ SSH_HOST="${1:?Usage: $0 <ssh-host> [key-dir]}"
 KEY_DIR="${2:-/tmp/zally-ceremony}"
 E2E_DIR="$(cd "$(dirname "$0")/../e2e-tests" && pwd)"
 
-REMOTE_HOME="/opt/zally-chain/.zallyd"
+REMOTE_HOME="${ZALLY_REMOTE_HOME:-/opt/zally-chain/.zallyd-val1}"
 REMOTE_ZALLYD="/opt/zally-chain/zallyd"
 
 # Derive the HTTPS URL from the SSH host. If the host looks like a bare
@@ -71,10 +71,35 @@ export ZALLY_API_URL="$API_URL"
 export ZALLY_SSH_HOST="$SSH_HOST"
 export ZALLY_REMOTE_ZALLYD="$REMOTE_ZALLYD"
 export ZALLY_HOME="$REMOTE_HOME"
-export ZALLY_NODE_URL="tcp://localhost:26657"
+# Allow the caller to override the CometBFT RPC endpoint. The default covers
+# the single-validator case; multi-node deployments override via the env.
+export ZALLY_NODE_URL="${ZALLY_NODE_URL:-tcp://localhost:26657}"
 export ZALLY_EA_SK_PATH="$KEY_DIR/ea.sk"
 export ZALLY_EA_PK_PATH="$KEY_DIR/ea.pk"
 export ZALLY_PALLAS_PK_PATH="$KEY_DIR/pallas.pk"
+
+# Resolve the ceremony validator's operator address by moniker so we pin to
+# the right validator in multi-validator deployments. The moniker is derived
+# from the last path component of REMOTE_HOME (e.g. ".zallyd-val1" → "val1").
+CEREMONY_MONIKER=$(basename "$REMOTE_HOME" | sed 's/\.zallyd-//')
+if [ "$CEREMONY_MONIKER" = ".zallyd" ]; then
+    CEREMONY_MONIKER=""
+fi
+if [ -n "$CEREMONY_MONIKER" ]; then
+    RESOLVED_ADDR=$(curl -sf "${API_URL}/cosmos/staking/v1beta1/validators" 2>/dev/null \
+        | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for v in data.get('validators', []):
+    if v.get('description', {}).get('moniker') == '${CEREMONY_MONIKER}':
+        print(v['operator_address'])
+        break
+" 2>/dev/null || true)
+    if [ -n "$RESOLVED_ADDR" ]; then
+        echo "Ceremony validator: $CEREMONY_MONIKER ($RESOLVED_ADDR)"
+        export ZALLY_VALIDATOR_ADDR="$RESOLVED_ADDR"
+    fi
+fi
 
 cargo test --release \
     --manifest-path "$E2E_DIR/Cargo.toml" \

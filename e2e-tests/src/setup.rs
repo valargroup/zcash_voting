@@ -656,7 +656,7 @@ pub fn bootstrap_ceremony_multi(
 pub fn bootstrap_ceremony(ea_sk_bytes: &[u8], ea_pk_bytes: &[u8]) {
     use crate::api::{
         broadcast_cosmos_msg, default_cosmos_tx_config,
-        get_ceremony_status, get_validator_operator_address,
+        get_ceremony_status, get_ceremony_validators, get_validator_operator_address,
         wait_for_ceremony_confirmed, CEREMONY_STATUS_CONFIRMED,
     };
     use crate::ecies;
@@ -699,39 +699,66 @@ pub fn bootstrap_ceremony(ea_sk_bytes: &[u8], ea_pk_bytes: &[u8]) {
     let config = default_cosmos_tx_config();
     let mut rng = OsRng;
 
-    // Step 1: Register the validator's Pallas key.
-    eprintln!("[E2E] Ceremony: registering Pallas key...");
-    let mut msg = register_pallas_key_payload(&validator_addr, &pallas_pk_bytes);
-    msg["@type"] = serde_json::json!("/zvote.v1.MsgRegisterPallasKey");
-    let (status, json) = broadcast_cosmos_msg(&msg, &config)
-        .expect("broadcast register-pallas-key");
-    assert!(
-        status == 200
-            && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
-        "register-pallas-key failed: HTTP {}, body={:?}",
-        status,
-        json
+    // Step 1: Register the validator's Pallas key (idempotent — duplicate
+    // registrations are accepted at the mempool but rejected in the block,
+    // which is fine if the key is already present from a prior run or from
+    // MsgCreateValidatorWithPallasKey).
+    eprintln!("[E2E] Ceremony: registering Pallas key for {} ...", validator_addr);
+    let already_registered = get_ceremony_validators()
+        .unwrap_or_default()
+        .iter()
+        .any(|(addr, _)| addr == &validator_addr);
+
+    if already_registered {
+        eprintln!("[E2E] Ceremony: Pallas key already registered, skipping MsgRegisterPallasKey");
+    } else {
+        let mut msg = register_pallas_key_payload(&validator_addr, &pallas_pk_bytes);
+        msg["@type"] = serde_json::json!("/zvote.v1.MsgRegisterPallasKey");
+        let (status, json) = broadcast_cosmos_msg(&msg, &config)
+            .expect("broadcast register-pallas-key");
+        assert!(
+            status == 200
+                && json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) == 0,
+            "register-pallas-key failed: HTTP {}, body={:?}",
+            status,
+            json
+        );
+        // Wait one block for state to commit before dealing.
+        std::thread::sleep(std::time::Duration::from_millis(6000));
+    }
+
+    // Step 2: ECIES-encrypt ea_sk to EVERY validator registered in the
+    // ceremony state. The deal requires one payload per registered validator
+    // (single-validator and multi-validator cases are handled uniformly).
+    eprintln!("[E2E] Ceremony: dealing EA key...");
+    let ceremony_validators = get_ceremony_validators()
+        .expect("failed to query ceremony validators for deal");
+
+    eprintln!(
+        "[E2E] Ceremony: dealing to {} validator(s)",
+        ceremony_validators.len()
     );
 
-    // Wait one block for state to commit.
-    std::thread::sleep(std::time::Duration::from_millis(6000));
+    let dealer_payloads: Vec<DealerPayloadInput> = ceremony_validators
+        .iter()
+        .map(|(addr, pk_bytes)| {
+            let pk_arr: [u8; 32] = pk_bytes
+                .as_slice()
+                .try_into()
+                .expect("pallas pk must be 32 bytes");
+            let recipient_pk =
+                Option::<pallas::Point>::from(pallas::Point::from_bytes(&pk_arr))
+                    .unwrap_or_else(|| panic!("invalid Pallas PK for {}", addr));
+            let envelope = ecies::encrypt(&recipient_pk, ea_sk_bytes, &mut rng);
+            DealerPayloadInput {
+                validator_address: addr.clone(),
+                ephemeral_pk: envelope.ephemeral_pk.to_vec(),
+                ciphertext: envelope.ciphertext.clone(),
+            }
+        })
+        .collect();
 
-    // Step 2: ECIES-encrypt ea_sk to the validator's Pallas PK.
-    eprintln!("[E2E] Ceremony: dealing EA key...");
-    let recipient_pk = {
-        let pk_arr: [u8; 32] = pallas_pk_bytes.as_slice().try_into().unwrap();
-        Option::<pallas::Point>::from(pallas::Point::from_bytes(&pk_arr))
-            .expect("validator Pallas PK is a valid Pallas point")
-    };
-    let envelope = ecies::encrypt(&recipient_pk, ea_sk_bytes, &mut rng);
-
-    let dealer_payload = DealerPayloadInput {
-        validator_address: validator_addr.clone(),
-        ephemeral_pk: envelope.ephemeral_pk.to_vec(),
-        ciphertext: envelope.ciphertext.clone(),
-    };
-
-    let body = deal_ea_key_payload(&validator_addr, ea_pk_bytes, &[dealer_payload]);
+    let body = deal_ea_key_payload(&validator_addr, ea_pk_bytes, &dealer_payloads);
     let mut msg = body;
     msg["@type"] = serde_json::json!("/zvote.v1.MsgDealExecutiveAuthorityKey");
     let (status, json) =
