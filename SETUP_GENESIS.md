@@ -120,3 +120,7 @@ Share the following with joining validators:
 ## Step 6 — Bootstrap the EA Key Ceremony
 
 See [SETUP_CEREMONY.md](SETUP_CEREMONY.md) for the full ceremony procedure.
+
+## Useful Commands
+
+- `make clean` - reset the chain home directory

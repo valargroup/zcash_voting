@@ -152,3 +152,7 @@ This will:
 # Check the new validator appears in the validator set
 zallyd query staking validators
 ```
+
+## Useful Commands
+
+- `make clean` - reset the chain home directory
