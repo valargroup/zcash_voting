@@ -205,3 +205,16 @@ grep pallas_sk_path ~/.zallyd/config/app.toml
 zallyd q vote ceremony-state
 # status: CEREMONY_STATUS_CONFIRMED
 ```
+
+### Resetting the ceremony
+
+By resetting the ceremony, we are back to the state where more validators can join.
+
+```
+zallyd tx vote reinitialize-election-authority \
+  --from validator \
+  --keyring-backend test \
+  --chain-id zvote-1 \
+  --node tcp://localhost:26657 \
+  --yes
+```
