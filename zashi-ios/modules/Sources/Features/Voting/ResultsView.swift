@@ -77,7 +77,7 @@ struct ResultsView: View {
         switch store.activeSession?.status {
         case .active: return .green
         case .tallying: return .orange
-        case .finalized: return .green
+        case .finalized: return .blue
         default: return .secondary
         }
     }
@@ -96,15 +96,6 @@ struct ResultsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // Status pill
-            Text(statusLabel)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(statusColor)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(statusColor.opacity(0.12))
-                .clipShape(Capsule())
-
             // Detail pills
             HStack(spacing: 0) {
                 detailPill(
@@ -117,10 +108,19 @@ struct ResultsView: View {
                     value: store.votingRound.votingEnd.formatted(date: .abbreviated, time: .omitted)
                 )
                 Spacer()
-                detailPill(
-                    label: "Status",
-                    value: statusLabel
-                )
+                // Status pill
+                VStack(spacing: 2) {
+                    Text("Status")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(statusLabel)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(Capsule())
+                }
             }
         }
         .padding(16)

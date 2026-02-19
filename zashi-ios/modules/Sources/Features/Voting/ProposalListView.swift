@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import ComposableArchitecture
 import Generated
 import UIComponents
@@ -7,8 +8,30 @@ import VotingModels
 struct ProposalListView: View {
     @Environment(\.colorScheme) var colorScheme
     @State private var showSnapshotHeight = false
+    @State private var now = Date()
 
     let store: StoreOf<Voting>
+
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var timeRemainingText: String {
+        let end = store.votingRound.votingEnd
+        let remaining = end.timeIntervalSince(now)
+        guard remaining > 0 else { return "Ended" }
+
+        let days = Int(remaining) / 86400
+        let hours = (Int(remaining) % 86400) / 3600
+        let minutes = (Int(remaining) % 3600) / 60
+        let seconds = Int(remaining) % 60
+
+        if days > 0 {
+            return "\(days)d \(hours)h \(minutes)m"
+        } else if hours > 0 {
+            return "\(hours)h \(minutes)m \(seconds)s"
+        } else {
+            return "\(minutes)m \(seconds)s"
+        }
+    }
 
     var body: some View {
         WithPerceptionTracking {
@@ -25,7 +48,15 @@ struct ProposalListView: View {
                         Image(systemName: "xmark")
                     }
                 }
+                if store.activeSession != nil {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Text(timeRemainingText)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(store.votingRound.votingEnd > now ? .green : .secondary)
+                    }
+                }
             }
+            .onReceive(timer) { self.now = $0 }
         }
     }
 
@@ -71,18 +102,15 @@ struct ProposalListView: View {
 
     @ViewBuilder
     private func roundInfoCard() -> some View {
-        VStack(spacing: 12) {
-            // Title row
-            HStack(alignment: .top) {
-                Text(store.votingRound.title)
-                    .zFont(.semiBold, size: 18, style: Design.Text.primary)
-                Spacer()
-                Text("\(store.votingRound.daysRemaining)d left")
-                    .zFont(.medium, size: 13, style: Design.Text.secondary)
-            }
+        HStack(spacing: 0) {
+            Text(store.votingRound.title)
+                .zFont(.semiBold, size: 15, style: Design.Text.primary)
+                .lineLimit(1)
+                .layoutPriority(1)
 
-            // Detail grid
-            HStack(spacing: 0) {
+            Spacer(minLength: 12)
+
+            HStack(spacing: 16) {
                 detailPill(
                     label: "Snapshot",
                     value: store.votingRound.snapshotDate.formatted(date: .abbreviated, time: .omitted)
@@ -99,23 +127,24 @@ struct ProposalListView: View {
                     .padding(12)
                     .presentationCompactAdaptation(.popover)
                 }
-                Spacer()
+
                 detailPill(
                     label: "Ends",
                     value: store.votingRound.votingEnd.formatted(date: .abbreviated, time: .omitted)
                 )
-                Spacer()
+
                 detailPill(
                     label: "Eligible",
                     value: "\(store.votingWeightZECString) ZEC"
                 )
             }
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(Design.Surfaces.bgPrimary.color(colorScheme))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(Design.Surfaces.strokeSecondary.color(colorScheme), lineWidth: 1)
         )
         .padding(.top, 8)

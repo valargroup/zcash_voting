@@ -1,6 +1,6 @@
 export type ProposalType = "binary" | "multi-choice";
 
-export type RoundStatus = "draft" | "in_progress" | "published" | "archived";
+export type RoundStatus = "draft" | "published" | "archived";
 
 export interface ProposalOption {
   id: string;
