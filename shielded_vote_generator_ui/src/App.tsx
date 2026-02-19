@@ -544,11 +544,7 @@ interface NullifierStatus {
 const NULLIFIER_BASE_URL = import.meta.env.VITE_NULLIFIER_URL || "";
 
 function nullifierApiBase(): string {
-  if (
-    !NULLIFIER_BASE_URL &&
-    typeof window !== "undefined" &&
-    window.location.port === "5173"
-  ) {
+  if (!NULLIFIER_BASE_URL && import.meta.env.DEV) {
     return "/nullifier";
   }
   return NULLIFIER_BASE_URL || "/nullifier";

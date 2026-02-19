@@ -36,13 +36,14 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin", "query-server"],
+                "args": ["build", "--manifest-path", "${workspaceFolder}/nullifier-ingest/service/Cargo.toml", "--bin", "query-server"],
                 "filter": { "name": "query-server", "kind": "bin" }
             },
             "cwd": "${workspaceFolder}/nullifier-ingest/service",
             "env": {
                 "DATA_DIR": ".",
-                "PORT": "3000"
+                "PORT": "3000",
+                "LWD_URL": "https://zec.rocks:443"
             }
         },
         {
@@ -52,7 +53,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin", "ingest-nfs"],
+                "args": ["build", "--manifest-path", "${workspaceFolder}/nullifier-ingest/service/Cargo.toml", "--bin", "ingest-nfs"],
                 "filter": { "name": "ingest-nfs", "kind": "bin" }
             },
             "cwd": "${workspaceFolder}/nullifier-ingest/service",
