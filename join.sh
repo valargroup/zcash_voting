@@ -246,7 +246,7 @@ else
   done
 
   echo "Registering as validator..."
-  create-val-tx --moniker "\${MONIKER}" --amount 5stake --home "\${HOME_DIR}" --rpc-url tcp://localhost:26657
+  create-val-tx --moniker "\${MONIKER}" --amount 200000stake  --home "\${HOME_DIR}" --rpc-url tcp://localhost:26657
   echo "Validator registered."
 fi
 
