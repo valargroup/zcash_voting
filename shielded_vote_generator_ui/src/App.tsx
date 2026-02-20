@@ -17,6 +17,7 @@ import {
   useChainInfo,
   estimateTimestamp,
 } from "./store/rpc";
+import { fromBech32 } from "@cosmjs/encoding";
 import * as chainApi from "./api/chain";
 import * as cosmosTx from "./api/cosmosTx";
 import { useWallet, DEFAULT_DEV_KEY } from "./hooks/useWallet";
@@ -321,7 +322,7 @@ function App() {
         )}
 
         {/* Validators */}
-        {section === "validators" && <ValidatorsView />}
+        {section === "validators" && <ValidatorsView wallet={wallet} />}
 
         {/* Vote status */}
         {section === "vote-status" && <VoteStatusView expectRoundCount={expectedRoundCount} />}
@@ -1597,12 +1598,13 @@ function formatTokens(raw: string | undefined): string {
   return n.toLocaleString();
 }
 
-function ValidatorsView() {
+function ValidatorsView({ wallet }: { wallet: UseWallet }) {
   const [validators, setValidators] = useState<chainApi.Validator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sortBy, setSortBy] = useState<"power" | "moniker">("power");
   const [ceremony, setCeremony] = useState<chainApi.CeremonyState | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const fetchValidators = async () => {
     setLoading(true);
@@ -1667,13 +1669,22 @@ function ValidatorsView() {
               </p>
             </div>
           </div>
-          <button
-            onClick={fetchValidators}
-            className="p-2 hover:bg-surface-3 rounded-lg text-text-muted hover:text-text-secondary cursor-pointer"
-            title="Refresh"
-          >
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+            >
+              <Plus size={12} />
+              Add validator
+            </button>
+            <button
+              onClick={fetchValidators}
+              className="p-2 hover:bg-surface-3 rounded-lg text-text-muted hover:text-text-secondary cursor-pointer"
+              title="Refresh"
+            >
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            </button>
+          </div>
         </div>
 
         {/* Summary stats */}
@@ -1694,19 +1705,22 @@ function ValidatorsView() {
           </div>
         )}
 
-        {/* Ceremony participation notice */}
+        {/* Election authority notice */}
         {ceremony?.ceremony?.validators && ceremony.ceremony.validators.length > 0 && (
           <div className="bg-accent/5 border border-accent/20 rounded-xl p-4 mb-6">
             <div className="flex items-center gap-2 mb-1">
               <ShieldCheck size={14} className="text-accent" />
               <span className="text-xs font-semibold text-text-primary">
-                DKG ceremony
+                Election Authority
               </span>
             </div>
             <p className="text-[11px] text-text-secondary">
-              {ceremony.ceremony.validators.length} validator{ceremony.ceremony.validators.length !== 1 ? "s" : ""} are
-              participating in the distributed key generation ceremony for shielded voting.
-              Validators marked with <ShieldCheck size={10} className="text-accent inline" /> below have registered their Pallas key.
+              {ceremony.ceremony.validators.length} election authorit{ceremony.ceremony.validators.length !== 1 ? "ies" : "y"} can
+              help facilitate the tallying for the vote conclusion if they have the shield.
+              Authorities marked with <ShieldCheck size={10} className="text-accent inline" /> below have registered their Pallas key.
+            </p>
+            <p className="text-[10px] text-text-muted mt-2 italic">
+              In the future, the election authority key will be generated via DKG and threshold decrypted.
             </p>
           </div>
         )}
@@ -1785,7 +1799,7 @@ function ValidatorsView() {
                         {moniker}
                       </span>
                       {isCeremonyParticipant && (
-                        <span title="DKG ceremony participant"><ShieldCheck size={12} className="text-accent shrink-0" /></span>
+                        <span title="Election authority"><ShieldCheck size={12} className="text-accent shrink-0" /></span>
                       )}
                       {val.jailed && (
                         <span title="Jailed"><ShieldAlert size={12} className="text-danger shrink-0" /></span>
@@ -1849,6 +1863,235 @@ function ValidatorsView() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* Add validator modal */}
+      {showAddModal && (
+        <AddValidatorModal
+          wallet={wallet}
+          onClose={() => setShowAddModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ── Add validator modal ────────────────────────────────────── */
+
+function AddValidatorModal({
+  wallet,
+  onClose,
+}: {
+  wallet: UseWallet;
+  onClose: () => void;
+}) {
+  const [devKey, setDevKey] = useState(DEFAULT_DEV_KEY);
+  const [devKeyVisible, setDevKeyVisible] = useState(false);
+  const [validatorAddress, setValidatorAddress] = useState("");
+  const [addressError, setAddressError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const walletConnected = !!wallet.address;
+
+  const handleConnectDev = async () => {
+    await wallet.connectDev(devKey);
+    setDevKey("");
+  };
+
+  // Validate bech32 address on change.
+  const handleAddressChange = (value: string) => {
+    const trimmed = value.trim();
+    setValidatorAddress(trimmed);
+    if (!trimmed) {
+      setAddressError("");
+      return;
+    }
+    try {
+      fromBech32(trimmed);
+      setAddressError("");
+    } catch {
+      setAddressError("Invalid bech32 address");
+    }
+  };
+
+  const addressValid = validatorAddress.length > 0 && !addressError;
+
+  const handleSubmit = () => {
+    if (addressValid) {
+      setSubmitted(true);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-surface-1 border border-border rounded-xl shadow-xl max-w-md w-full mx-4">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
+          <h3 className="text-sm font-semibold text-text-primary">
+            {walletConnected ? "Add validator" : "Connect admin wallet"}
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-surface-3 rounded text-text-muted cursor-pointer"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          {walletConnected ? (
+            submitted ? (
+              /* Success state */
+              <div className="space-y-3">
+                <div className="bg-success/10 border border-success/30 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle2 size={16} className="text-success" />
+                    <span className="text-xs font-semibold text-success">
+                      Validator authorized
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-text-secondary mb-2">
+                    The validator you selected has permission to become a validator.
+                    Tell them to run the make validator command:
+                  </p>
+                  <div className="bg-surface-2 rounded-lg p-3 font-mono text-[11px] text-text-primary">
+                    make validator
+                  </div>
+                </div>
+
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <SettingsStubRow label="Validator address" value={
+                    `${validatorAddress.slice(0, 14)}...${validatorAddress.slice(-8)}`
+                  } />
+                  <SettingsStubRow label="Authorized by" value={
+                    `${wallet.address!.slice(0, 12)}...${wallet.address!.slice(-6)}`
+                  } />
+                </div>
+
+                <div className="flex items-start gap-2 bg-warning/10 border border-warning/30 rounded-lg p-3">
+                  <AlertTriangle size={13} className="text-warning mt-0.5 shrink-0" />
+                  <p className="text-[11px] text-text-secondary">
+                    This confirmation is mocked for now. The on-chain authorization transaction is not yet implemented. Ask Roman for setup help.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              /* Address input state */
+              <div className="space-y-3">
+                <div className="flex items-start gap-2 bg-warning/10 border border-warning/30 rounded-lg p-3">
+                  <AlertTriangle size={13} className="text-warning mt-0.5 shrink-0" />
+                  <p className="text-[11px] text-text-secondary">
+                    Authorize validator is not built out from the web UI yet. Ask Roman for setup help until we do that.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-text-secondary mb-1.5">
+                    Validator address
+                  </label>
+                  <input
+                    type="text"
+                    value={validatorAddress}
+                    onChange={(e) => handleAddressChange(e.target.value)}
+                    placeholder="zvote1..."
+                    spellCheck={false}
+                    autoComplete="off"
+                    className={`w-full px-3 py-2 bg-surface-2 border rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none font-mono ${
+                      addressError ? "border-danger/50 focus:border-danger/70" : "border-border-subtle focus:border-accent/50"
+                    }`}
+                  />
+                  {addressError && (
+                    <p className="text-[10px] text-danger mt-1">{addressError}</p>
+                  )}
+                </div>
+
+                <SettingsStubRow label="Signer" value={
+                  `${wallet.address!.slice(0, 12)}...${wallet.address!.slice(-6)}`
+                } />
+              </div>
+            )
+          ) : (
+            /* Wallet connection state — same as PublishModal */
+            <div className="space-y-3">
+              <button
+                onClick={wallet.connect}
+                disabled={wallet.connecting}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {wallet.connecting ? (
+                  <><Loader2 size={14} className="animate-spin" /> Connecting...</>
+                ) : (
+                  <><Wallet size={14} /> Connect Keplr</>
+                )}
+              </button>
+
+              {wallet.error && (
+                <div className="flex items-start gap-1.5 text-[11px] text-danger">
+                  <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                  <span>{wallet.error}</span>
+                </div>
+              )}
+
+              <details className="group">
+                <summary className="text-[11px] text-text-muted cursor-pointer hover:text-text-secondary">
+                  Paste dev private key
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={devKey}
+                      onChange={(e) => setDevKey(e.target.value.trim())}
+                      placeholder="64-character hex private key"
+                      spellCheck={false}
+                      autoComplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
+                      style={devKeyVisible ? undefined : { WebkitTextSecurity: "disc" } as React.CSSProperties}
+                      className="w-full px-3 py-2 pr-9 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setDevKeyVisible((v) => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-text-muted hover:text-text-secondary cursor-pointer"
+                      title={devKeyVisible ? "Hide" : "Show"}
+                    >
+                      {devKeyVisible ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                  {devKey.length > 0 && devKey.length !== 64 && (
+                    <p className="text-[10px] text-warning">
+                      Key must be exactly 64 hex characters ({devKey.length}/64)
+                    </p>
+                  )}
+                  <button
+                    onClick={handleConnectDev}
+                    disabled={devKey.length !== 64 || wallet.connecting}
+                    className="px-3 py-1.5 bg-surface-3 hover:bg-surface-2 text-text-secondary rounded-lg text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Connect
+                  </button>
+                </div>
+              </details>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-subtle">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-[11px] text-text-secondary hover:text-text-primary hover:bg-surface-2 rounded-md transition-colors cursor-pointer"
+          >
+            {submitted ? "Done" : "Cancel"}
+          </button>
+          {walletConnected && !submitted && (
+            <button
+              onClick={handleSubmit}
+              disabled={!addressValid}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-md text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50"
+            >
+              Authorize validator
+            </button>
+          )}
         </div>
       </div>
     </div>
