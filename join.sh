@@ -50,7 +50,7 @@ if [ -n "${ZALLY_MONIKER:-}" ]; then
   MONIKER="$ZALLY_MONIKER"
 else
   printf "Enter a name for your validator: "
-  read -r MONIKER
+  read -r MONIKER < /dev/tty
   if [ -z "$MONIKER" ]; then
     echo "ERROR: Moniker cannot be empty."
     exit 1
