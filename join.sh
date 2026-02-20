@@ -79,6 +79,9 @@ cp "/tmp/${TARBALL_DIR}/bin/create-val-tx" "${INSTALL_DIR}/create-val-tx"
 chmod +x "${INSTALL_DIR}/zallyd" "${INSTALL_DIR}/create-val-tx"
 rm -rf /tmp/zally-release.tar.gz "/tmp/${TARBALL_DIR}"
 
+# Clear bash's command cache so the newly installed binaries are found immediately.
+hash -r
+
 echo "Installed: ${INSTALL_DIR}/zallyd, ${INSTALL_DIR}/create-val-tx"
 
 # ─── Download network config ─────────────────────────────────────────────────
@@ -101,13 +104,13 @@ if [ -d "${HOME_DIR}" ]; then
   rm -rf "${HOME_DIR}"
 fi
 
-zallyd init "${MONIKER}" --chain-id "${CHAIN_ID}" --home "${HOME_DIR}" > /dev/null 2>&1
+"${INSTALL_DIR}/zallyd" init "${MONIKER}" --chain-id "${CHAIN_ID}" --home "${HOME_DIR}" > /dev/null 2>&1
 
 # ─── Download and place genesis ───────────────────────────────────────────────
 
 echo "Downloading genesis.json..."
 curl -fsSL -o "${HOME_DIR}/config/genesis.json" "${DO_BASE}/genesis.json"
-zallyd genesis validate-genesis --home "${HOME_DIR}" > /dev/null 2>&1
+"${INSTALL_DIR}/zallyd" genesis validate-genesis --home "${HOME_DIR}" > /dev/null 2>&1
 echo "Genesis validated."
 
 # ─── Generate keys ────────────────────────────────────────────────────────────
@@ -115,9 +118,9 @@ echo "Genesis validated."
 echo ""
 echo "=== Generating cryptographic keys ==="
 
-zallyd init-validator-keys --home "${HOME_DIR}"
+"${INSTALL_DIR}/zallyd" init-validator-keys --home "${HOME_DIR}"
 
-VALIDATOR_ADDR=$(zallyd keys show validator -a --keyring-backend test --home "${HOME_DIR}")
+VALIDATOR_ADDR=$("${INSTALL_DIR}/zallyd" keys show validator -a --keyring-backend test --home "${HOME_DIR}")
 
 # ─── Configure config.toml ───────────────────────────────────────────────────
 
@@ -161,15 +164,18 @@ set -euo pipefail
 
 HOME_DIR="${HOME_DIR}"
 MONIKER="${MONIKER}"
+LOG_FILE="\${HOME_DIR}/node.log"
 
 echo "Starting zallyd..."
-zallyd start --home "\${HOME_DIR}" &
+echo "Logs: \${LOG_FILE}"
+zallyd start --home "\${HOME_DIR}" >> "\${LOG_FILE}" 2>&1 &
 ZALLYD_PID=\$!
 
 # Give the node a moment to start up.
 sleep 5
 
 echo "Waiting for node to sync..."
+echo "  (follow logs with: tail -f \${LOG_FILE})"
 while true; do
   STATUS=\$(zallyd status --home "\${HOME_DIR}" 2>/dev/null || echo "")
   if [ -z "\$STATUS" ]; then
@@ -201,7 +207,7 @@ else
 fi
 
 echo ""
-echo "Node is running (PID: \${ZALLYD_PID})."
+echo "Node is running (PID: \${ZALLYD_PID}). Logs: \${LOG_FILE}"
 echo "Press Ctrl+C to stop."
 wait \$ZALLYD_PID
 STARTEOF
@@ -227,4 +233,7 @@ echo "   ${VALIDATOR_ADDR}"
 echo ""
 echo "2. Once funded, start your node (syncs and registers automatically):"
 echo "   ${START_SCRIPT}"
+echo ""
+echo "   Then follow node logs with:"
+echo "   tail -f ${HOME_DIR}/node.log"
 echo ""
