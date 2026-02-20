@@ -14,55 +14,49 @@ REGISTERING  →  DEALT  →  CONFIRMED
 - **DEALT** — the dealer has published `ea_pk` and one ECIES-encrypted `ea_sk` share per validator. Each validator's node must decrypt its share and auto-ack within 30 seconds (`phase_timeout`). If fewer than 2/3 ack in time, the state resets to REGISTERING and the ceremony must be restarted.
 - **CONFIRMED** — all validators have acknowledged. The chain is ready for voting.
 
-## Phase 1 — Register Pallas keys
+## Roles
+
+- **Every validator** — registers their Pallas public key in Phase 1.
+- **Dealer** — one designated validator (typically genesis) who runs Phase 2 once all registrations are on-chain. The dealer holds `ea.sk` and `ea.pk`.
+
+## Phase 1 — Register Pallas keys (every validator)
 
 Each validator submits their Pallas public key (`~/.zallyd/pallas.pk`). This key is used in Phase 2 to ECIES-encrypt that validator's copy of `ea_sk`.
 
 ```bash
-zallyd tx vote register-pallas-key \
-  --from validator \
-  --keyring-backend test \
-  --home ~/.zallyd \
-  --chain-id zvote-1 \
-  --node tcp://localhost:26657 \
-  --yes
+./ceremony.sh register
 ```
 
-Wait ~6 seconds for the block to commit, then confirm registration:
+Check how many validators have registered at any time:
 
 ```bash
-curl -s http://localhost:1318/zally/v1/ceremony | jq '.ceremony.validators | length'
-# Should print 1 (or however many validators have registered)
+./ceremony.sh status
 ```
 
-## Phase 2 — Deal the EA key
+## Phase 2 — Deal the EA key (dealer only)
 
-Once all validators have registered, the genesis validator (dealer) encrypts `ea_sk` for each registered validator and broadcasts the deal.
-
-**2a. Produce `payloads.json`** — queries the chain for all registered Pallas keys and ECIES-encrypts `ea_sk` for each:
+Once all validators have registered, the dealer runs:
 
 ```bash
-zallyd encrypt-ea-key ~/.zallyd/ea.sk \
-  --node http://localhost:1318 \
-  --output /tmp/payloads.json
+./ceremony.sh run
 ```
 
-Each entry in `payloads.json` contains the recipient's `validator_address`, an `ephemeral_pk` (random per-recipient Pallas point), and a `ciphertext` (32-byte `ea_sk` + 16-byte Poly1305 tag, encrypted with ChaCha20-Poly1305 using an ECDH-derived key).
+This is fully automated: it registers the dealer's own key, waits until that registration is confirmed on-chain, encrypts `ea_sk` for every registered validator, submits the deal transaction (failing immediately on a non-zero response code), then polls until the ceremony reaches `CONFIRMED`.
 
-**2b. Submit the deal** — publishes `ea_pk` on-chain alongside the encrypted payloads. Transitions `REGISTERING → DEALT` and starts the 30-second ack window:
+> **Note:** all non-dealer validators must have already run `./ceremony.sh register` before the dealer runs `./ceremony.sh run`. The dealer deals to exactly the set of validators registered at the moment `deal` is submitted — latecomers require a reset.
+
+If you want to run the deal step separately (e.g. you registered manually first):
 
 ```bash
-EA_PK_HEX=$(xxd -p ~/.zallyd/ea.pk | tr -d '\n')
-
-zallyd tx vote deal-ea-key "$EA_PK_HEX" /tmp/payloads.json \
-  --from validator \
-  --keyring-backend test \
-  --chain-id zvote-1 \
-  --node tcp://localhost:26657 \
-  --yes
+./ceremony.sh deal   # encrypt + broadcast
+./ceremony.sh wait   # poll until CONFIRMED
 ```
 
-## Phase 3 — Auto-ack (automatic)
+`deal` internally:
+1. Queries all registered Pallas keys and ECIES-encrypts `ea_sk` for each, writing payloads to `/tmp/payloads.json`.
+2. Submits a `deal-ea-key` transaction containing `ea_pk` and the encrypted payloads, transitioning `REGISTERING → DEALT` and starting the 30-second ack window.
+
+## Phase 3 — Auto-ack (automatic, every validator)
 
 No manual action required. On every block while the ceremony is `DEALT`, each node's `PrepareProposal` handler:
 
@@ -83,19 +77,31 @@ grep pallas_sk_path ~/.zallyd/config/app.toml
 ## Verify completion
 
 ```bash
-zallyd q vote ceremony-state
-# status: CEREMONY_STATUS_CONFIRMED
+./ceremony.sh status
 ```
+
+The state field should read `3` (CONFIRMED).
 
 ## Resetting the ceremony
 
-By resetting the ceremony, we are back to the state where more validators can join.
+To return the ceremony to `REGISTERING` (all validators must re-register):
 
+```bash
+./ceremony.sh reset
 ```
-zallyd tx vote reinitialize-election-authority \
-  --from validator \
-  --keyring-backend test \
-  --chain-id zvote-1 \
-  --node tcp://localhost:26657 \
-  --yes
-```
+
+## Environment overrides
+
+All defaults can be overridden via environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `ZALLY_HOME` | `~/.zallyd` | Node home directory |
+| `ZALLY_CHAIN_ID` | `zvote-1` | Chain ID |
+| `ZALLY_NODE_RPC` | `tcp://localhost:26657` | Tendermint RPC endpoint |
+| `ZALLY_REST_API` | `http://localhost:1318` | REST API base URL |
+| `ZALLY_FROM` | `validator` | Key name for signing |
+| `ZALLY_KEYRING` | `test` | Keyring backend |
+| `ZALLY_EA_SK` | `$ZALLY_HOME/ea.sk` | Path to EA secret key |
+| `ZALLY_EA_PK` | `$ZALLY_HOME/ea.pk` | Path to EA public key |
+| `ZALLY_PAYLOADS` | `/tmp/payloads.json` | Path for encrypted payloads |
