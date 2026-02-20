@@ -206,7 +206,7 @@ if [ -n "\$IS_VALIDATOR" ]; then
   echo "Already registered as validator: \${IS_VALIDATOR}"
 else
   echo "Registering as validator..."
-  create-val-tx --moniker "\${MONIKER}" --amount 5stake --home "\${HOME_DIR}"
+  create-val-tx --moniker "\${MONIKER}" --amount 5stake --home "\${HOME_DIR}" --rpc-url tcp://localhost:26657
   echo "Validator registered."
 fi
 
