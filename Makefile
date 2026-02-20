@@ -14,7 +14,8 @@ SYNC_HEIGHT ?=
 	test-halo2 test-halo2-ante test-redpallas test-redpallas-ante test-all-ffi \
 	ingest ingest-bootstrap ingest-status ingest-test ingest-proof ingest-clean ingest-serve \
 	ingest-test-integration \
-	up down status
+	up down status \
+	ceremony-prod
 
 install:
 	$(MAKE) -C $(SDK_DIR) install
@@ -126,6 +127,22 @@ ingest-clean: ## Remove nullifier build artifacts and database
 
 ingest-test-integration: ## Run IMT ↔ delegation-circuit ZK integration test
 	$(MAKE) -C $(INGEST_DIR) test-integration
+
+# ── Ceremony ─────────────────────────────────────────────────────────
+
+CEREMONY_PROD_ARGS ?=
+
+ceremony-prod: ## Run ceremony.sh with production chain env vars; pass command via CEREMONY_PROD_ARGS or as trailing args
+	@ZALLY_HOME=/opt/zally-chain/.zallyd-val1 \
+	ZALLY_NODE_RPC=tcp://127.0.0.1:26157 \
+	ZALLY_REST_API=http://localhost:1418 \
+	ZALLY_FROM=validator \
+	ZALLY_KEYRING=test \
+	./ceremony.sh $(CEREMONY_PROD_ARGS) $(filter-out $@,$(MAKECMDGOALS))
+
+# absorb any extra word-goals (e.g. "reset") so make doesn't treat them as targets
+%:
+	@:
 
 # ── Full Stack ───────────────────────────────────────────────────────
 
