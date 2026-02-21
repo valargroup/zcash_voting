@@ -154,10 +154,10 @@ struct ResultsView: View {
     private func proposalResultCard(proposal: Proposal, index: Int) -> some View {
         let tally = store.tallyResults[proposal.id]
         let rawEntries = tally?.entries ?? []
-        // Backfill missing options (Support=0, Oppose=1) so they always display.
+        // Backfill missing options so they always display (even with 0 votes).
         let knownDecisions = Set(rawEntries.map(\.decision))
-        let backfilled: [TallyResult.Entry] = [0, 1].compactMap { d in
-            knownDecisions.contains(UInt32(d)) ? nil : TallyResult.Entry(decision: UInt32(d), amount: 0)
+        let backfilled: [TallyResult.Entry] = proposal.options.compactMap { option in
+            knownDecisions.contains(option.index) ? nil : TallyResult.Entry(decision: option.index, amount: 0)
         }
         let entries = (rawEntries + backfilled).sorted(by: { $0.decision < $1.decision })
         let totalAmount = entries.reduce(UInt64(0)) { $0 + $1.amount }
@@ -190,13 +190,13 @@ struct ResultsView: View {
                 let winnerLabel = optionLabel(for: winner.decision, proposal: proposal)
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(colorForDecision(winner.decision))
+                        .foregroundStyle(colorForDecision(winner.decision, proposal: proposal))
                     Text("Winner: \(winnerLabel)")
                         .zFont(.semiBold, size: 14, style: Design.Text.primary)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(colorForDecision(winner.decision).opacity(0.08))
+                .background(colorForDecision(winner.decision, proposal: proposal).opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
@@ -208,7 +208,7 @@ struct ResultsView: View {
                     label: label,
                     amount: entry.amount,
                     total: totalAmount,
-                    color: colorForDecision(entry.decision),
+                    color: colorForDecision(entry.decision, proposal: proposal),
                     isWinner: isWinner
                 )
             }
@@ -281,13 +281,7 @@ struct ResultsView: View {
         }
     }
 
-    private func colorForDecision(_ decision: UInt32) -> Color {
-        switch decision {
-        case 0: return .green
-        case 1: return .red
-        case 2: return .blue
-        case 3: return .purple
-        default: return .orange
-        }
+    private func colorForDecision(_ decision: UInt32, proposal: Proposal) -> Color {
+        voteOptionColor(for: decision, total: proposal.options.count)
     }
 }

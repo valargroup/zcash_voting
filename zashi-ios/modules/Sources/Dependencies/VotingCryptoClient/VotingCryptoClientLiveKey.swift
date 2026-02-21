@@ -567,21 +567,9 @@ enum VotingCryptoError: LocalizedError {
 
 
 private extension VoteChoice {
-    var ffiValue: UInt32 {
-        switch self {
-        case .support: return 0
-        case .oppose: return 1
-        case .skip: return 2
-        }
-    }
+    var ffiValue: UInt32 { index }
 
-    static func fromFFI(_ value: UInt32) -> VoteChoice {
-        switch value {
-        case 0: return .support
-        case 1: return .oppose
-        default: return .skip
-        }
-    }
+    static func fromFFI(_ value: UInt32) -> VoteChoice { .option(value) }
 }
 
 public extension Data {

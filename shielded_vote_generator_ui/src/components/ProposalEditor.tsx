@@ -3,6 +3,24 @@ import { Plus, Trash2, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { Proposal, ProposalType } from "../types";
 
+// Matches the iOS voteOptionColor palette in VotingComponents.swift.
+// For 2-option proposals: green, red. For 3+: cycles through 8 colors.
+const VOTE_OPTION_COLORS = [
+  "#22c55e", // green
+  "#ef4444", // red
+  "#3b82f6", // blue
+  "#a855f7", // purple
+  "#f97316", // orange
+  "#14b8a6", // teal
+  "#ec4899", // pink
+  "#6366f1", // indigo
+];
+
+function optionColor(index: number, total: number): string {
+  if (total === 2) return index === 0 ? VOTE_OPTION_COLORS[0] : VOTE_OPTION_COLORS[1];
+  return VOTE_OPTION_COLORS[index % VOTE_OPTION_COLORS.length];
+}
+
 interface ProposalEditorProps {
   proposal: Proposal;
   onUpdate: (patch: Partial<Proposal>) => void;
@@ -122,9 +140,12 @@ export function ProposalEditor({ proposal, onUpdate, readonly = false }: Proposa
             Supported options
           </label>
           <div className="space-y-1.5">
-            {proposal.options.map((option) => (
+            {proposal.options.map((option, i) => (
               <div key={option.id} className="flex items-center gap-2">
-                <span className="text-[10px] text-text-muted w-3">-</span>
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: optionColor(i, proposal.options.length) }}
+                />
                 <span className="text-xs text-text-primary">{option.label || "Unnamed"}</span>
               </div>
             ))}
@@ -173,8 +194,12 @@ export function ProposalEditor({ proposal, onUpdate, readonly = false }: Proposa
         {/* Options Editor */}
         <div>
           <div className="space-y-1.5">
-            {proposal.options.map((option) => (
+            {proposal.options.map((option, i) => (
               <div key={option.id} className="flex items-center gap-2">
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: optionColor(i, proposal.options.length) }}
+                />
                 <input
                   type="text"
                   value={option.label}

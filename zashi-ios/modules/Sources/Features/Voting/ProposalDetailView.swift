@@ -157,24 +157,17 @@ struct ProposalDetailView: View {
                     .padding(.bottom, 4)
                 }
 
-                voteButton(
-                    title: "Support",
-                    icon: "hand.thumbsup.fill",
-                    color: .green,
-                    isSelected: pendingChoice == .support,
-                    enabled: votingEnabled
-                ) {
-                    store.send(.castVote(proposalId: proposal.id, choice: .support))
-                }
-
-                voteButton(
-                    title: "Oppose",
-                    icon: "hand.thumbsdown.fill",
-                    color: .red,
-                    isSelected: pendingChoice == .oppose,
-                    enabled: votingEnabled
-                ) {
-                    store.send(.castVote(proposalId: proposal.id, choice: .oppose))
+                ForEach(proposal.options, id: \.index) { option in
+                    let choice = VoteChoice.option(option.index)
+                    voteButton(
+                        title: option.label,
+                        icon: voteOptionIcon(for: option.index, total: proposal.options.count),
+                        color: voteOptionColor(for: option.index, total: proposal.options.count),
+                        isSelected: pendingChoice == choice,
+                        enabled: votingEnabled
+                    ) {
+                        store.send(.castVote(proposalId: proposal.id, choice: choice))
+                    }
                 }
             }
         }
@@ -189,11 +182,15 @@ struct ProposalDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Vote recorded")
                     .zFont(.semiBold, size: 15, style: Design.Text.primary)
-                Text(choice.label)
+                Text(optionLabel(for: choice))
                     .zFont(.medium, size: 14, style: Design.Text.secondary)
             }
             Spacer()
-            VoteChip(choice: choice)
+            VoteChip(
+                choice: choice,
+                label: optionLabel(for: choice),
+                color: voteColor(choice)
+            )
         }
         .padding(16)
         .background(voteColor(choice).opacity(0.08))
@@ -221,7 +218,11 @@ struct ProposalDetailView: View {
                         .zFont(.regular, size: 12, style: Design.Text.tertiary)
                 }
                 Spacer()
-                VoteChip(choice: choice)
+                VoteChip(
+                    choice: choice,
+                    label: optionLabel(for: choice),
+                    color: voteColor(choice)
+                )
             }
 
             // Step progress bar
@@ -300,7 +301,7 @@ struct ProposalDetailView: View {
                         Circle()
                             .fill(voteColor(choice).opacity(0.12))
                             .frame(width: 64, height: 64)
-                        Image(systemName: choice == .support ? "hand.thumbsup.fill" : "hand.thumbsdown.fill")
+                        Image(systemName: voteOptionIcon(for: choice.index, total: proposal.options.count))
                             .font(.system(size: 28))
                             .foregroundStyle(voteColor(choice))
                     }
@@ -313,7 +314,7 @@ struct ProposalDetailView: View {
                         .padding(.bottom, 6)
 
                     // Choice
-                    Text(choice.label)
+                    Text(optionLabel(for: choice))
                         .zFont(.semiBold, size: 16, style: Design.Text.primary)
                         .foregroundStyle(voteColor(choice))
                         .padding(.bottom, 12)
@@ -342,7 +343,7 @@ struct ProposalDetailView: View {
                             impactFeedback.impactOccurred()
                             store.send(.confirmVote)
                         } label: {
-                            Text("Confirm \(choice.label)")
+                            Text("Confirm \(optionLabel(for: choice))")
                                 .fontWeight(.semibold)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
@@ -413,10 +414,10 @@ struct ProposalDetailView: View {
     }
 
     private func voteColor(_ choice: VoteChoice) -> Color {
-        switch choice {
-        case .support: return .green
-        case .oppose: return .red
-        case .skip: return .gray
-        }
+        voteOptionColor(for: choice.index, total: proposal.options.count)
+    }
+
+    private func optionLabel(for choice: VoteChoice) -> String {
+        proposal.options.first { $0.index == choice.index }?.label ?? "Option \(choice.index)"
     }
 }

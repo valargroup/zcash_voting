@@ -251,10 +251,18 @@ struct ProposalListView: View {
                         HStack(spacing: 4) {
                             ProgressView()
                                 .scaleEffect(0.7)
-                            VoteChip(choice: vote)
+                            VoteChip(
+                                choice: vote,
+                                label: vote.flatMap { v in proposal.options.first { $0.index == v.index }?.label },
+                                color: vote.map { voteOptionColor(for: $0.index, total: proposal.options.count) }
+                            )
                         }
                     } else {
-                        VoteChip(choice: vote)
+                        VoteChip(
+                            choice: vote,
+                            label: vote.flatMap { v in proposal.options.first { $0.index == v.index }?.label },
+                            color: vote.map { voteOptionColor(for: $0.index, total: proposal.options.count) }
+                        )
                     }
                 }
 
@@ -274,7 +282,7 @@ struct ProposalListView: View {
             RoundedRectangle(cornerRadius: 16)
                 .stroke(
                     vote != nil
-                        ? voteColor(vote).opacity(0.3)
+                        ? voteColor(vote, proposal: proposal).opacity(0.3)
                         : Design.Surfaces.strokeSecondary.color(colorScheme),
                     lineWidth: 1
                 )
@@ -288,12 +296,8 @@ struct ProposalListView: View {
 
     // MARK: - Helpers
 
-    private func voteColor(_ vote: VoteChoice?) -> Color {
+    private func voteColor(_ vote: VoteChoice?, proposal: Proposal) -> Color {
         guard let vote else { return .clear }
-        switch vote {
-        case .support: return .green
-        case .oppose: return .red
-        case .skip: return .gray
-        }
+        return voteOptionColor(for: vote.index, total: proposal.options.count)
     }
 }

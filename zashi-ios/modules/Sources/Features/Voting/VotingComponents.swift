@@ -22,18 +22,37 @@ struct PrototypeBanner: View {
     }
 }
 
+// MARK: - Vote Option Palette
+
+/// Color for a vote option index. For 2-option proposals this preserves the classic
+/// green (Support) / red (Oppose) look; for 3+ options it cycles through a palette.
+func voteOptionColor(for index: UInt32, total: Int) -> Color {
+    if total == 2 { return index == 0 ? .green : .red }
+    let palette: [Color] = [.green, .red, .blue, .purple, .orange, .teal, .pink, .indigo]
+    return palette[Int(index) % palette.count]
+}
+
+/// SF Symbol for a vote option index. For 2-option proposals this preserves the classic
+/// thumbs-up / thumbs-down icons; for 3+ options it uses numbered circles.
+func voteOptionIcon(for index: UInt32, total: Int) -> String {
+    if total == 2 { return index == 0 ? "hand.thumbsup.fill" : "hand.thumbsdown.fill" }
+    return "\(index + 1).circle.fill"
+}
+
 // MARK: - Vote Chip
 
 struct VoteChip: View {
     let choice: VoteChoice?
+    var label: String?
+    var color: Color?
 
     var body: some View {
-        Text(label)
+        Text(resolvedLabel)
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(foregroundColor)
+            .foregroundStyle(choice != nil ? .white : .secondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(backgroundColor)
+            .background(resolvedBackground)
             .clipShape(Capsule())
             .overlay(
                 Capsule()
@@ -41,27 +60,16 @@ struct VoteChip: View {
             )
     }
 
-    private var label: String {
-        guard let choice else { return "Not voted" }
-        return choice.label
+    private var resolvedLabel: String {
+        if let label { return label }
+        guard choice != nil else { return "Not voted" }
+        return "Voted"
     }
 
-    private var foregroundColor: Color {
-        guard let choice else { return .secondary }
-        switch choice {
-        case .support: return .white
-        case .oppose: return .white
-        case .skip: return .white
-        }
-    }
-
-    private var backgroundColor: Color {
-        guard let choice else { return .clear }
-        switch choice {
-        case .support: return .green
-        case .oppose: return .red
-        case .skip: return .gray
-        }
+    private var resolvedBackground: Color {
+        if let color { return color }
+        guard choice != nil else { return .clear }
+        return .gray
     }
 
     private var borderColor: Color {

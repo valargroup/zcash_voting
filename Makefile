@@ -170,6 +170,7 @@ up: ## Init SDK, bootstrap+ingest nullifiers, then run ingest-serve and start in
 	$(MAKE) init
 	$(MAKE) ingest-bootstrap
 	$(MAKE) ingest
+	@rm -f $(INGEST_DIR)/nullifiers.tree
 	@nohup $(MAKE) ingest-serve > ingest-serve.log 2>&1 & \
 	nohup $(MAKE) start > zallyd.log 2>&1 & \
 	printf '\033[32mStarted: ingest-serve → ingest-serve.log | zallyd → zallyd.log\033[0m\n'

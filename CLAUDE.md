@@ -69,6 +69,31 @@ The IMT service lives in `nullifier-ingest/`. Data files (`nullifiers.bin`, `nul
 - Alternatively, use `make ingest-resync SYNC_HEIGHT=<height>` which deletes the tree sidecar automatically after ingestion
 - `eprintln!` from Rust code shows up in the Xcode debug console when testing the iOS app
 
+## Local Chain Setup
+
+Starting all services for local development: `make up` from the repo root. This starts the chain (`zallyd`), bootstraps nullifiers, and runs the IMT query server.
+
+### Full local setup sequence
+
+The correct sequence to start everything from scratch:
+
+1. `make up` (from repo root) — inits chain, bootstraps + ingests nullifiers, starts zallyd + IMT query server
+2. `make ceremony` (from `sdk/`) — runs EA key ceremony (required before creating voting rounds)
+3. `npm run dev` (from `shielded_vote_generator_ui/`) — starts admin UI on port 5173
+4. Rebuild iOS app in Xcode and run
+
+If the IMT query server returns HTTP 502 with a height mismatch, the tree sidecar is stale. Fix: `pkill query-server && rm nullifier-ingest/nullifiers.tree && make ingest-serve`. The `make up` target now deletes the stale tree automatically, but manual `make ingest` followed by `make ingest-serve` still requires the manual `rm`.
+
+### Important: `make install-ffi` vs `make install`
+
+- **`make install`** builds `zallyd` **without** halo2/redpallas support. The embedded helper server will be **disabled** (logs: "helper server disabled: binary built without halo2 support"). Votes submitted from the iOS app will fail with **HTTP 503 "helper unavailable"**.
+- **`make install-ffi`** builds `zallyd` **with** halo2 and redpallas build tags. This is required for the helper server to run. **Always use `make install-ffi`** when rebuilding `zallyd` for local testing.
+- `make init` already calls `install-ffi`, so a fresh `make up` is fine. The issue arises when you manually run `make install` to pick up a Go code change — this silently downgrades the binary.
+
+### Ceremony requirement
+
+Before creating a voting round, the EA key ceremony must be in CONFIRMED status. Run `make ceremony` from `sdk/` after `make up`. Check status: `curl -s http://localhost:1318/zally/v1/ceremony`.
+
 ## Code Change Guidelines
 
 **Never consider backwards compatibility** unless explicitly told to do so. Feel free to rename functions, change APIs, delete unused code, and refactor without worrying about breaking existing consumers. This is a research codebase where clean code matters more than stability.

@@ -23,6 +23,24 @@ import * as cosmosTx from "./api/cosmosTx";
 import { useWallet, DEFAULT_DEV_KEY } from "./hooks/useWallet";
 import type { UseWallet } from "./hooks/useWallet";
 
+// Matches the iOS voteOptionColor palette in VotingComponents.swift.
+// For 2-option proposals: green, red. For 3+: cycles through 8 colors.
+const VOTE_OPTION_COLORS = [
+  "#22c55e", // green
+  "#ef4444", // red
+  "#3b82f6", // blue
+  "#a855f7", // purple
+  "#f97316", // orange
+  "#14b8a6", // teal
+  "#ec4899", // pink
+  "#6366f1", // indigo
+];
+
+function optionColor(index: number, total: number): string {
+  if (total === 2) return index === 0 ? VOTE_OPTION_COLORS[0] : VOTE_OPTION_COLORS[1];
+  return VOTE_OPTION_COLORS[index % VOTE_OPTION_COLORS.length];
+}
+
 type Section = "about" | "rounds" | "builder" | "json" | "downloads" | "preview" | "settings" | "vote-status" | "validators";
 
 const SECTION_PATHS: Record<Section, string> = {
@@ -2443,26 +2461,11 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
                         return winnerIndices.size > 1;
                       })();
 
-                      // Detect binary (Support/Oppose) proposals
-                      const optionLabels = options.map((o) => (o.label ?? "").toLowerCase());
-                      const isBinary =
-                        options.length === 2 &&
-                        optionLabels.includes("support") &&
-                        optionLabels.includes("oppose");
-
-                      // Color helpers for binary votes
-                      const binaryColor = (label: string) => {
-                        const l = (label ?? "").toLowerCase();
-                        if (l === "support") return { bg: "bg-success", text: "text-success" };
-                        return { bg: "bg-danger", text: "text-danger" };
-                      };
-
-                      // Winner color for banner
+                      // Winner color for banner — uses the option palette
                       const winnerColor = (() => {
-                        if (!isBinary || winnerIndices.size === 0) return { bg: "bg-accent/10", text: "text-accent" };
-                        const winnerOpt = options.find((o) => winnerIndices.has(o.index ?? 0));
-                        const c = binaryColor(winnerOpt?.label ?? "");
-                        return { bg: `${c.bg}/10`, text: c.text };
+                        if (winnerIndices.size === 0) return optionColor(0, options.length);
+                        const winnerIdx = [...winnerIndices][0];
+                        return optionColor(winnerIdx, options.length);
                       })();
 
                       const totalValue = isFinalized
@@ -2494,9 +2497,12 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
 
                           {/* Winner banner — only when finalized */}
                           {isFinalized && winnerIndices.size > 0 && (
-                            <div className={`flex items-center gap-1.5 mb-2 px-2 py-1 ${winnerColor.bg} rounded-md`}>
-                              <span className={`${winnerColor.text} text-xs`}>{isTied ? "⚖" : "✓"}</span>
-                              <span className={`text-[11px] font-semibold ${winnerColor.text}`}>
+                            <div
+                              className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-md"
+                              style={{ backgroundColor: `${winnerColor}18` }}
+                            >
+                              <span className="text-xs" style={{ color: winnerColor }}>{isTied ? "⚖" : "✓"}</span>
+                              <span className="text-[11px] font-semibold" style={{ color: winnerColor }}>
                                 {isTied ? "Tie: " : "Winner: "}
                                 {options
                                   .filter((o) => winnerIndices.has(o.index ?? 0))
@@ -2523,16 +2529,21 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
                               const pct = (barValue / maxVal) * 100;
                               const isWinner = winnerIndices.has(opt.index ?? 0);
 
+                              const oColor = optionColor(opt.index ?? 0, options.length);
+
                               return (
                                 <div key={opt.index} className="space-y-0.5">
                                   <div className="flex items-center justify-between">
                                     <span
-                                      className={`text-[11px] ${
-                                        isWinner
-                                          ? `font-semibold ${isBinary ? binaryColor(opt.label ?? "").text : "text-text-primary"}`
-                                          : "text-text-secondary"
+                                      className={`text-[11px] flex items-center gap-1.5 ${
+                                        isWinner ? "font-semibold" : "text-text-secondary"
                                       }`}
+                                      style={isWinner ? { color: oColor } : undefined}
                                     >
+                                      <span
+                                        className="w-2 h-2 rounded-full shrink-0 inline-block"
+                                        style={{ backgroundColor: oColor }}
+                                      />
                                       {isWinner && (isTied ? "⚖ " : "✓ ")}
                                       {opt.label ?? `Option ${opt.index}`}
                                     </span>
@@ -2548,19 +2559,11 @@ function VoteStatusView({ expectRoundCount }: { expectRoundCount?: number | null
                                   </div>
                                   <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
                                     <div
-                                      className={`h-full rounded-full transition-all duration-500 ${
-                                        isBinary
-                                          ? isWinner
-                                            ? binaryColor(opt.label ?? "").bg
-                                            : `${binaryColor(opt.label ?? "").bg}/60`
-                                          : isWinner
-                                            ? "bg-accent"
-                                            : isFinalized
-                                              ? "bg-accent/70"
-                                              : "bg-accent/60"
-                                      }`}
+                                      className="h-full rounded-full transition-all duration-500"
                                       style={{
                                         width: `${Math.max(barValue > 0 ? 2 : 0, pct)}%`,
+                                        backgroundColor: oColor,
+                                        opacity: isWinner ? 1 : 0.6,
                                       }}
                                     />
                                   </div>
@@ -2673,12 +2676,15 @@ function PreviewView({ round, onBack }: { round: VotingRound; onBack: () => void
                   </p>
                 )}
                 <div className="space-y-1.5">
-                  {p.options.map((opt) => (
+                  {p.options.map((opt, i) => (
                     <div
                       key={opt.id}
                       className="flex items-center gap-2 px-3 py-2 bg-surface-2 rounded-lg border border-border-subtle hover:border-accent/30 transition-colors cursor-pointer"
                     >
-                      <div className="w-3 h-3 rounded-full border-2 border-text-muted" />
+                      <div
+                        className="w-3 h-3 rounded-full shrink-0"
+                        style={{ backgroundColor: optionColor(i, p.options.length) }}
+                      />
                       <span className="text-xs text-text-primary">
                         {opt.label}
                       </span>
