@@ -198,7 +198,10 @@ struct ProposalListView: View {
     @ViewBuilder
     private func zkpBanner() -> some View {
         if store.delegationProofStatus != .notStarted && store.delegationProofStatus != .complete {
-            ZKPStatusBanner(proofStatus: store.delegationProofStatus)
+            ZKPStatusBanner(
+                proofStatus: store.delegationProofStatus,
+                isPreparingWitnesses: store.witnessStatus == .inProgress
+            )
         }
     }
 
