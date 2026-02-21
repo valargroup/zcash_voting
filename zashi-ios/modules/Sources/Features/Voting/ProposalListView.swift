@@ -247,7 +247,15 @@ struct ProposalListView: View {
                 Spacer(minLength: 8)
 
                 if vote != nil {
-                    VoteChip(choice: vote)
+                    if store.submittingProposalId == proposal.id {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            VoteChip(choice: vote)
+                        }
+                    } else {
+                        VoteChip(choice: vote)
+                    }
                 }
 
                 Image(systemName: "chevron.right")

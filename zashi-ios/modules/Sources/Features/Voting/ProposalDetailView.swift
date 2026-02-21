@@ -148,6 +148,13 @@ struct ProposalDetailView: View {
                         }
                     }
                     .padding(.bottom, 4)
+                } else if store.isSubmittingVote {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Submitting vote on another proposal...")
+                            .zFont(.regular, size: 13, style: Design.Text.secondary)
+                    }
+                    .padding(.bottom, 4)
                 }
 
                 voteButton(

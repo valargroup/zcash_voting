@@ -247,6 +247,8 @@ public struct Voting {
         public var voteSubmissionError: String?
         /// Which bundle is currently being voted (0-based), nil when not submitting.
         public var currentVoteBundleIndex: UInt32?
+        /// Which proposal is currently being submitted, nil when idle.
+        public var submittingProposalId: UInt32?
 
         /// Label for the current vote submission step, with bundle progress when applicable.
         public var voteSubmissionStepLabel: String? {
@@ -463,6 +465,7 @@ public struct Voting {
                 state.hotkeyAddress = nil
                 state.pendingVote = nil
                 state.isSubmittingVote = false
+                state.submittingProposalId = nil
                 state.voteSubmissionStep = nil
                 state.voteSubmissionError = nil
                 state.currentVoteBundleIndex = nil
@@ -518,7 +521,9 @@ public struct Voting {
                     state.screenStack = [.roundsList, .proposalList]
                     return .merge(
                         .send(.startRoundStatusPolling),
-                        .send(.startActiveRoundPipeline)
+                        // Defer pipeline start so SwiftUI renders the navigation
+                        // transition before the reducer processes the pipeline action.
+                        .run { send in await send(.startActiveRoundPipeline) }
                     )
                 case .tallying:
                     state.screenStack = [.roundsList, .tallying]
@@ -1313,6 +1318,7 @@ public struct Voting {
                 state.votes[pending.proposalId] = pending.choice
                 state.pendingVote = nil
                 state.isSubmittingVote = true
+                state.submittingProposalId = pending.proposalId
                 state.voteSubmissionError = nil
                 state.lastVoteCommitmentTxHash = nil
 
@@ -1433,6 +1439,7 @@ public struct Voting {
 
             case .voteSubmissionFailed(let proposalId, let error):
                 state.isSubmittingVote = false
+                state.submittingProposalId = nil
                 state.voteSubmissionStep = nil
                 state.voteSubmissionError = error
                 state.currentVoteBundleIndex = nil
@@ -1451,6 +1458,7 @@ public struct Voting {
 
             case .advanceAfterVote:
                 state.isSubmittingVote = false
+                state.submittingProposalId = nil
                 state.voteSubmissionStep = nil
                 state.voteSubmissionError = nil
                 state.currentVoteBundleIndex = nil
