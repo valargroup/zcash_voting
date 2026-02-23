@@ -165,24 +165,6 @@ pub struct VotingRoundParams {
 }
 
 #[derive(Clone, uniffi::Record)]
-pub struct DelegationAction {
-    pub action_bytes: Vec<u8>,
-    pub rk: Vec<u8>,
-    pub gov_nullifiers: Vec<Vec<u8>>,
-    pub van: Vec<u8>,
-    pub van_comm_rand: Vec<u8>,
-    pub dummy_nullifiers: Vec<Vec<u8>>,
-    pub rho_signed: Vec<u8>,
-    pub padded_cmx: Vec<Vec<u8>>,
-    pub nf_signed: Vec<u8>,
-    pub cmx_new: Vec<u8>,
-    pub alpha: Vec<u8>,
-    pub spend_auth_sig: Option<Vec<u8>>,
-    pub rseed_signed: Vec<u8>,
-    pub rseed_output: Vec<u8>,
-}
-
-#[derive(Clone, uniffi::Record)]
 pub struct GovernancePczt {
     pub pczt_bytes: Vec<u8>,
     pub rk: Vec<u8>,
@@ -199,6 +181,8 @@ pub struct GovernancePczt {
     pub rseed_output: Vec<u8>,
     pub action_bytes: Vec<u8>,
     pub action_index: u32,
+    pub padded_note_secrets: Vec<Vec<Vec<u8>>>,
+    pub pczt_sighash: Vec<u8>,
 }
 
 impl From<voting::GovernancePczt> for GovernancePczt {
@@ -219,6 +203,12 @@ impl From<voting::GovernancePczt> for GovernancePczt {
             rseed_output: g.rseed_output,
             action_bytes: g.action_bytes,
             action_index: g.action_index as u32,
+            padded_note_secrets: g
+                .padded_note_secrets
+                .into_iter()
+                .map(|(rho, rseed)| vec![rho, rseed])
+                .collect(),
+            pczt_sighash: g.pczt_sighash,
         }
     }
 }
@@ -462,48 +452,6 @@ impl From<VotingRoundParams> for voting::VotingRoundParams {
     }
 }
 
-impl From<voting::DelegationAction> for DelegationAction {
-    fn from(a: voting::DelegationAction) -> Self {
-        Self {
-            action_bytes: a.action_bytes,
-            rk: a.rk,
-            gov_nullifiers: a.gov_nullifiers,
-            van: a.van,
-            van_comm_rand: a.van_comm_rand,
-            dummy_nullifiers: a.dummy_nullifiers,
-            rho_signed: a.rho_signed,
-            padded_cmx: a.padded_cmx,
-            nf_signed: a.nf_signed,
-            cmx_new: a.cmx_new,
-            alpha: a.alpha,
-            spend_auth_sig: a.spend_auth_sig,
-            rseed_signed: a.rseed_signed,
-            rseed_output: a.rseed_output,
-        }
-    }
-}
-
-impl From<DelegationAction> for voting::DelegationAction {
-    fn from(a: DelegationAction) -> Self {
-        Self {
-            action_bytes: a.action_bytes,
-            rk: a.rk,
-            gov_nullifiers: a.gov_nullifiers,
-            van: a.van,
-            van_comm_rand: a.van_comm_rand,
-            dummy_nullifiers: a.dummy_nullifiers,
-            rho_signed: a.rho_signed,
-            padded_cmx: a.padded_cmx,
-            nf_signed: a.nf_signed,
-            cmx_new: a.cmx_new,
-            alpha: a.alpha,
-            spend_auth_sig: a.spend_auth_sig,
-            rseed_signed: a.rseed_signed,
-            rseed_output: a.rseed_output,
-        }
-    }
-}
-
 impl From<voting::EncryptedShare> for EncryptedShare {
     fn from(s: voting::EncryptedShare) -> Self {
         Self {
@@ -715,33 +663,6 @@ impl VotingDatabase {
         round_id: String,
     ) -> Result<u32, VotingError> {
         Ok(self.db.get_bundle_count(&round_id)?)
-    }
-
-    pub fn construct_delegation_action(
-        &self,
-        round_id: String,
-        bundle_index: u32,
-        notes: Vec<NoteInfo>,
-        fvk_bytes: Vec<u8>,
-        g_d_new_x: Vec<u8>,
-        pk_d_new_x: Vec<u8>,
-        hotkey_raw_address: Vec<u8>,
-        address_index: u32,
-    ) -> Result<DelegationAction, VotingError> {
-        let core_notes: Vec<voting::NoteInfo> = notes.into_iter().map(Into::into).collect();
-        Ok(self
-            .db
-            .construct_delegation_action(
-                &round_id,
-                bundle_index,
-                &core_notes,
-                &fvk_bytes,
-                &g_d_new_x,
-                &pk_d_new_x,
-                &hotkey_raw_address,
-                address_index,
-            )?
-            .into())
     }
 
     pub fn build_governance_pczt(
@@ -1084,27 +1005,6 @@ pub fn encrypt_shares(
 }
 
 #[uniffi::export]
-pub fn construct_delegation_action(
-    notes: Vec<NoteInfo>,
-    params: VotingRoundParams,
-    fvk_bytes: Vec<u8>,
-    g_d_new_x: Vec<u8>,
-    pk_d_new_x: Vec<u8>,
-    hotkey_raw_address: Vec<u8>,
-) -> Result<DelegationAction, VotingError> {
-    let core_notes: Vec<voting::NoteInfo> = notes.into_iter().map(Into::into).collect();
-    Ok(voting::action::construct_delegation_action(
-        &core_notes,
-        &params.into(),
-        &fvk_bytes,
-        &g_d_new_x,
-        &pk_d_new_x,
-        &hotkey_raw_address,
-    )?
-    .into())
-}
-
-#[uniffi::export]
 pub fn build_governance_pczt(
     notes: Vec<NoteInfo>,
     params: VotingRoundParams,
@@ -1167,7 +1067,7 @@ pub fn generate_delegation_inputs(
         message: format!("account_index must be < 2^31, got {}", account_index),
     })?;
 
-    // Derive the sender Orchard FVK bytes consumed by construct_delegation_action.
+    // Derive the sender Orchard FVK bytes consumed by build_governance_pczt.
     // These bytes include nk (middle 32 bytes), which is used for gov nullifier derivation.
     let sender_usk = match network_id {
         0 => UnifiedSpendingKey::from_seed(&MAIN_NETWORK, &sender_seed, account),

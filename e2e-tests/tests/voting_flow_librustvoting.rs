@@ -224,6 +224,8 @@ fn voting_flow_librustvoting_path() {
             &delegation_bundle.van_cmx,
             vote_proof_data.total_note_value,
             1, // address_index (matches delegation output_recipient = fvk.address_at(1, External))
+            &[], // padded_note_secrets (not needed for ZKP #2 test)
+            &[0u8; 32], // pczt_sighash
         )
         .expect("store_delegation_data");
     }
@@ -326,7 +328,7 @@ fn voting_flow_librustvoting_path() {
     assert_eq!(bundle.vote_commitment.len(), 32);
     assert_eq!(bundle.proposal_id, 1);
     assert!(!bundle.proof.is_empty());
-    assert_eq!(bundle.enc_shares.len(), 4, "should have 4 encrypted shares");
+    assert_eq!(bundle.enc_shares.len(), 5, "should have 5 encrypted shares");
     assert_eq!(bundle.shares_hash.len(), 32);
 
     // ---- Step 7b: Local proof verification (same binary = same VK) ----
