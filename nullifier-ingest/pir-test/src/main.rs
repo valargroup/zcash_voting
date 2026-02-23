@@ -15,9 +15,9 @@ use ff::{Field, PrimeField as _};
 use pasta_curves::Fp;
 use rand::Rng;
 
-use imt_tree::tree::{build_nf_ranges, build_sentinel_tree, precompute_empty_hashes, TREE_DEPTH};
+use imt_tree::tree::{build_nf_ranges, build_sentinel_tree};
 
-use pir_export::{build_pir_tree, extend_root, PIR_DEPTH, TIER1_LEAVES, TIER2_LEAVES};
+use pir_export::build_pir_tree;
 
 #[derive(Parser)]
 #[command(name = "pir-test", about = "PIR system end-to-end testing")]
@@ -204,7 +204,7 @@ fn run_local_inner(raw_nfs: &[Fp], num_proofs: usize) -> Result<()> {
             let idx = rng.gen_range(0..ranges.len());
             let [low, width] = ranges[idx];
             // Pick a random offset within the range
-            let low_u64 = u64::from_le_bytes(low.to_repr()[..8].try_into().unwrap());
+            let _low_u64 = u64::from_le_bytes(low.to_repr()[..8].try_into().unwrap());
             let width_u64 = u64::from_le_bytes(width.to_repr()[..8].try_into().unwrap());
             let offset_val = if width_u64 > 0 {
                 rng.gen_range(0..=width_u64.min(u64::MAX - 1))

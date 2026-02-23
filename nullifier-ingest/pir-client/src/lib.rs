@@ -221,15 +221,30 @@ impl PirClient {
         // Send to server
         let t1 = Instant::now();
         let url = format!("{}/tier1/query", self.server_url);
-        let response_bytes = self
+        eprintln!(
+            "  YPIR tier1 query payload: {} bytes (pqr={}, pp={})",
+            payload.len(),
+            pqr.len() * 8,
+            pp.len() * 8,
+        );
+        let send_result = self
             .http
             .post(&url)
             .body(payload)
             .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+            .await;
+        let resp = match send_result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  YPIR tier1 send error: {:?}", e);
+                return Err(e.into());
+            }
+        };
+        let status = resp.status();
+        let response_bytes = resp.bytes().await?;
+        if !status.is_success() {
+            anyhow::bail!("tier1 query failed: HTTP {} body={}", status, String::from_utf8_lossy(&response_bytes));
+        }
         eprintln!(
             "  YPIR tier1 response: {} bytes in {:.1}s",
             response_bytes.len(),

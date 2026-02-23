@@ -4,11 +4,44 @@
 //! that both the HTTP server (`main.rs`) and the test harness (`pir-test`)
 //! can use.
 
+use std::io::Cursor;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
-use ypir::params::params_for_scenario_simplepir;
-use ypir::server::{OfflinePrecomputedValues, YServer};
+use std::alloc::{alloc_zeroed, dealloc, Layout};
+
+use ypir::params::{params_for_scenario_simplepir, DbRowsCols, PtModulusBits};
+use ypir::serialize::{FilePtIter, OfflinePrecomputedValues};
+use ypir::server::YServer;
+
+/// 64-byte aligned u64 buffer for AVX-512 operations.
+struct Aligned64 {
+    ptr: *mut u64,
+    len: usize,
+    layout: Layout,
+}
+
+impl Aligned64 {
+    fn new(len: usize) -> Self {
+        let layout = Layout::from_size_align(len * 8, 64).unwrap();
+        let ptr = unsafe { alloc_zeroed(layout) as *mut u64 };
+        Self { ptr, len, layout }
+    }
+
+    fn as_slice(&self) -> &[u64] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u64] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+impl Drop for Aligned64 {
+    fn drop(&mut self) {
+        unsafe { dealloc(self.ptr as *mut u8, self.layout) }
+    }
+}
 
 // Re-export constants from pir-export for convenience.
 pub use pir_export::{
@@ -48,7 +81,7 @@ pub fn tier2_scenario() -> YpirScenario {
 /// Wraps the YPIR `YServer` and its offline precomputed values. Answers
 /// individual queries via `answer_query`.
 pub struct TierServer<'a> {
-    server: YServer<'a, u8>,
+    server: YServer<'a, u16>,
     offline: OfflinePrecomputedValues<'a>,
     scenario: YpirScenario,
 }
@@ -60,14 +93,28 @@ impl<'a> TierServer<'a> {
     /// This performs the expensive offline precomputation.
     pub fn new(data: &[u8], scenario: YpirScenario) -> Self {
         let t0 = Instant::now();
-        let params = params_for_scenario_simplepir(scenario.num_items, scenario.item_size_bits);
+        // Leak params so they live as long as 'a (process lifetime).
+        let params: &'a _ = Box::leak(Box::new(
+            params_for_scenario_simplepir(scenario.num_items as u64, scenario.item_size_bits as u64),
+        ));
 
         eprintln!(
             "  YPIR server init: {} items × {} bits",
             scenario.num_items, scenario.item_size_bits
         );
 
-        let server = YServer::<u8>::new(&params, data.iter(), true, false, true);
+        // Use FilePtIter to pack raw bytes into 14-bit u16 values.
+        // This matches how the YPIR standalone server reads database files.
+        let bytes_per_row = scenario.item_size_bits / 8;
+        let db_cols = params.db_cols_simplepir();
+        let pt_bits = params.pt_modulus_bits();
+        eprintln!(
+            "  FilePtIter: bytes_per_row={}, db_cols={}, pt_bits={}",
+            bytes_per_row, db_cols, pt_bits
+        );
+        let cursor = Cursor::new(data.to_vec());
+        let pt_iter = FilePtIter::new(cursor, bytes_per_row, db_cols, pt_bits);
+        let server = YServer::<u16>::new(params, pt_iter, true, false, true);
 
         let t1 = Instant::now();
         eprintln!(
@@ -75,7 +122,7 @@ impl<'a> TierServer<'a> {
             (t1 - t0).as_secs_f64()
         );
 
-        let offline = server.perform_offline_precomputation_simplepir(None);
+        let offline = server.perform_offline_precomputation_simplepir(None, None, None);
         eprintln!(
             "  YPIR offline precomputation done in {:.1}s",
             t1.elapsed().as_secs_f64()
@@ -99,29 +146,27 @@ impl<'a> TierServer<'a> {
         let pqr_byte_len =
             u64::from_le_bytes(query_bytes[..8].try_into().unwrap()) as usize;
 
-        let pqr: Vec<u64> = query_bytes[8..8 + pqr_byte_len]
-            .chunks_exact(8)
-            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        let pqr_u64_len = pqr_byte_len / 8;
+        let pp_u64_len = (query_bytes.len() - 8 - pqr_byte_len) / 8;
 
-        let pub_params: Vec<u64> = query_bytes[8 + pqr_byte_len..]
-            .chunks_exact(8)
-            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        // Copy into 64-byte aligned memory for AVX-512 operations.
+        let mut pqr = Aligned64::new(pqr_u64_len);
+        for (i, chunk) in query_bytes[8..8 + pqr_byte_len].chunks_exact(8).enumerate() {
+            pqr.as_mut_slice()[i] = u64::from_le_bytes(chunk.try_into().unwrap());
+        }
 
-        // Run the YPIR online computation
-        let response = self.server.perform_online_computation_simplepir(
-            &pqr,
+        let mut pub_params = Aligned64::new(pp_u64_len);
+        for (i, chunk) in query_bytes[8 + pqr_byte_len..].chunks_exact(8).enumerate() {
+            pub_params.as_mut_slice()[i] = u64::from_le_bytes(chunk.try_into().unwrap());
+        }
+
+        // Run the YPIR online computation (returns Vec<u8> directly)
+        self.server.perform_online_computation_simplepir(
+            pqr.as_slice(),
             &self.offline,
-            &[&pub_params],
+            &[pub_params.as_slice()],
             None,
-        );
-
-        // Serialize response as LE u64 bytes
-        response
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect()
+        )
     }
 
     pub fn scenario(&self) -> &YpirScenario {

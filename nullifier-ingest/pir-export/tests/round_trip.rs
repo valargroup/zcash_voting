@@ -7,17 +7,15 @@ use ff::{Field, PrimeField as _};
 use pasta_curves::Fp;
 
 use imt_tree::hasher::PoseidonHasher;
-use imt_tree::tree::{
-    build_nf_ranges, build_sentinel_tree, precompute_empty_hashes, TREE_DEPTH,
-};
+use imt_tree::tree::{build_nf_ranges, build_sentinel_tree, TREE_DEPTH};
 use imt_tree::ImtProofData;
 
 use pir_export::tier0::Tier0Data;
 use pir_export::tier1::Tier1Row;
 use pir_export::tier2::Tier2Row;
 use pir_export::{
-    build_pir_tree, extend_root, PIR_DEPTH, TIER0_LAYERS, TIER1_LAYERS, TIER1_LEAVES,
-    TIER1_ROW_BYTES, TIER2_LAYERS, TIER2_LEAVES, TIER2_ROW_BYTES,
+    build_pir_tree, PIR_DEPTH, TIER0_LAYERS, TIER1_LAYERS, TIER1_LEAVES, TIER1_ROW_BYTES,
+    TIER2_LEAVES, TIER2_ROW_BYTES,
 };
 
 /// Build ranges with sentinels (same as build_sentinel_tree but returns ranges).
@@ -134,7 +132,7 @@ fn test_small_tree_round_trip() {
 
     // Test multiple values
     let mut passed = 0;
-    for &[low, width] in ranges.iter().take(20) {
+    for &[low, _width] in ranges.iter().take(20) {
         // Query with the low value of each range (guaranteed to be in-range)
         let value = low;
         let proof = construct_proof(
@@ -248,7 +246,7 @@ fn test_tier0_binary_search() {
     let tier0 = Tier0Data::from_bytes(tier0_data);
 
     // Test that values within ranges are found
-    for &[low, width] in ranges.iter().take(10) {
+    for &[low, _width] in ranges.iter().take(10) {
         let result = tier0.find_subtree(low);
         assert!(result.is_some(), "find_subtree failed for low={:?}", low);
     }

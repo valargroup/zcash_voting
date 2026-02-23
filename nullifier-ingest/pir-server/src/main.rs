@@ -4,10 +4,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::extract::Path;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::Mutex;
@@ -75,13 +74,13 @@ async fn main() -> Result<()> {
     // Leak the data so TierServer can have a 'static lifetime.
     // These are massive allocations that live for the entire process anyway.
     let tier1_data_static: &'static [u8] = Box::leak(tier1_data.into_boxed_slice());
-    let mut tier1_server = TierServer::new(tier1_data_static, tier1_scenario.clone());
+    let tier1_server = TierServer::new(tier1_data_static, tier1_scenario.clone());
     let tier1_hint = tier1_server.hint_bytes();
     eprintln!("  Tier 1 YPIR ready (hint: {} bytes)", tier1_hint.len());
 
     let tier2_scenario = pir_server::tier2_scenario();
     let tier2_data_static: &'static [u8] = Box::leak(tier2_data.into_boxed_slice());
-    let mut tier2_server = TierServer::new(tier2_data_static, tier2_scenario.clone());
+    let tier2_server = TierServer::new(tier2_data_static, tier2_scenario.clone());
     let tier2_hint = tier2_server.hint_bytes();
     eprintln!("  Tier 2 YPIR ready (hint: {} bytes)", tier2_hint.len());
 
@@ -115,6 +114,7 @@ async fn main() -> Result<()> {
         .route("/tier2/row/:idx", get(get_tier2_row))
         .route("/root", get(get_root))
         .route("/health", get(get_health))
+        .layer(DefaultBodyLimit::max(512 * 1024 * 1024)) // 512 MB for YPIR queries
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");
@@ -135,11 +135,11 @@ async fn get_tier0(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn get_params_tier1(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    axum::Json(&state.tier1_scenario)
+    axum::Json(state.tier1_scenario.clone())
 }
 
 async fn get_params_tier2(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    axum::Json(&state.tier2_scenario)
+    axum::Json(state.tier2_scenario.clone())
 }
 
 async fn get_hint_tier1(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -161,9 +161,11 @@ async fn post_tier1_query(
     body: Bytes,
 ) -> impl IntoResponse {
     let t0 = Instant::now();
+    eprintln!("Tier 1 query: received {} bytes", body.len());
     let mut server = state.tier1.lock().await;
     let response = server.answer_query(&body);
-    tracing::info!("Tier 1 query: {:.1}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    eprintln!("Tier 1 query: answered in {:.1}ms, response {} bytes",
+        t0.elapsed().as_secs_f64() * 1000.0, response.len());
     (
         [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
         response,
@@ -175,9 +177,11 @@ async fn post_tier2_query(
     body: Bytes,
 ) -> impl IntoResponse {
     let t0 = Instant::now();
+    eprintln!("Tier 2 query: received {} bytes", body.len());
     let mut server = state.tier2.lock().await;
     let response = server.answer_query(&body);
-    tracing::info!("Tier 2 query: {:.1}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    eprintln!("Tier 2 query: answered in {:.1}ms, response {} bytes",
+        t0.elapsed().as_secs_f64() * 1000.0, response.len());
     (
         [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
         response,
