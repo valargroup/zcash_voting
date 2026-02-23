@@ -873,4 +873,152 @@ mod tests {
         db.mark_vote_submitted(ROUND_ID, 0, 0).unwrap();
     }
 
+    /// Multi-bundle test: 6 notes → 2 bundles (5+1), independent delegation + vote storage per bundle.
+    #[test]
+    fn test_multi_bundle_delegation_and_voting() {
+        use orchard::keys::{FullViewingKey, SpendingKey};
+        use zip32::Scope;
+
+        let db = test_db();
+        db.init_round(&test_params(), None).unwrap();
+
+        // Create 6 notes with distinct positions and unique nullifiers
+        let notes: Vec<NoteInfo> = (0..6)
+            .map(|i| NoteInfo {
+                commitment: vec![0x01; 32],
+                nullifier: {
+                    let mut nf = vec![0u8; 32];
+                    nf[0] = i as u8;
+                    nf
+                },
+                value: 13_000_000,
+                position: i as u64,
+                diversifier: vec![0; 11],
+                rho: vec![0; 32],
+                rseed: vec![0; 32],
+                scope: 0,
+                ufvk_str: String::new(),
+            })
+            .collect();
+
+        // Setup bundles: 6 equal-value notes → sequential fill packs first 5, then 1
+        // Sorted by value DESC (all equal) then position ASC: [0,1,2,3,4,5]
+        // Bundle 0 = [0,1,2,3,4], bundle 1 = [5]
+        let (bundle_count, eligible) = db.setup_bundles(ROUND_ID, &notes).unwrap();
+        assert_eq!(bundle_count, 2);
+        // Quantized: bundle 0 (65M → 5×12.5M=62.5M) + bundle 1 (13M → 1×12.5M=12.5M) = 75M
+        assert_eq!(eligible, 75_000_000);
+        assert_eq!(db.get_bundle_count(ROUND_ID).unwrap(), 2);
+
+        // Verify note positions per bundle (sequential fill)
+        let conn = db.conn();
+        let positions_0 = queries::load_bundle_note_positions(&conn, ROUND_ID, 0).unwrap();
+        assert_eq!(positions_0, vec![0, 1, 2, 3, 4]);
+        let positions_1 = queries::load_bundle_note_positions(&conn, ROUND_ID, 1).unwrap();
+        assert_eq!(positions_1, vec![5]);
+        drop(conn);
+
+        // Derive keys for build_governance_pczt
+        let sk = SpendingKey::from_bytes([0x42; 32]).expect("valid spending key");
+        let fvk = FullViewingKey::from(&sk);
+        let fvk_bytes = fvk.to_bytes().to_vec();
+        let hotkey_sk = SpendingKey::from_bytes([0x43; 32]).expect("valid spending key");
+        let hotkey_fvk = FullViewingKey::from(&hotkey_sk);
+        let hotkey_addr = hotkey_fvk.address_at(0u32, Scope::External);
+        let hotkey_raw_address = hotkey_addr.to_raw_address_bytes().to_vec();
+        let seed_fingerprint = [0x42u8; 32];
+
+        // Build governance PCZT for each bundle independently
+        let chunk_result = crate::types::chunk_notes(&notes);
+
+        for (i, chunk) in chunk_result.bundles.iter().enumerate() {
+            let result = db
+                .build_governance_pczt(
+                    ROUND_ID,
+                    i as u32,
+                    chunk,
+                    &fvk_bytes,
+                    &hotkey_raw_address,
+                    0xC8E71055, // NU6 consensus branch ID
+                    1,          // testnet coin type
+                    &seed_fingerprint,
+                    0,          // account_index
+                    "test-round",
+                    0,          // address_index
+                )
+                .unwrap();
+
+            // Each bundle should have valid delegation data
+            assert_eq!(result.rk.len(), 32);
+            assert_eq!(result.van.len(), 32);
+            assert_eq!(result.gov_nullifiers.len(), 5);
+            assert_eq!(result.pczt_sighash.len(), 32);
+
+            // Verify data persisted per bundle
+            let conn = db.conn();
+            let stored_rand = queries::load_van_comm_rand(&conn, ROUND_ID, i as u32).unwrap();
+            assert_eq!(stored_rand, result.van_comm_rand);
+            let stored_alpha = queries::load_alpha(&conn, ROUND_ID, i as u32).unwrap();
+            assert_eq!(stored_alpha, result.alpha);
+
+            // ZKP2 inputs loadable per bundle
+            let zkp2 = queries::load_zkp2_inputs(&conn, ROUND_ID, i as u32).unwrap();
+            assert_eq!(zkp2.gov_comm_rand.len(), 32);
+        }
+
+        // Store VAN positions for each bundle
+        db.store_van_position(ROUND_ID, 0, 100).unwrap();
+        db.store_van_position(ROUND_ID, 1, 101).unwrap();
+        assert_eq!(
+            queries::load_van_position(&db.conn(), ROUND_ID, 0).unwrap(),
+            100
+        );
+        assert_eq!(
+            queries::load_van_position(&db.conn(), ROUND_ID, 1).unwrap(),
+            101
+        );
+
+        // Store votes for proposal 0 across both bundles
+        let conn = db.conn();
+        queries::store_vote(&conn, ROUND_ID, 0, 0, 0, &[0xAA; 32]).unwrap();
+        queries::store_vote(&conn, ROUND_ID, 1, 0, 0, &[0xBB; 32]).unwrap();
+        drop(conn);
+
+        let votes = db.get_votes(ROUND_ID).unwrap();
+        assert_eq!(votes.len(), 2);
+        assert_eq!(votes[0].bundle_index, 0);
+        assert_eq!(votes[1].bundle_index, 1);
+
+        // Mark bundle 0's vote submitted, verify bundle 1 still unsubmitted
+        db.mark_vote_submitted(ROUND_ID, 0, 0).unwrap();
+        let votes = db.get_votes(ROUND_ID).unwrap();
+        assert!(
+            votes
+                .iter()
+                .find(|v| v.bundle_index == 0)
+                .unwrap()
+                .submitted
+        );
+        assert!(
+            !votes
+                .iter()
+                .find(|v| v.bundle_index == 1)
+                .unwrap()
+                .submitted
+        );
+
+        // Verify proposal_authority reflects per-bundle submission state
+        let conn = db.conn();
+        let zkp2_0 = queries::load_zkp2_inputs(&conn, ROUND_ID, 0).unwrap();
+        assert_eq!(zkp2_0.proposal_authority, 0xFFFF & !(1u64 << 0)); // bit 0 cleared
+        let zkp2_1 = queries::load_zkp2_inputs(&conn, ROUND_ID, 1).unwrap();
+        assert_eq!(zkp2_1.proposal_authority, 0xFFFF); // no bits cleared
+        drop(conn);
+
+        // Verify cascade: clearing the round removes everything
+        db.clear_round(ROUND_ID).unwrap();
+        assert!(db.list_rounds().unwrap().is_empty());
+        assert_eq!(db.get_bundle_count(ROUND_ID).unwrap(), 0);
+    }
+
 }
