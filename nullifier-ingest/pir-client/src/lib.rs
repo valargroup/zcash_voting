@@ -113,6 +113,8 @@ impl PirClient {
             .await?
             .json()
             .await?;
+        anyhow::ensure!(root_info.pir_depth == PIR_DEPTH,
+            "server pir_depth {} != expected {}", root_info.pir_depth, PIR_DEPTH);
         let root29_bytes = hex::decode(&root_info.root29)?;
         anyhow::ensure!(root29_bytes.len() == 32,
             "root29 hex decoded to {} bytes, expected 32", root29_bytes.len());
@@ -205,6 +207,8 @@ impl PirClient {
 
     /// Send a YPIR query for a Tier 1 row and return the decrypted row bytes.
     async fn ypir_query_tier1(&self, row_idx: usize) -> Result<Vec<u8>> {
+        anyhow::ensure!(row_idx < self.tier1_scenario.num_items,
+            "tier1 row_idx {} >= num_items {}", row_idx, self.tier1_scenario.num_items);
         let t0 = Instant::now();
         let ypir_client = YPIRClient::from_db_sz(
             self.tier1_scenario.num_items as u64,
@@ -280,6 +284,8 @@ impl PirClient {
 
     /// Send a YPIR query for a Tier 2 row and return the decrypted row bytes.
     async fn ypir_query_tier2(&self, row_idx: usize) -> Result<Vec<u8>> {
+        anyhow::ensure!(row_idx < self.tier2_scenario.num_items,
+            "tier2 row_idx {} >= num_items {}", row_idx, self.tier2_scenario.num_items);
         let t0 = Instant::now();
         let ypir_client = YPIRClient::from_db_sz(
             self.tier2_scenario.num_items as u64,

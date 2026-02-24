@@ -123,6 +123,11 @@ pub struct PirTree {
 /// This function hashes them into leaf commitments and builds the depth-26 Merkle
 /// tree, then extends the root to depth 29 for circuit compatibility.
 pub fn build_pir_tree(ranges: Vec<Range>) -> PirTree {
+    assert!(
+        ranges.len() <= 1 << PIR_DEPTH,
+        "too many ranges ({}) for PIR depth {} (max {})",
+        ranges.len(), PIR_DEPTH, 1 << PIR_DEPTH
+    );
     let t0 = Instant::now();
     let leaves = commit_ranges(&ranges);
     eprintln!(
@@ -241,7 +246,7 @@ pub fn write_fp(buf: &mut [u8], fp: Fp) {
 
 /// Read an Fp value from 32 little-endian bytes.
 #[inline]
-pub fn read_fp(buf: &[u8]) -> Fp {
+pub(crate) fn read_fp(buf: &[u8]) -> Fp {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&buf[..32]);
     Fp::from_repr(arr).unwrap()

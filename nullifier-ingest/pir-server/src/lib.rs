@@ -92,7 +92,7 @@ impl<'a> TierServer<'a> {
     ///
     /// `data` is the flat binary tier file (rows × row_bytes).
     /// This performs the expensive offline precomputation.
-    pub fn new(data: &[u8], scenario: YpirScenario) -> Self {
+    pub fn new(data: &'a [u8], scenario: YpirScenario) -> Self {
         let t0 = Instant::now();
         // Leak params so they live as long as 'a (process lifetime).
         let params: &'a _ = Box::leak(Box::new(
@@ -113,7 +113,7 @@ impl<'a> TierServer<'a> {
             "  FilePtIter: bytes_per_row={}, db_cols={}, pt_bits={}",
             bytes_per_row, db_cols, pt_bits
         );
-        let cursor = Cursor::new(data.to_vec());
+        let cursor = Cursor::new(data);
         let pt_iter = FilePtIter::new(cursor, bytes_per_row, db_cols, pt_bits);
         let server = YServer::<u16>::new(params, pt_iter, true, false, true);
 
@@ -152,6 +152,8 @@ impl<'a> TierServer<'a> {
         anyhow::ensure!(pqr_byte_len <= payload_len,
             "pqr_byte_len {} exceeds payload ({})", pqr_byte_len, payload_len);
         let remaining = payload_len - pqr_byte_len; // safe: checked above
+        anyhow::ensure!(pqr_byte_len > 0, "pqr section is empty");
+        anyhow::ensure!(remaining > 0, "pub_params section is empty");
         anyhow::ensure!(remaining % 8 == 0, "pub_params section {} bytes not a multiple of 8", remaining);
 
         let pqr_u64_len = pqr_byte_len / 8;

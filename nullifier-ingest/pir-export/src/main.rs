@@ -36,12 +36,15 @@ fn load_nullifiers(path: &std::path::Path) -> Result<Vec<Fp>> {
     );
     let nfs: Vec<Fp> = data
         .par_chunks_exact(32)
-        .map(|chunk| {
+        .enumerate()
+        .map(|(i, chunk)| -> Result<Fp> {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(chunk);
-            Fp::from_repr(arr).unwrap()
+            Option::from(Fp::from_repr(arr)).ok_or_else(|| {
+                anyhow::anyhow!("invalid non-canonical nullifier encoding at index {}", i)
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok(nfs)
 }
 
@@ -101,7 +104,9 @@ fn main() -> Result<()> {
                 "checkpoint file too small: {} bytes (expected at least 8)",
                 cp_data.len()
             );
-            let h = u64::from_le_bytes(cp_data[..8].try_into().unwrap());
+            let h = u64::from_le_bytes(cp_data[..8].try_into().map_err(|_| {
+                anyhow::anyhow!("checkpoint height prefix must be exactly 8 bytes")
+            })?);
             eprintln!("  Checkpoint sync height: {}", h);
             Some(h)
         }
