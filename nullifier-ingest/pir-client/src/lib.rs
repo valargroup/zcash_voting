@@ -59,8 +59,15 @@ pub struct PirClient {
     tier0: Tier0Data,
     tier1_scenario: YpirScenario,
     tier2_scenario: YpirScenario,
+    num_ranges: usize,
     empty_hashes: [Fp; TREE_DEPTH],
     root29: Fp,
+}
+
+#[inline]
+fn valid_leaves_for_row(num_ranges: usize, row_idx: usize) -> usize {
+    let row_start = row_idx.saturating_mul(TIER2_LEAVES);
+    num_ranges.saturating_sub(row_start).min(TIER2_LEAVES)
 }
 
 impl PirClient {
@@ -122,6 +129,7 @@ impl PirClient {
             tier0,
             tier1_scenario,
             tier2_scenario,
+            num_ranges: root_info.num_ranges,
             empty_hashes,
             root29,
         })
@@ -165,13 +173,14 @@ impl PirClient {
         let t2_row_idx = s1 * TIER1_LEAVES + s2;
         let tier2_row = self.ypir_query_tier2(t2_row_idx).await?;
         let tier2 = Tier2Row::from_bytes(&tier2_row);
+        let valid_leaves = valid_leaves_for_row(self.num_ranges, t2_row_idx);
 
         let leaf_local_idx = tier2
-            .find_leaf(nullifier)
+            .find_leaf(nullifier, valid_leaves)
             .context("nullifier not found in Tier 2 leaf scan")?;
 
         // Extract 7 siblings from Tier 2 (bottom-up levels 0..6)
-        let tier2_siblings = tier2.extract_siblings(leaf_local_idx, &hasher);
+        let tier2_siblings = tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher);
         for (i, &sib) in tier2_siblings.iter().enumerate() {
             path[i] = sib; // path[0..7]
         }
@@ -376,6 +385,7 @@ pub fn fetch_proof_local(
     tier0_data: &[u8],
     tier1_data: &[u8],
     tier2_data: &[u8],
+    num_ranges: usize,
     nullifier: Fp,
     empty_hashes: &[Fp; TREE_DEPTH],
     root29: Fp,
@@ -413,12 +423,13 @@ pub fn fetch_proof_local(
     let t2_offset = t2_row_idx * TIER2_ROW_BYTES;
     let tier2_row = &tier2_data[t2_offset..t2_offset + TIER2_ROW_BYTES];
     let tier2 = Tier2Row::from_bytes(tier2_row);
+    let valid_leaves = valid_leaves_for_row(num_ranges, t2_row_idx);
 
     let leaf_local_idx = tier2
-        .find_leaf(nullifier)
+        .find_leaf(nullifier, valid_leaves)
         .context("nullifier not found in Tier 2 leaf scan")?;
 
-    let tier2_siblings = tier2.extract_siblings(leaf_local_idx, &hasher);
+    let tier2_siblings = tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher);
     for (i, &sib) in tier2_siblings.iter().enumerate() {
         path[i] = sib;
     }

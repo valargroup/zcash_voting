@@ -102,10 +102,10 @@ fn write_row(
             write_fp(&mut buf[offset..], width);
             offset += 32;
         } else {
-            // Empty padding leaf: key=p-1 (max field element), value=0
-            // Using -Fp::one() ensures padding sorts after all real leaves,
-            // preventing binary search from landing on empty entries.
-            write_fp(&mut buf[offset..], -Fp::one());
+            // Empty padding leaf: key=0, value=0.
+            // Callers must bound lookups with `valid_leaves` so padding entries
+            // are never interpreted as real ranges.
+            write_fp(&mut buf[offset..], Fp::zero());
             offset += 32;
             write_fp(&mut buf[offset..], Fp::zero());
             offset += 32;
@@ -144,16 +144,20 @@ impl<'a> Tier2Row<'a> {
         (key, value)
     }
 
-    /// Find the leaf containing `value` by scanning the 128 leaf records.
+    /// Find the leaf containing `value` among the populated leaf records.
     ///
     /// Uses binary search on `low` values (same logic as `find_range_for_value`).
     /// Returns `Some(index)` if found, `None` if value is an existing nullifier.
-    pub fn find_leaf(&self, value: Fp) -> Option<usize> {
+    pub fn find_leaf(&self, value: Fp, valid_leaves: usize) -> Option<usize> {
+        debug_assert!(valid_leaves <= TIER2_LEAVES);
+        if valid_leaves == 0 {
+            return None;
+        }
         let base = TIER2_INTERNAL_NODES * 32;
 
-        // Binary search: find last leaf with low ≤ value
+        // Binary search: find last populated leaf with low ≤ value
         let mut lo = 0usize;
-        let mut hi = TIER2_LEAVES;
+        let mut hi = valid_leaves;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let low_offset = base + mid * 64;
@@ -184,21 +188,24 @@ impl<'a> Tier2Row<'a> {
     ///
     /// Returns siblings at bottom-up levels 0..=6 (plan depths 26..=20).
     ///
-    /// The sibling at the leaf level (bottom-up 0) must be COMPUTED by the caller
-    /// as `Poseidon(sibling_low, sibling_width)` from the sibling leaf record.
-    /// This function returns the sibling leaf's raw (low, width) in the first slot
-    /// as `hash(low, width)` for convenience.
-    pub fn extract_siblings(&self, leaf_idx: usize, hasher: &imt_tree::hasher::PoseidonHasher) -> [Fp; TIER2_LAYERS] {
+    /// The sibling at the leaf level (bottom-up 0) is computed from the sibling leaf
+    /// record when that sibling is populated, otherwise it uses the empty-leaf hash.
+    pub fn extract_siblings(
+        &self,
+        leaf_idx: usize,
+        valid_leaves: usize,
+        hasher: &imt_tree::hasher::PoseidonHasher,
+    ) -> [Fp; TIER2_LAYERS] {
+        debug_assert!(valid_leaves <= TIER2_LEAVES);
         let mut siblings = [Fp::default(); TIER2_LAYERS];
 
-        // Sibling at the leaf level (bottom-up 0): compute hash from raw (low, width)
+        // Sibling at the leaf level (bottom-up 0)
         let sibling_leaf_idx = leaf_idx ^ 1;
-        let (sib_low, sib_width) = self.leaf_record(sibling_leaf_idx);
-        siblings[0] = if sib_low == -Fp::one() && sib_width == Fp::zero() {
-            // Padding leaf — use empty leaf hash to match tree construction
-            hasher.hash(Fp::zero(), Fp::zero())
-        } else {
+        siblings[0] = if sibling_leaf_idx < valid_leaves {
+            let (sib_low, sib_width) = self.leaf_record(sibling_leaf_idx);
             hasher.hash(sib_low, sib_width)
+        } else {
+            hasher.hash(Fp::zero(), Fp::zero())
         };
 
         // Siblings at relative depths 6..=1 (bottom-up levels 1..=6)
@@ -210,5 +217,41 @@ impl<'a> Tier2Row<'a> {
         }
 
         siblings
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use imt_tree::hasher::PoseidonHasher;
+
+    #[test]
+    fn partial_row_handles_p_minus_one_leaf_without_padding_collision() {
+        let mut row = vec![0u8; TIER2_ROW_BYTES];
+        let base = TIER2_INTERNAL_NODES * 32;
+
+        // leaf[0] = [1, 3]
+        crate::write_fp(&mut row[base..base + 32], Fp::one());
+        crate::write_fp(&mut row[base + 32..base + 64], Fp::from(3u64));
+
+        // leaf[1] = [p-1, 0] (a valid real range in edge cases)
+        crate::write_fp(&mut row[base + 64..base + 96], -Fp::one());
+        crate::write_fp(&mut row[base + 96..base + 128], Fp::zero());
+
+        let tier2 = Tier2Row::from_bytes(&row);
+        let hasher = PoseidonHasher::new();
+        let empty_leaf_hash = hasher.hash(Fp::zero(), Fp::zero());
+        let p_minus_one_leaf_hash = hasher.hash(-Fp::one(), Fp::zero());
+
+        // With 2 valid leaves, p-1 leaf must be discoverable and hashed as real data.
+        let idx = tier2.find_leaf(-Fp::one(), 2).expect("p-1 leaf should be found");
+        assert_eq!(idx, 1);
+        let sibs_for_leaf0 = tier2.extract_siblings(0, 2, &hasher);
+        assert_eq!(sibs_for_leaf0[0], p_minus_one_leaf_hash);
+
+        // With only 1 valid leaf, sibling at index 1 is padding and must hash as empty.
+        assert!(tier2.find_leaf(-Fp::one(), 1).is_none());
+        let sibs_for_leaf0_partial = tier2.extract_siblings(0, 1, &hasher);
+        assert_eq!(sibs_for_leaf0_partial[0], empty_leaf_hash);
     }
 }

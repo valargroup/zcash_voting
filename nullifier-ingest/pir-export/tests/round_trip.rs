@@ -34,6 +34,7 @@ fn construct_proof(
     tier0_data: &[u8],
     tier1_data: &[u8],
     tier2_data: &[u8],
+    num_ranges: usize,
     value: Fp,
     empty_hashes: &[Fp; TREE_DEPTH],
     root29: Fp,
@@ -68,10 +69,11 @@ fn construct_proof(
     let t2_offset = t2_row_idx * TIER2_ROW_BYTES;
     let tier2_row = &tier2_data[t2_offset..t2_offset + TIER2_ROW_BYTES];
     let tier2 = Tier2Row::from_bytes(tier2_row);
+    let valid_leaves = num_ranges.saturating_sub(t2_row_idx * TIER2_LEAVES).min(TIER2_LEAVES);
 
-    let leaf_idx = tier2.find_leaf(value)?;
+    let leaf_idx = tier2.find_leaf(value, valid_leaves)?;
 
-    let tier2_siblings = tier2.extract_siblings(leaf_idx, &hasher);
+    let tier2_siblings = tier2.extract_siblings(leaf_idx, valid_leaves, &hasher);
     for (i, &sib) in tier2_siblings.iter().enumerate() {
         path[i] = sib;
     }
@@ -139,6 +141,7 @@ fn test_small_tree_round_trip() {
             &tier0_data,
             &tier1_data,
             &tier2_data,
+            ranges.len(),
             value,
             &tree.empty_hashes,
             tree.root29,
@@ -223,6 +226,7 @@ fn test_pir_proof_matches_existing_prove() {
             &tier0_data,
             &tier1_data,
             &tier2_data,
+            ranges.len(),
             value,
             &tree.empty_hashes,
             tree.root29,
