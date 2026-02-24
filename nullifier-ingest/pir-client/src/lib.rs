@@ -296,6 +296,12 @@ impl PirClient {
         // Send to server
         let t1 = Instant::now();
         let url = format!("{}/tier2/query", self.server_url);
+        eprintln!(
+            "  YPIR tier2 query payload: {} bytes (pqr={}, pp={})",
+            payload.len(),
+            pqr.len() * 8,
+            pp.len() * 8,
+        );
         let response_bytes = self
             .http
             .post(&url)
