@@ -1,2 +1,32 @@
 [tools]
-go = "1.23"
+go = "1.24.0"
+node = "22"
+
+[tasks.up]
+description = "Init chain + bootstrap nullifiers + start everything"
+run = "make up"
+
+[tasks.down]
+description = "Stop all services"
+run = "make down"
+
+[tasks.status]
+description = "Show chain + nullifier status"
+run = "make status"
+
+[tasks.test]
+description = "Run all Go tests"
+run = "make -C sdk test"
+
+[tasks.test-e2e]
+description = "Run Rust E2E tests"
+run = "make test-e2e"
+
+[tasks.ceremony]
+description = "Register + create round + wait for ACTIVE"
+run = "make -C sdk ceremony"
+
+[tasks.ui]
+description = "Start admin UI dev server"
+dir = "shielded_vote_generator_ui"
+run = "npm run dev"
