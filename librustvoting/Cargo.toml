@@ -22,8 +22,8 @@ hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# HTTP (blocking IMT server calls for padded-note proofs)
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# PIR (private nullifier exclusion proofs)
+pir-client = { path = "../nullifier-ingest/pir-client" }
 
 # Storage
 rusqlite = { version = "0.37", features = ["bundled"] }

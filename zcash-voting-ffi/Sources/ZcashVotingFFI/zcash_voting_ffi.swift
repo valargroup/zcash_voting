@@ -549,11 +549,11 @@ public protocol VotingDatabaseProtocol: AnyObject, Sendable {
      * - `round_id`: Voting round hex identifier.
      * - `wallet_db_path`: Path to the Zcash wallet SQLite DB (read-only).
      * - `hotkey_raw_address`: 43-byte raw Orchard address of the voting hotkey.
-     * - `imt_server_url`: Base URL of the nullifier IMT server.
+     * - `pir_server_url`: Base URL of the nullifier PIR server.
      * - `network_id`: 0 = mainnet, 1 = testnet.
      * - `progress`: Progress callback (0.0 → 1.0).
      */
-    func buildAndProveDelegation(roundId: String, bundleIndex: UInt32, walletDbPath: String, hotkeyRawAddress: Data, imtServerUrl: String, networkId: UInt32, progress: ProofProgressReporter) throws  -> DelegationProofResult
+    func buildAndProveDelegation(roundId: String, bundleIndex: UInt32, walletDbPath: String, hotkeyRawAddress: Data, pirServerUrl: String, networkId: UInt32, progress: ProofProgressReporter) throws  -> DelegationProofResult
 
     func buildGovernancePczt(roundId: String, bundleIndex: UInt32, notes: [NoteInfo], fvkBytes: Data, hotkeyRawAddress: Data, consensusBranchId: UInt32, coinType: UInt32, seedFingerprint: Data, accountIndex: UInt32, roundName: String, addressIndex: UInt32) throws  -> GovernancePczt
 
@@ -699,18 +699,18 @@ public static func `open`(path: String)throws  -> VotingDatabase  {
      * - `round_id`: Voting round hex identifier.
      * - `wallet_db_path`: Path to the Zcash wallet SQLite DB (read-only).
      * - `hotkey_raw_address`: 43-byte raw Orchard address of the voting hotkey.
-     * - `imt_server_url`: Base URL of the nullifier IMT server.
+     * - `pir_server_url`: Base URL of the nullifier PIR server.
      * - `network_id`: 0 = mainnet, 1 = testnet.
      * - `progress`: Progress callback (0.0 → 1.0).
      */
-open func buildAndProveDelegation(roundId: String, bundleIndex: UInt32, walletDbPath: String, hotkeyRawAddress: Data, imtServerUrl: String, networkId: UInt32, progress: ProofProgressReporter)throws  -> DelegationProofResult  {
+open func buildAndProveDelegation(roundId: String, bundleIndex: UInt32, walletDbPath: String, hotkeyRawAddress: Data, pirServerUrl: String, networkId: UInt32, progress: ProofProgressReporter)throws  -> DelegationProofResult  {
     return try  FfiConverterTypeDelegationProofResult_lift(try rustCallWithError(FfiConverterTypeVotingError_lift) {
     uniffi_zcash_voting_ffi_fn_method_votingdatabase_build_and_prove_delegation(self.uniffiClonePointer(),
         FfiConverterString.lower(roundId),
         FfiConverterUInt32.lower(bundleIndex),
         FfiConverterString.lower(walletDbPath),
         FfiConverterData.lower(hotkeyRawAddress),
-        FfiConverterString.lower(imtServerUrl),
+        FfiConverterString.lower(pirServerUrl),
         FfiConverterUInt32.lower(networkId),
         FfiConverterCallbackInterfaceProofProgressReporter_lower(progress),$0
     )
@@ -3854,7 +3854,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zcash_voting_ffi_checksum_func_voting_ffi_version() != 33187) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_and_prove_delegation() != 35078) {
+    if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_and_prove_delegation() != 11735) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zcash_voting_ffi_checksum_method_votingdatabase_build_governance_pczt() != 33405) {

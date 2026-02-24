@@ -13,16 +13,16 @@ actor ZallyAPIConfigStore {
     var baseURL = "https://46-101-255-48.sslip.io"
     /// All vote server URLs from CDN config (used for share distribution).
     var voteServerURLs: [String] = ["https://46-101-255-48.sslip.io"]
-    /// Primary nullifier IMT provider URL.
-    var nullifierProviderURL = "https://46-101-255-48.sslip.io/nullifier"
+    /// Primary PIR server URL.
+    var pirServerURL = "https://46-101-255-48.sslip.io/nullifier"
 
     func configure(from config: VotingServiceConfig) {
         if let first = config.voteServers.first {
             baseURL = first.url
         }
         voteServerURLs = config.voteServers.map(\.url)
-        if let first = config.nullifierProviders.first {
-            nullifierProviderURL = first.url
+        if let first = config.pirServers.first {
+            pirServerURL = first.url
         }
     }
 }
@@ -273,8 +273,8 @@ extension VotingAPIClient: DependencyKey {
             configureURLs: { config in
                 await ZallyAPIConfigStore.shared.configure(from: config)
                 let base = await ZallyAPIConfigStore.shared.baseURL
-                let nullifier = await ZallyAPIConfigStore.shared.nullifierProviderURL
-                print("[VotingAPI] URLs configured: base=\(base), servers=\(config.voteServers.count), nullifier=\(nullifier)")
+                let pir = await ZallyAPIConfigStore.shared.pirServerURL
+                print("[VotingAPI] URLs configured: base=\(base), servers=\(config.voteServers.count), pir=\(pir)")
             },
             fetchActiveVotingSession: {
                 let json = try await getJSON("/zally/v1/rounds/active")
@@ -324,8 +324,8 @@ extension VotingAPIClient: DependencyKey {
                 fatalError("fetchNoteInclusionProofs is deprecated — witnesses come from votingCrypto")
             },
             fetchNullifierExclusionProofs: { _ in
-                // Nullifier exclusion proofs are fetched by the Rust IMT client; this endpoint is unused.
-                fatalError("fetchNullifierExclusionProofs is deprecated — handled by IMT client")
+                // Nullifier exclusion proofs are fetched by the Rust PIR client; this endpoint is unused.
+                fatalError("fetchNullifierExclusionProofs is deprecated — handled by PIR client")
             },
             fetchCommitmentTreeState: { height in
                 let json = try await getJSON("/zally/v1/commitment-tree/\(height)")

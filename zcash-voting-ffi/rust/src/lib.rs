@@ -821,7 +821,7 @@ impl VotingDatabase {
     /// - `round_id`: Voting round hex identifier.
     /// - `wallet_db_path`: Path to the Zcash wallet SQLite DB (read-only).
     /// - `hotkey_raw_address`: 43-byte raw Orchard address of the voting hotkey.
-    /// - `imt_server_url`: Base URL of the nullifier IMT server.
+    /// - `pir_server_url`: Base URL of the nullifier PIR server.
     /// - `network_id`: 0 = mainnet, 1 = testnet.
     /// - `progress`: Progress callback (0.0 → 1.0).
     pub fn build_and_prove_delegation(
@@ -830,7 +830,7 @@ impl VotingDatabase {
         bundle_index: u32,
         wallet_db_path: String,
         hotkey_raw_address: Vec<u8>,
-        imt_server_url: String,
+        pir_server_url: String,
         network_id: u32,
         progress: Box<dyn ProofProgressReporter>,
     ) -> Result<DelegationProofResult, VotingError> {
@@ -842,7 +842,7 @@ impl VotingDatabase {
                 bundle_index,
                 &wallet_db_path,
                 &hotkey_raw_address,
-                &imt_server_url,
+                &pir_server_url,
                 network_id,
                 &bridge,
             )?

@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use imt_tree::hasher::PoseidonHasher;
 use imt_tree::tree::{precompute_empty_hashes, TREE_DEPTH};
-use imt_tree::ImtProofData;
+// Re-exported so downstream crates (e.g. librustvoting) can reference the type
+// returned by PirClientBlocking::fetch_proof without a direct imt-tree dependency.
+pub use imt_tree::ImtProofData;
 
 use pir_export::tier0::Tier0Data;
 use pir_export::tier1::Tier1Row;
@@ -318,6 +320,36 @@ impl PirClient {
         );
 
         Ok(decoded[..TIER2_ROW_BYTES].to_vec())
+    }
+}
+
+// ── Blocking wrapper ─────────────────────────────────────────────────────────
+
+/// Synchronous wrapper around [`PirClient`] for use from non-async code.
+///
+/// Owns a Tokio runtime internally so callers (e.g. librustvoting, which must
+/// stay synchronous for the Halo2 prover) don't need to manage one.
+pub struct PirClientBlocking {
+    inner: PirClient,
+    rt: tokio::runtime::Runtime,
+}
+
+impl PirClientBlocking {
+    /// Connect to a PIR server (blocking). Downloads Tier 0 data and YPIR params.
+    pub fn connect(server_url: &str) -> Result<Self> {
+        let rt = tokio::runtime::Runtime::new()?;
+        let inner = rt.block_on(PirClient::connect(server_url))?;
+        Ok(Self { inner, rt })
+    }
+
+    /// Perform a private Merkle path retrieval for a nullifier (blocking).
+    pub fn fetch_proof(&self, nullifier: Fp) -> Result<ImtProofData> {
+        self.rt.block_on(self.inner.fetch_proof(nullifier))
+    }
+
+    /// The depth-29 root (PIR depth 26 padded to tree depth 29).
+    pub fn root29(&self) -> Fp {
+        self.inner.root29
     }
 }
 

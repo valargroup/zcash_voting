@@ -11,7 +11,7 @@ use orchard::{
     delegation::{
         builder::{build_delegation_bundle, RealNoteInput},
         circuit::Circuit as DelegationCircuit,
-        imt::{ImtError, ImtProofData, ImtProvider, IMT_DEPTH},
+        imt::{ImtError, ImtProofData, ImtProvider},
     },
     keys::{Diversifier, FullViewingKey, Scope},
     note::{RandomSeed, Rho},
@@ -25,7 +25,7 @@ use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_protocol::consensus::Network;
 
 use crate::types::{
-    ct_option_to_result, validate_32_bytes, DelegationProofResult, ImtProofJson, NoteInfo,
+    ct_option_to_result, validate_32_bytes, DelegationProofResult, NoteInfo,
     ProofProgressReporter, VotingError, WitnessData,
 };
 
@@ -33,18 +33,33 @@ use crate::types::{
 const K: u32 = 14;
 
 // ================================================================
-// IMT Server Provider
+// PIR-backed IMT Provider
 // ================================================================
 
-/// IMT provider that wraps pre-fetched proofs for real notes and
-/// fetches proofs for padded notes on-the-fly from the IMT server.
-struct ServerImtProvider {
-    root: pallas::Base,
-    cached: HashMap<[u8; 32], ImtProofData>,
-    server_url: String,
+use pir_client::PirClientBlocking;
+
+/// Convert a PIR-crate `ImtProofData` (from `pir_client`, re-exported from `imt_tree`)
+/// into the orchard-crate `ImtProofData`. Both structs have identical fields — this
+/// is a field-by-field copy bridging the two crate boundaries.
+pub fn convert_pir_proof(pir: pir_client::ImtProofData) -> ImtProofData {
+    ImtProofData {
+        root: pir.root,
+        low: pir.low,
+        width: pir.width,
+        leaf_pos: pir.leaf_pos,
+        path: pir.path,
+    }
 }
 
-impl ImtProvider for ServerImtProvider {
+/// IMT provider that wraps pre-fetched proofs for real notes and
+/// fetches proofs for padded notes on-the-fly via PIR.
+struct PirImtProvider<'a> {
+    root: pallas::Base,
+    cached: HashMap<[u8; 32], ImtProofData>,
+    pir_client: Option<&'a PirClientBlocking>,
+}
+
+impl ImtProvider for PirImtProvider<'_> {
     fn root(&self) -> pallas::Base {
         self.root
     }
@@ -54,97 +69,20 @@ impl ImtProvider for ServerImtProvider {
         if let Some(proof) = self.cached.get(&key) {
             return Ok(proof.clone());
         }
-        // Fetch from server for padded notes (whose nullifiers weren't known in advance).
-        fetch_exclusion_proof_blocking(&self.server_url, nf).map_err(|e| ImtError(e.to_string()))
+        // Fetch from PIR server for padded notes (whose nullifiers weren't known in advance).
+        let client = self
+            .pir_client
+            .ok_or_else(|| ImtError("PIR client not available for padded note proof".into()))?;
+        let pir_proof = client
+            .fetch_proof(nf)
+            .map_err(|e| ImtError(format!("PIR fetch failed: {e}")))?;
+        Ok(convert_pir_proof(pir_proof))
     }
 }
 
 // ================================================================
 // Helpers
 // ================================================================
-
-/// Parse a hex string (with optional 0x prefix) into a pallas::Base field element.
-fn hex_to_fp(hex_str: &str) -> Result<pallas::Base, VotingError> {
-    let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    let bytes = hex::decode(hex_str).map_err(|e| VotingError::InvalidInput {
-        message: format!("invalid hex in IMT proof: {e}"),
-    })?;
-    if bytes.len() != 32 {
-        return Err(VotingError::InvalidInput {
-            message: format!("expected 32 hex bytes, got {}", bytes.len()),
-        });
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let opt: Option<pallas::Base> = pallas::Base::from_repr(arr).into();
-    opt.ok_or_else(|| VotingError::InvalidInput {
-        message: "hex bytes are not a valid field element".into(),
-    })
-}
-
-/// Parse raw JSON bytes from an IMT server response into `ImtProofData`.
-fn parse_imt_proof_json(json_bytes: &[u8]) -> Result<ImtProofData, VotingError> {
-    let json: ImtProofJson =
-        serde_json::from_slice(json_bytes).map_err(|e| VotingError::InvalidInput {
-            message: format!("failed to parse IMT proof JSON: {e}"),
-        })?;
-
-    let root = hex_to_fp(&json.root)?;
-    let low = hex_to_fp(&json.low)?;
-    let width = hex_to_fp(&json.width)?;
-
-    if json.path.len() != IMT_DEPTH {
-        return Err(VotingError::InvalidInput {
-            message: format!(
-                "IMT path should have {} elements, got {}",
-                IMT_DEPTH,
-                json.path.len()
-            ),
-        });
-    }
-
-    let mut path = [pallas::Base::zero(); IMT_DEPTH];
-    for (i, hex_str) in json.path.iter().enumerate() {
-        path[i] = hex_to_fp(hex_str)?;
-    }
-
-    Ok(ImtProofData {
-        root,
-        low,
-        width,
-        leaf_pos: json.leaf_pos,
-        path,
-    })
-}
-
-/// Fetch an exclusion proof from the IMT server (blocking HTTP).
-fn fetch_exclusion_proof_blocking(
-    server_url: &str,
-    nf: pallas::Base,
-) -> Result<ImtProofData, VotingError> {
-    let hex_str = hex::encode(nf.to_repr());
-    let url = format!("{}/exclusion-proof/{}", server_url, hex_str);
-
-    let resp = reqwest::blocking::get(&url).map_err(|e| VotingError::ProofFailed {
-        message: format!("IMT server request to {url} failed: {e}"),
-    })?;
-
-    if !resp.status().is_success() {
-        return Err(VotingError::ProofFailed {
-            message: format!(
-                "IMT server returned {} for nullifier {}",
-                resp.status(),
-                hex_str
-            ),
-        });
-    }
-
-    let body = resp.bytes().map_err(|e| VotingError::ProofFailed {
-        message: format!("failed to read IMT server response body: {e}"),
-    })?;
-
-    parse_imt_proof_json(&body)
-}
 
 /// Parse a 32-byte LE slice as a `pallas::Base` field element.
 fn bytes_to_base(bytes: &[u8], name: &str) -> Result<pallas::Base, VotingError> {
@@ -297,10 +235,8 @@ fn parse_merkle_path(witness: &WitnessData) -> Result<MerklePath, VotingError> {
 
 /// Build and prove the delegation ZKP (#1).
 ///
-/// This is the real implementation replacing the previous stubs
-/// (`build_delegation_witness` + `generate_delegation_proof`).
-/// It constructs the circuit from wallet notes, Merkle witnesses, and
-/// IMT exclusion proofs, then generates a Halo2 proof.
+/// Constructs the circuit from wallet notes, Merkle witnesses, and
+/// IMT exclusion proofs (fetched via PIR), then generates a Halo2 proof.
 ///
 /// # Arguments
 ///
@@ -310,8 +246,8 @@ fn parse_merkle_path(witness: &WitnessData) -> Result<MerklePath, VotingError> {
 /// - `van_comm_rand_bytes`: 32-byte governance commitment blinding factor.
 /// - `vote_round_id_bytes`: 32-byte voting round identifier.
 /// - `merkle_witnesses`: Merkle inclusion proofs for each note (from `generate_note_witnesses`).
-/// - `imt_proof_jsons`: Raw JSON from IMT server `GET /exclusion-proof/{hex}`, one per note.
-/// - `imt_server_url`: Base URL of the IMT server (for fetching padded-note proofs).
+/// - `imt_proofs`: Pre-fetched IMT exclusion proofs (one per real note, from PIR client).
+/// - `pir_client`: PIR client for fetching proofs for padded notes (None if 5 real notes).
 /// - `network_id`: 0 = mainnet, 1 = testnet (for UFVK decoding).
 /// - `progress`: Progress callback.
 #[allow(clippy::too_many_arguments)]
@@ -322,8 +258,8 @@ pub fn build_and_prove_delegation(
     van_comm_rand_bytes: &[u8],
     vote_round_id_bytes: &[u8],
     merkle_witnesses: &[WitnessData],
-    imt_proof_jsons: &[Vec<u8>],
-    imt_server_url: &str,
+    imt_proofs: &[ImtProofData],
+    pir_client: Option<&PirClientBlocking>,
     network_id: u32,
     progress: &dyn ProofProgressReporter,
 ) -> Result<DelegationProofResult, VotingError> {
@@ -341,11 +277,11 @@ pub fn build_and_prove_delegation(
             ),
         });
     }
-    if imt_proof_jsons.len() != n {
+    if imt_proofs.len() != n {
         return Err(VotingError::InvalidInput {
             message: format!(
-                "imt_proof_jsons count ({}) must match notes count ({n})",
-                imt_proof_jsons.len()
+                "imt_proofs count ({}) must match notes count ({n})",
+                imt_proofs.len()
             ),
         });
     }
@@ -395,7 +331,7 @@ pub fn build_and_prove_delegation(
     for i in 0..n {
         let (note, note_fvk) = reconstruct_note(&full_notes[i], &network)?;
         let merkle_path = parse_merkle_path(&merkle_witnesses[i])?;
-        let imt_proof = parse_imt_proof_json(&imt_proof_jsons[i])?;
+        let imt_proof = imt_proofs[i].clone();
 
         // All notes must share the same FVK (same account).
         match &shared_fvk {
@@ -456,11 +392,11 @@ pub fn build_and_prove_delegation(
     let nc_root = nc_root.expect("guaranteed by n >= 1 check");
     let nf_imt_root = nf_imt_root.expect("guaranteed by n >= 1 check");
 
-    // Create IMT provider: pre-fetched proofs for real notes, server for padded notes.
-    let imt_provider = ServerImtProvider {
+    // Create IMT provider: pre-fetched proofs for real notes, PIR for padded notes.
+    let imt_provider = PirImtProvider {
         root: nf_imt_root,
         cached: imt_cache,
-        server_url: imt_server_url.to_string(),
+        pir_client,
     };
 
     // Build the delegation bundle (circuit + instance).
@@ -591,7 +527,7 @@ mod tests {
     }
 
     /// SpacedLeaf IMT for testing — generates valid non-membership proofs
-    /// and serializes them as JSON for `build_and_prove_delegation`.
+    /// as `ImtProofData` structs for `build_and_prove_delegation`.
     struct TestImt {
         root: pallas::Base,
         leaves: Vec<(pallas::Base, pallas::Base)>,
@@ -646,8 +582,8 @@ mod tests {
             }
         }
 
-        /// Generate a JSON-serialized IMT non-membership proof for the given nullifier.
-        fn proof_json(&self, nf: pallas::Base) -> Vec<u8> {
+        /// Generate an IMT non-membership proof for the given nullifier.
+        fn proof(&self, nf: pallas::Base) -> ImtProofData {
             // Determine bracket: k = nf >> 250. In LE repr, bit 250 is bit 2 of byte 31.
             let repr: [u8; 32] = nf.to_repr();
             let k = ((repr[31] >> 2) as usize).min(16);
@@ -656,7 +592,7 @@ mod tests {
             let empties = empty_imt_hashes();
 
             // Build 29-level Merkle path (pure siblings).
-            let mut path = vec![pallas::Base::zero(); TEST_IMT_DEPTH];
+            let mut path = [pallas::Base::zero(); TEST_IMT_DEPTH];
             let mut idx = k;
             for l in 0..5 {
                 path[l] = self.subtree_levels[l][idx ^ 1];
@@ -666,53 +602,14 @@ mod tests {
                 path[l] = empties[l];
             }
 
-            let fp_to_hex = |f: pallas::Base| -> String {
-                let bytes: [u8; 32] = f.to_repr();
-                format!("0x{}", hex::encode(bytes))
-            };
-
-            let json = serde_json::json!({
-                "root": fp_to_hex(self.root),
-                "low": fp_to_hex(low),
-                "width": fp_to_hex(width),
-                "leaf_pos": k as u32,
-                "path": path.iter().map(|p| fp_to_hex(*p)).collect::<Vec<_>>(),
-            });
-            serde_json::to_vec(&json).unwrap()
+            ImtProofData {
+                root: self.root,
+                low,
+                width,
+                leaf_pos: k as u32,
+                path,
+            }
         }
-    }
-
-    #[test]
-    fn test_parse_imt_proof_json() {
-        // Construct a valid IMT proof JSON.
-        let zero_hex = format!("0x{}", hex::encode([0u8; 32]));
-        let path: Vec<String> = (0..IMT_DEPTH).map(|_| zero_hex.clone()).collect();
-        let json = serde_json::json!({
-            "root": &zero_hex,
-            "low": &zero_hex,
-            "width": &zero_hex,
-            "leaf_pos": 0u32,
-            "path": path,
-        });
-        let bytes = serde_json::to_vec(&json).unwrap();
-        let proof = parse_imt_proof_json(&bytes).unwrap();
-        assert_eq!(proof.leaf_pos, 0);
-        assert_eq!(proof.path.len(), IMT_DEPTH);
-    }
-
-    #[test]
-    fn test_parse_imt_proof_json_wrong_path_length() {
-        let zero_hex = format!("0x{}", hex::encode([0u8; 32]));
-        let path: Vec<String> = (0..10).map(|_| zero_hex.clone()).collect();
-        let json = serde_json::json!({
-            "root": &zero_hex,
-            "low": &zero_hex,
-            "width": &zero_hex,
-            "leaf_pos": 0u32,
-            "path": path,
-        });
-        let bytes = serde_json::to_vec(&json).unwrap();
-        assert!(parse_imt_proof_json(&bytes).is_err());
     }
 
     #[test]
@@ -729,7 +626,7 @@ mod tests {
             &[0u8; 32],
             &[],
             &[],
-            "http://localhost:3000",
+            None,
             0,
             &reporter,
         );
@@ -740,10 +637,10 @@ mod tests {
     /// Real Halo2 delegation proof end-to-end test.
     ///
     /// Creates synthetic wallet notes, builds a Merkle tree, constructs valid IMT
-    /// non-membership proofs, serializes everything into byte-level types, and calls
+    /// non-membership proofs as `ImtProofData`, and calls
     /// `build_and_prove_delegation()` to generate a real Halo2 proof.
     ///
-    /// Uses 5 notes to avoid padding (no IMT server needed for padded notes).
+    /// Uses 5 notes to avoid padding (no PIR server needed for padded notes).
     /// Long-running due to keygen + proof generation.
     ///
     /// Run with: `cargo test -p librustvoting test_real_delegation_proof -- --ignored --nocapture`
@@ -860,12 +757,12 @@ mod tests {
 
         // 5. Build IMT non-membership proofs
         let imt = TestImt::new();
-        let imt_proof_jsons: Vec<Vec<u8>> = notes
+        let imt_proofs: Vec<ImtProofData> = notes
             .iter()
             .map(|note| {
                 let nf_bytes = note.nullifier(&fvk).to_bytes();
                 let nf_base: pallas::Base = pallas::Base::from_repr(nf_bytes).unwrap();
-                imt.proof_json(nf_base)
+                imt.proof(nf_base)
             })
             .collect();
 
@@ -910,9 +807,9 @@ mod tests {
             &van_comm_rand.to_repr(),
             &vote_round_id.to_repr(),
             &merkle_witnesses,
-            &imt_proof_jsons,
-            "http://unused", // 5 notes = no padding, no server calls
-            0,               // mainnet
+            &imt_proofs,
+            None, // 5 notes = no padding, no PIR client needed
+            0,    // mainnet
             &reporter,
         )
         .expect("build_and_prove_delegation should succeed");

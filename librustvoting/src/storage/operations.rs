@@ -315,8 +315,8 @@ impl VotingDb {
     /// - Full note data (queried from wallet DB, filtered to this bundle's positions)
     /// - Vote round params (stored by `init_round`)
     ///
-    /// Fetches IMT exclusion proofs from the IMT server for each note's nullifier.
-    /// For padded notes (< 5 real notes), the prover fetches proofs internally.
+    /// Fetches IMT exclusion proofs from the PIR server for each note's nullifier.
+    /// For padded notes (< 5 real notes), the prover fetches proofs internally via PIR.
     ///
     /// Stores the proof result and advances phase to `DelegationProved`.
     pub fn build_and_prove_delegation(
@@ -325,7 +325,7 @@ impl VotingDb {
         bundle_index: u32,
         wallet_db_path: &str,
         hotkey_raw_address: &[u8],
-        imt_server_url: &str,
+        pir_server_url: &str,
         network_id: u32,
         progress: &dyn ProofProgressReporter,
     ) -> Result<DelegationProofResult, VotingError> {
@@ -407,45 +407,51 @@ impl VotingDb {
             witness_count
         );
 
-        // Phase 2: Fetch IMT exclusion proofs
-        let imt_start = std::time::Instant::now();
+        // Phase 2: Fetch IMT exclusion proofs via PIR
+        let pir_start = std::time::Instant::now();
         eprintln!(
-            "[ZKP1] Fetching IMT exclusion proofs for {} notes from {}",
-            full_notes.len(),
-            imt_server_url
+            "[ZKP1] Connecting to PIR server at {} for {} notes",
+            pir_server_url,
+            full_notes.len()
         );
+        let pir_client =
+            pir_client::PirClientBlocking::connect(pir_server_url).map_err(|e| {
+                VotingError::Internal {
+                    message: format!("PIR server connect failed: {e}"),
+                }
+            })?;
         let mut imt_proofs = Vec::new();
         for (i, note) in full_notes.iter().enumerate() {
-            let hex_nf = hex::encode(&note.nullifier);
-            let url = format!("{}/exclusion-proof/{}", imt_server_url, hex_nf);
+            let nf_bytes: [u8; 32] =
+                note.nullifier.as_slice().try_into().map_err(|_| {
+                    VotingError::Internal {
+                        message: format!(
+                            "note[{i}] nullifier must be 32 bytes, got {}",
+                            note.nullifier.len()
+                        ),
+                    }
+                })?;
+            let nf: pasta_curves::pallas::Base =
+                Option::from(pasta_curves::pallas::Base::from_repr(nf_bytes)).ok_or_else(|| {
+                    VotingError::Internal {
+                        message: format!("note[{i}] nullifier is not a valid field element"),
+                    }
+                })?;
             let note_start = std::time::Instant::now();
-            let resp = reqwest::blocking::get(&url).map_err(|e| VotingError::Internal {
-                message: format!("IMT server request to {url} failed: {e}"),
-            })?;
-            if !resp.status().is_success() {
-                return Err(VotingError::Internal {
-                    message: format!(
-                        "IMT server returned {} for nullifier {}",
-                        resp.status(),
-                        hex_nf
-                    ),
-                });
-            }
-            let body = resp.bytes().map_err(|e| VotingError::Internal {
-                message: format!("failed to read IMT response body: {e}"),
+            let pir_proof = pir_client.fetch_proof(nf).map_err(|e| VotingError::Internal {
+                message: format!("PIR fetch failed for note[{i}]: {e}"),
             })?;
             eprintln!(
-                "[ZKP1] Note {}: IMT proof {} bytes in {:.2}s",
+                "[ZKP1] Note {}: PIR proof in {:.2}s",
                 i,
-                body.len(),
                 note_start.elapsed().as_secs_f64()
             );
-            imt_proofs.push(body.to_vec());
+            imt_proofs.push(crate::zkp1::convert_pir_proof(pir_proof));
         }
-        let imt_elapsed = imt_start.elapsed();
+        let pir_elapsed = pir_start.elapsed();
         eprintln!(
-            "[ZKP1] IMT fetch total: {:.2}s for {} proofs",
-            imt_elapsed.as_secs_f64(),
+            "[ZKP1] PIR fetch total: {:.2}s for {} proofs",
+            pir_elapsed.as_secs_f64(),
             imt_proofs.len()
         );
 
@@ -467,7 +473,7 @@ impl VotingDb {
             &vote_round_id_bytes,
             &ordered_witnesses,
             &imt_proofs,
-            imt_server_url,
+            Some(&pir_client),
             network_id,
             progress,
         )?;
@@ -495,10 +501,10 @@ impl VotingDb {
 
         let total_elapsed = total_start.elapsed();
         eprintln!(
-            "[ZKP1] TOTAL: {:.2}s (DB: {:.2}s, IMT: {:.2}s, Prove: {:.2}s) — proof {} bytes",
+            "[ZKP1] TOTAL: {:.2}s (DB: {:.2}s, PIR: {:.2}s, Prove: {:.2}s) — proof {} bytes",
             total_elapsed.as_secs_f64(),
             db_elapsed.as_secs_f64(),
-            imt_elapsed.as_secs_f64(),
+            pir_elapsed.as_secs_f64(),
             prove_elapsed.as_secs_f64(),
             result.proof.len(),
         );
