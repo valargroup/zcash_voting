@@ -837,15 +837,29 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             Constraints::with_selector(
                 q,
                 [
+                    // NOTE: 2 constraints below are the only 2 that differ from index=0.
                     ("two_pow_i = 2*prev", two_pow_i.clone() - two_expr.clone() * two_pow_i_prev),
                     ("index = prev+1", index.clone() - index_prev - one_expr.clone()),
+                    
+                    // NOTE: the constraints below are the same as index=0.
+                    // run_sel differs fom run_sel_prev by sel_i
                     ("run_sel", run_sel - run_sel_prev - sel_i.clone()),
+                    // run_selected differs from run_selected_prev by sel_i * b_i
                     ("run_selected", run_selected - run_selected_prev - sel_i.clone() * b_i.clone()),
+                    // run_old differs from run_old_prev by b_i * 2^i
                     ("run_old", run_old - run_old_prev - b_i.clone() * two_pow_i.clone()),
+                    // run_new differs from run_new_prev by b_new_i * 2^i
                     ("run_new", run_new - run_new_prev - b_new_i.clone() * two_pow_i),
+                    // (proposal_id - index) * sel_i = 0
+                    // can only be 1 when index == proposal_id (gate-enforced locality)
                     ("(proposal_id - index)*sel_i", (proposal_id - index) * sel_i.clone()),
+                    // b_new_i - b_i + b_i * sel_i = 0
+                    // rearranges to b_new_i = b_i * (1 - sel_i)
+                    // new bit equals old bit, except zero it out when selected
                     ("b_new_i = b_i*(1-sel_i)", b_new_i - b_i.clone() + b_i.clone() * sel_i.clone()),
+                    // enforce b_i in {0, 1}
                     ("bool b_i", bool_check(b_i)),
+                    // enforce sel_i in {0, 1}
                     ("bool sel_i", bool_check(sel_i)),
                 ],
             )
