@@ -2485,12 +2485,14 @@ mod tests {
         assert!(prover.verify().is_err());
     }
 
-    /// proposal_authority_old has bit 2 set only (4); proposal_id 0 → selected bit is 0, so
-    /// "run_selected = 1" fails.
+    /// authority=4 (0b0100, bit 2 set only), proposal_id=1 (bit 1 absent) →
+    /// run_selected=0 at the terminal row, so "run_selected = 1" fails.
+    /// Uses proposal_id=1 (not 0) to isolate this constraint from the
+    /// proposal_id != 0 sentinel gate.
     #[test]
     fn proposal_authority_bit_not_set_fails() {
         let (circuit, instance) =
-            make_test_data_with_authority_and_proposal(pallas::Base::from(4u64), 0);
+            make_test_data_with_authority_and_proposal(pallas::Base::from(4u64), 1);
 
         let prover = MockProver::run(K, &circuit, vec![instance.to_halo2_instance()]).unwrap();
         assert!(prover.verify().is_err());
