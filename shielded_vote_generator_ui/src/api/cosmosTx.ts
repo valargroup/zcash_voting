@@ -474,8 +474,8 @@ export async function setVoteManager(
  * Sign and broadcast a MsgCreateVotingSession transaction.
  *
  * Fetches real nc_root and nullifier_imt_root from the chain's snapshot-data
- * endpoint (which calls lightwalletd and the IMT server). Falls back to stubs
- * if the endpoint is unavailable.
+ * endpoint (which calls lightwalletd and the PIR server). Throws if snapshot
+ * data cannot be fetched.
  */
 export async function createVotingSession(
   apiBase: string,

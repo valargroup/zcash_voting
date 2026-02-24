@@ -209,21 +209,6 @@ pub struct CastVoteSignature {
     pub vote_auth_sig: Vec<u8>,
 }
 
-/// JSON deserialization struct for IMT server exclusion proof responses.
-#[derive(serde::Deserialize, Clone, Debug)]
-pub struct ImtProofJson {
-    /// IMT root (hex with 0x prefix).
-    pub root: String,
-    /// Low bound of the bracketing leaf (hex).
-    pub low: String,
-    /// Interval width (`high - low`, pre-computed in tree) (hex).
-    pub width: String,
-    /// Position of the leaf in the tree.
-    pub leaf_pos: u32,
-    /// Sibling hashes along the 29-level Merkle path (hex strings).
-    pub path: Vec<String>,
-}
-
 /// All fields needed to submit a delegation TX to the chain.
 /// Fields from DB (proof, rk, nf_signed, cmx_new, gov_comm, gov_nullifiers, alpha)
 /// plus computed fields (spend_auth_sig, sighash, enc_memo).

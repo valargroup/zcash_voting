@@ -262,7 +262,7 @@ extension VotingCryptoClient: DependencyKey {
             extractPcztSighash: { pcztBytes in
                 try ZcashVotingFFI.extractPcztSighash(pcztBytes: pcztBytes)
             },
-            buildAndProveDelegation: { roundId, bundleIndex, bundleNotes, walletDbPath, senderSeed, hotkeySeed, networkId, accountIndex, imtServerUrl in
+            buildAndProveDelegation: { roundId, bundleIndex, bundleNotes, walletDbPath, senderSeed, hotkeySeed, networkId, accountIndex, pirServerUrl in
                 AsyncThrowingStream { continuation in
                     Task.detached {
                         do {
@@ -283,7 +283,7 @@ extension VotingCryptoClient: DependencyKey {
                                 bundleIndex: bundleIndex,
                                 walletDbPath: walletDbPath,
                                 hotkeyRawAddress: ffiInputs.hotkeyRawAddress,
-                                imtServerUrl: imtServerUrl,
+                                pirServerUrl: pirServerUrl,
                                 networkId: networkId,
                                 progress: reporter
                             )

@@ -1106,8 +1106,8 @@ public struct Voting {
                 let keystoneSeedFingerprint = keystoneMetadata?.seedFingerprint
                 let isKeystoneUser = state.isKeystoneUser
                 let roundName = state.votingRound.title
-                // IMT server URL from resolved service config
-                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "https://46-101-255-48.sslip.io/nullifier"
+                // PIR server URL from resolved service config
+                let pirServerUrl = state.serviceConfig?.pirServers.first?.url ?? "http://157.180.63.235:3001"
                 let keystoneBundleIndex = state.currentKeystoneBundleIndex
                 let bundleCount = state.bundleCount
                 return .merge(
@@ -1184,7 +1184,7 @@ public struct Voting {
 
                             for try await event in votingCrypto.buildAndProveDelegation(
                                 roundId, bundleIndex, bundleNotes, walletDbPath, senderSeed, hotkeySeed,
-                                networkId, accountIndex, imtServerUrl
+                                networkId, accountIndex, pirServerUrl
                             ) {
                                 switch event {
                                 case .progress(let p):
@@ -1290,8 +1290,8 @@ public struct Voting {
                 let walletDbPath = databaseFiles.dataDbURLFor(network).path
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 let accountIndex: UInt32 = state.selectedWalletAccount.flatMap(\.zip32AccountIndex).map { UInt32($0.index) } ?? 0
-                // IMT server URL from resolved service config
-                let imtServerUrl = state.serviceConfig?.nullifierProviders.first?.url ?? "https://46-101-255-48.sslip.io/nullifier"
+                // PIR server URL from resolved service config
+                let pirServerUrl = state.serviceConfig?.pirServers.first?.url ?? "http://157.180.63.235:3001"
                 let keystoneBundleIndex = state.currentKeystoneBundleIndex
                 let bundleCount = state.bundleCount
                 return .run { [votingCrypto, votingAPI, mnemonic, walletStorage] send in
@@ -1315,7 +1315,7 @@ public struct Voting {
                     // buildGovernancePczt already stored the delegation data — just prove.
                     for try await event in votingCrypto.buildAndProveDelegation(
                         roundId, keystoneBundleIndex, bundleNotes, walletDbPath,
-                        senderSeed, hotkeySeed, networkId, accountIndex, imtServerUrl
+                        senderSeed, hotkeySeed, networkId, accountIndex, pirServerUrl
                     ) {
                         switch event {
                         case .progress(let p):

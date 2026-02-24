@@ -1,13 +1,13 @@
 import Foundation
 
-/// CDN-hosted config listing vote servers and nullifier providers.
+/// CDN-hosted config listing vote servers and PIR servers.
 /// Fetched at startup from `VotingServiceConfig.cdnURL`.
 /// A local override file (`voting-config-local.json` in the app bundle) takes priority
 /// to simplify testing against a local chain.
 public struct VotingServiceConfig: Codable, Equatable, Sendable {
     public let version: Int
     public let voteServers: [ServiceEndpoint]
-    public let nullifierProviders: [ServiceEndpoint]
+    public let pirServers: [ServiceEndpoint]
 
     public struct ServiceEndpoint: Codable, Equatable, Sendable {
         public let url: String
@@ -19,16 +19,16 @@ public struct VotingServiceConfig: Codable, Equatable, Sendable {
         }
     }
 
-    public init(version: Int, voteServers: [ServiceEndpoint], nullifierProviders: [ServiceEndpoint]) {
+    public init(version: Int, voteServers: [ServiceEndpoint], pirServers: [ServiceEndpoint]) {
         self.version = version
         self.voteServers = voteServers
-        self.nullifierProviders = nullifierProviders
+        self.pirServers = pirServers
     }
 
     enum CodingKeys: String, CodingKey {
         case version
         case voteServers = "vote_servers"
-        case nullifierProviders = "nullifier_providers"
+        case pirServers = "pir_servers"
     }
 
     /// CDN URL for the production config (served from Vercel Edge Config).
@@ -42,6 +42,6 @@ public struct VotingServiceConfig: Codable, Equatable, Sendable {
     public static let fallback = VotingServiceConfig(
         version: 1,
         voteServers: [ServiceEndpoint(url: "https://46-101-255-48.sslip.io", label: "Primary")],
-        nullifierProviders: [ServiceEndpoint(url: "https://46-101-255-48.sslip.io/nullifier", label: "Primary")]
+        pirServers: [ServiceEndpoint(url: "http://157.180.63.235:3001", label: "Primary")]
     )
 }

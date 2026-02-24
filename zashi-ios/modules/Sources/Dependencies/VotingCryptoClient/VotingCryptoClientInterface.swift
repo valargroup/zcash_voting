@@ -86,7 +86,7 @@ public struct VotingCryptoClient {
         _ hotkeySeed: [UInt8],
         _ networkId: UInt32,
         _ accountIndex: UInt32,
-        _ imtServerUrl: String
+        _ pirServerUrl: String
     ) -> AsyncThrowingStream<ProofEvent, Error>
         = { _, _, _, _, _, _, _, _, _ in AsyncThrowingStream { $0.finish() } }
     /// Extract Orchard FVK bytes from a UFVK string.
