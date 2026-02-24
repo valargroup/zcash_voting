@@ -208,6 +208,9 @@ public struct Voting {
 
         // ZKP #1 (delegation) — runs in background
         public var delegationProofStatus: ProofStatus = .notStarted
+        /// True while the delegation proof `.run` effect is in-flight. Guards against
+        /// re-entrant `.startDelegationProof` dispatches from round polling re-triggers.
+        public var isDelegationProofInFlight: Bool = false
         public var keystoneSigningStatus: KeystoneSigningStatus = .idle
 
         /// Which bundle the Keystone signing loop is currently processing (0-based).
@@ -451,6 +454,7 @@ public struct Voting {
                 state.witnessTiming = nil
                 state.witnessStatus = .notStarted
                 state.delegationProofStatus = .notStarted
+                state.isDelegationProofInFlight = false
                 state.hotkeyAddress = nil
                 state.pendingVote = nil
                 state.isSubmittingVote = false
@@ -1065,6 +1069,10 @@ public struct Voting {
             // MARK: - Background ZKP Delegation
 
             case .startDelegationProof:
+                guard !state.isDelegationProofInFlight && state.delegationProofStatus != .complete else {
+                    return .none
+                }
+                state.isDelegationProofInFlight = true
                 guard let activeSession = state.activeSession else {
                     return .send(.delegationProofFailed(
                         VotingFlowError.missingActiveSession.localizedDescription
@@ -1381,6 +1389,7 @@ public struct Voting {
 
             case .delegationProofCompleted:
                 state.delegationProofStatus = .complete
+                state.isDelegationProofInFlight = false
                 state.currentKeystoneBundleIndex = 0
                 return .none
 
@@ -1395,6 +1404,7 @@ public struct Voting {
                     userMessage = error
                 }
                 state.delegationProofStatus = .failed(userMessage)
+                state.isDelegationProofInFlight = false
                 return .none
 
             // MARK: - Proposal List
