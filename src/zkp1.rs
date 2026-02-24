@@ -9,7 +9,7 @@ use halo2_proofs::{
 use incrementalmerkletree::Hashable;
 use orchard::{
     delegation::{
-        builder::{build_delegation_bundle, RealNoteInput},
+        builder::{build_delegation_bundle, PrecomputedRandomness, RealNoteInput},
         circuit::Circuit as DelegationCircuit,
         imt::{ImtError, ImtProofData, ImtProvider},
     },
@@ -262,6 +262,7 @@ pub fn build_and_prove_delegation(
     pir_client: Option<&PirClientBlocking>,
     network_id: u32,
     progress: &dyn ProofProgressReporter,
+    precomputed_randomness: Option<&PrecomputedRandomness>,
 ) -> Result<DelegationProofResult, VotingError> {
     let n = full_notes.len();
     if n == 0 || n > 5 {
@@ -411,6 +412,7 @@ pub fn build_and_prove_delegation(
         van_comm_rand,
         &imt_provider,
         &mut rng,
+        precomputed_randomness,
     )
     .map_err(|e| VotingError::ProofFailed {
         message: format!("delegation bundle build failed: {e}"),
@@ -629,6 +631,7 @@ mod tests {
             None,
             0,
             &reporter,
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("1–5 notes"));
@@ -811,6 +814,7 @@ mod tests {
             None, // 5 notes = no padding, no PIR client needed
             0,    // mainnet
             &reporter,
+            None,
         )
         .expect("build_and_prove_delegation should succeed");
         let elapsed = start.elapsed();
