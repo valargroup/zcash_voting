@@ -817,13 +817,13 @@ function useNullifierStatus() {
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch(`${nullifierApiBase()}/status`)
+    fetch(`${nullifierApiBase()}/root`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then((json: NullifierStatus) => {
-        setData(json);
+      .then((json: { height: number | null; num_ranges: number }) => {
+        setData({ latest_height: json.height, nullifier_count: json.num_ranges });
         setLoading(false);
       })
       .catch((err) => {

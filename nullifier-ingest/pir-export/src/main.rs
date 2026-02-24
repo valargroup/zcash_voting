@@ -19,6 +19,11 @@ struct Args {
     /// Output directory for tier files.
     #[arg(long, default_value = "./pir-data")]
     output_dir: PathBuf,
+
+    /// Path to nullifiers.checkpoint (16 bytes: [u64 height LE][u64 offset LE]).
+    /// If provided, the sync height is embedded in root_info.json.
+    #[arg(long)]
+    checkpoint: Option<PathBuf>,
 }
 
 /// Load nullifiers from a raw binary file (32 bytes per element, no header).
@@ -80,9 +85,26 @@ fn main() -> Result<()> {
         hex::encode(tree.root29.to_repr())
     );
 
+    // Read sync height from checkpoint file if provided.
+    let height = match &args.checkpoint {
+        Some(cp_path) => {
+            let cp_data = std::fs::read(cp_path)
+                .with_context(|| format!("read checkpoint file {:?}", cp_path))?;
+            anyhow::ensure!(
+                cp_data.len() >= 8,
+                "checkpoint file too small: {} bytes (expected at least 8)",
+                cp_data.len()
+            );
+            let h = u64::from_le_bytes(cp_data[..8].try_into().unwrap());
+            eprintln!("  Checkpoint sync height: {}", h);
+            Some(h)
+        }
+        None => None,
+    };
+
     // Export tier files
     eprintln!("Exporting tier files to {:?}...", args.output_dir);
-    pir_export::export_all(&tree, &args.output_dir, None)?;
+    pir_export::export_all(&tree, &args.output_dir, height)?;
 
     eprintln!(
         "\nDone! Total time: {:.1}s",

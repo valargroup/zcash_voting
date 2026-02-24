@@ -1083,7 +1083,7 @@ public struct Voting {
                 let isKeystoneUser = state.isKeystoneUser
                 let roundName = state.votingRound.title
                 // PIR server URL from resolved service config
-                let pirServerUrl = state.serviceConfig?.pirServers.first?.url ?? "https://46-101-255-48.sslip.io/nullifier"
+                let pirServerUrl = state.serviceConfig?.pirServers.first?.url ?? "http://157.180.63.235:3001"
                 let keystoneBundleIndex = state.currentKeystoneBundleIndex
                 let bundleCount = state.bundleCount
                 return .merge(
@@ -1243,7 +1243,7 @@ public struct Voting {
                 let networkId: UInt32 = network.networkType == .mainnet ? 0 : 1
                 let accountIndex: UInt32 = 0
                 // PIR server URL from resolved service config
-                let pirServerUrl = state.serviceConfig?.pirServers.first?.url ?? "https://46-101-255-48.sslip.io/nullifier"
+                let pirServerUrl = state.serviceConfig?.pirServers.first?.url ?? "http://157.180.63.235:3001"
                 let keystoneBundleIndex = state.currentKeystoneBundleIndex
                 let bundleCount = state.bundleCount
                 return .run { [votingCrypto, votingAPI, mnemonic, walletStorage] send in

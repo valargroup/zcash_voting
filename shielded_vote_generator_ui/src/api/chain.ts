@@ -206,7 +206,13 @@ export interface NullifierStatus {
 }
 
 export async function getNullifierStatus(): Promise<NullifierStatus> {
-  return fetchJson<NullifierStatus>("/nullifier/status");
+  // The PIR server exposes /root with {height, num_ranges, ...}.
+  // Map to the NullifierStatus shape expected by the UI.
+  const pir = await fetchJson<{ height: number | null; num_ranges: number }>("/nullifier/root");
+  return {
+    latest_height: pir.height,
+    nullifier_count: pir.num_ranges,
+  };
 }
 
 // setVoteManager was removed: MsgSetVoteManager is now a standard Cosmos SDK
