@@ -270,17 +270,180 @@ run = "make -C sdk ceremony"
 
 # ── multi:* ─────────────────────────────────────────────────────────
 
+[tasks."multi:init"]
+description = "Build + init 3-validator chain (no start)"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+set -e
+make -C sdk install-ffi
+bash sdk/scripts/init_multi.sh
+'''
+
 [tasks."multi:start"]
-description = "Init + start a 3-validator chain on localhost"
-run = "make -C sdk init-multi"
+description = "Init + nullifiers + PIR + start 3-validator chain"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+set -e
+PID_FILE="$HOME/.zallyd-multi-pids"
+
+# ── Guard: already running? ──────────────────────────────────────
+PROCS=""
+pgrep -f 'zallyd start --home.*val' > /dev/null 2>&1 && PROCS="$PROCS zallyd"
+pgrep -f 'nf-server.*serve'        > /dev/null 2>&1 && PROCS="$PROCS nf-server"
+if [ -n "$PROCS" ]; then
+    printf '\033[33mAlready running:%s\033[0m\n' "$PROCS"
+    exit 0
+fi
+
+# ── Build + init ─────────────────────────────────────────────────
+make -C sdk install-ffi
+bash sdk/scripts/init_multi.sh
+
+# ── Nullifier pipeline (shared data at nullifier-ingest/) ────────
+make -C nullifier-ingest bootstrap
+make -C nullifier-ingest ingest
+make -C nullifier-ingest export-nf
+
+# ── Start PIR server ────────────────────────────────────────────
+if ! pgrep -f 'nf-server.*serve' > /dev/null 2>&1; then
+    nohup make -C nullifier-ingest serve > nf-serve.log 2>&1 &
+    printf '\033[32mStarted nf-server → nf-serve.log\033[0m\n'
+fi
+
+# ── Start 3 validators ──────────────────────────────────────────
+rm -f "$PID_FILE"
+
+ZALLY_PIR_URL=http://localhost:3000 nohup zallyd start --home "$HOME/.zallyd-val1" > sdk/multi-val1.log 2>&1 &
+echo "$!" >> "$PID_FILE"
+printf '\033[32mStarted val1 → sdk/multi-val1.log\033[0m\n'
+
+# Wait for val1 to produce blocks before starting val2/val3.
+printf 'Waiting for val1...'
+for i in $(seq 1 30); do
+    if curl -sf "http://127.0.0.1:26157/status" 2>/dev/null | grep -q '"latest_block_height"'; then
+        HEIGHT=$(curl -sf "http://127.0.0.1:26157/status" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['sync_info']['latest_block_height'])" 2>/dev/null || echo "0")
+        if [ "$HEIGHT" != "0" ]; then
+            printf ' \033[32mblock %s\033[0m\n' "$HEIGHT"
+            break
+        fi
+    fi
+    printf '.'
+    sleep 2
+done
+
+for i in 2 3; do
+    port=$((26057 + i * 100))
+    home="$HOME/.zallyd-val$i"
+    ZALLY_PIR_URL=http://localhost:3000 nohup zallyd start --home "$home" > "sdk/multi-val$i.log" 2>&1 &
+    echo "$!" >> "$PID_FILE"
+    printf '\033[32mStarted val%s → sdk/multi-val%s.log\033[0m\n' "$i" "$i"
+done
+
+# Brief sync delay.
+sleep 5
+
+# ── Register val1 Pallas key ────────────────────────────────────
+zallyd tx vote register-pallas-key \
+    --from validator --chain-id zvote-1 --keyring-backend test \
+    --home "$HOME/.zallyd-val1" --node tcp://localhost:26157 -y > /dev/null 2>&1 \
+    && printf '\033[32mVal1 pallas key registered\033[0m\n' \
+    || printf '\033[33mVal1 pallas key already registered (or skipped)\033[0m\n'
+sleep 3
+
+# ── Register val2 + val3 via CreateValidatorWithPallasKey ────────
+SELF_DELEGATION="10000000stake"
+for i in 2 3; do
+    (cd sdk && go run ./scripts/create-val-tx \
+        --home "$HOME/.zallyd-val$i" \
+        --moniker "val$i" \
+        --amount "$SELF_DELEGATION" \
+        --rpc-url tcp://localhost:26157)
+    printf '\033[32mVal%s registered\033[0m\n' "$i"
+    sleep 2
+done
+
+printf '\n\033[32mMulti-validator chain running.\033[0m PIDs in %s\n' "$PID_FILE"
+printf 'Status: mise run multi:status\n'
+printf 'Stop:   mise run multi:stop\n'
+'''
 
 [tasks."multi:stop"]
 description = "Stop all multi-validator processes"
-run = "make -C sdk stop-multi"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+PID_FILE="$HOME/.zallyd-multi-pids"
+KILLED=""
+
+# Kill tracked PIDs.
+if [ -f "$PID_FILE" ]; then
+    while read -r pid; do
+        kill "$pid" 2>/dev/null && KILLED="$KILLED $pid" || true
+    done < "$PID_FILE"
+    rm -f "$PID_FILE"
+fi
+
+# Belt-and-suspenders: pkill any stale validators.
+pkill -f 'zallyd start --home.*val' 2>/dev/null && KILLED="$KILLED zallyd" || true
+pkill nf-server 2>/dev/null && KILLED="$KILLED nf-server" || true
+
+if [ -n "$KILLED" ]; then
+    printf '\033[32mStopped:%s\033[0m\n' "$KILLED"
+else
+    echo "No running processes found."
+fi
+'''
 
 [tasks."multi:status"]
 description = "Show running status of all 3 validators"
-run = "make -C sdk status-multi"
+quiet = true
+run = '''
+#!/usr/bin/env bash
+echo "=== Multi-Validator Status ==="
+for i in 1 2 3; do
+    home="$HOME/.zallyd-val$i"
+    rpc_port=$((26057 + i * 100))
+    api_port=$((1318 + i * 100))
+    echo ""
+    echo "--- Validator $i (home: $home) ---"
+    proc=$(pgrep -f "zallyd start --home .*val${i}$" 2>/dev/null | head -1)
+    if [ -n "$proc" ]; then
+        echo "  Process : RUNNING (PID $proc)"
+    else
+        echo "  Process : STOPPED"
+    fi
+    rpc_resp=$(curl -sf --max-time 2 "http://127.0.0.1:$rpc_port/status" 2>/dev/null)
+    if [ -n "$rpc_resp" ]; then
+        latest=$(echo "$rpc_resp" | grep -o '"latest_block_height":"[^"]*"' | head -1 | cut -d'"' -f4)
+        moniker=$(echo "$rpc_resp" | grep -o '"moniker":"[^"]*"' | head -1 | cut -d'"' -f4)
+        catching=$(echo "$rpc_resp" | grep -o '"catching_up":[a-z]*' | cut -d':' -f2)
+        echo "  RPC     : UP (port $rpc_port)"
+        echo "  Moniker : $moniker"
+        echo "  Block   : $latest"
+        echo "  Syncing : $catching"
+    else
+        echo "  RPC     : UNREACHABLE (port $rpc_port)"
+    fi
+    api_resp=$(curl -sf --max-time 2 "http://127.0.0.1:$api_port/cosmos/base/tendermint/v1beta1/syncing" 2>/dev/null)
+    if [ -n "$api_resp" ]; then
+        echo "  REST API: UP (port $api_port)"
+    else
+        echo "  REST API: UNREACHABLE (port $api_port)"
+    fi
+done
+echo ""
+
+# nf-server status.
+printf "nf-server      "
+if pgrep -f 'nf-server.*serve' > /dev/null 2>&1; then
+    printf '\033[32m● running\033[0m   port 3000\n'
+else
+    printf '\033[31m○ stopped\033[0m\n'
+fi
+'''
 
 [tasks."multi:ui"]
 description = "Admin UI pointed at multi-validator chain (port 1418)"
@@ -288,9 +451,17 @@ dir = "shielded_vote_generator_ui"
 run = "npm install --silent && VITE_CHAIN_URL=http://localhost:1418 npm run dev"
 
 [tasks."multi:clean"]
-description = "Remove all multi-validator data directories"
-run = "make -C sdk clean-multi"
+description = "Stop + remove all multi-validator data"
+quiet = true
 confirm = "This will stop and delete all multi-validator data (~/.zallyd-val1,2,3). Continue?"
+run = '''
+#!/usr/bin/env bash
+set -e
+mise run multi:stop 2>/dev/null || true
+rm -rf "$HOME/.zallyd-val1" "$HOME/.zallyd-val2" "$HOME/.zallyd-val3"
+rm -f "$HOME/.zallyd-multi-pids"
+printf '\033[32mCleaned multi-validator data.\033[0m\n'
+'''
 
 # ── nullifier:* ─────────────────────────────────────────────────────
 

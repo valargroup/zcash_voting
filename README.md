@@ -83,10 +83,11 @@ Run `mise tasks` for the full list. Key namespaces: `build:*`, `chain:*`, `multi
 | `chain:clean` | Remove chain data directory |
 | `chain:ceremony` | Register Pallas key + create round + wait ACTIVE |
 | **multi:\*** | |
-| `multi:init` | Initialize a 3-validator chain on localhost |
+| `multi:init` | Build + init 3-validator chain (no start) |
+| `multi:start` | Init + nullifiers + PIR + start 3-validator chain |
 | `multi:stop` | Stop all multi-validator processes |
 | `multi:status` | Show running status of all 3 validators |
-| `multi:clean` | Remove all multi-validator data directories |
+| `multi:clean` | Stop + remove all multi-validator data |
 | **nullifier:\*** | |
 | `nullifier:bootstrap` | Download nullifier snapshot from DO Spaces |
 | `nullifier:ingest` | Sync nullifiers to SYNC_HEIGHT or chain tip |

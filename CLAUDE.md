@@ -66,7 +66,7 @@ mise test           # end-to-end tests against running chain
 
 - **`build:*`** — `build`, `build:quick`, `build:install`, `build:circuits`, `build:ui`
 - **`chain:*`** — `chain:init`, `chain:start`, `chain:clean`, `chain:ceremony`
-- **`multi:*`** — `multi:init`, `multi:stop`, `multi:status`, `multi:clean`
+- **`multi:*`** — `multi:init`, `multi:start`, `multi:stop`, `multi:status`, `multi:clean`
 - **`nullifier:*`** — `nullifier:bootstrap`, `nullifier:ingest`, `nullifier:export`, `nullifier:serve`, `nullifier:status`, `nullifier:clean`
 - **`test:*`** — `test:unit`, `test:integration`, `test:helper`, `test:go`, `test:circuits`, `test:ffi`, `test:nullifier`, `test:proof`
 - **Flat** — `fmt`, `lint`, `fixtures`, `proto`, `validator:join`
