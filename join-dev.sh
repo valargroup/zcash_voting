@@ -28,11 +28,13 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "=== Zally validator join (build from source) ==="
 echo ""
 
-# Activate mise if available (pins Go version from mise.toml).
+# Activate mise if available — ensures pinned Go/Rust/Node versions from mise.toml.
 if command -v mise > /dev/null 2>&1; then
   eval "$(mise activate bash --shims)"
+  mise install
 fi
 
+# Fallback: check for tools manually if mise is not installed.
 for cmd in go cargo curl jq; do
   if ! command -v "$cmd" > /dev/null 2>&1; then
     echo "ERROR: $cmd is required. Install it and re-run."
