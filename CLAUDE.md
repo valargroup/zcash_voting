@@ -54,7 +54,7 @@ All workflow commands go through [mise](https://mise.jdx.dev). Run `mise tasks` 
 ### Setup and daily workflow
 
 ```
-mise install        # pin Go 1.24.0, Rust stable, Node 22
+mise install        # pin Go 1.24.1, Rust stable, Node 22
 mise start          # init chain + bootstrap nullifiers + start everything
 mise status         # check service health + voting round state
 mise ui             # admin UI dev server (port 5173, separate terminal)

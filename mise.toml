@@ -3,7 +3,7 @@
 # Then: mise install && mise start
 
 [tools]
-go = "1.24.0"
+go = "1.24.1"
 rust = "stable"
 node = "22"
 buf = "latest"
@@ -60,7 +60,7 @@ API="http://localhost:1318"
 
 printf "chain          "
 CHAIN_UP=false
-STATUS=$(~/go/bin/zallyd status --home ~/.zallyd 2>/dev/null) || true
+STATUS=$(zallyd status --home ~/.zallyd 2>/dev/null) || true
 if [ -n "$STATUS" ]; then
     CHAIN_UP=true
     INFO=$(echo "$STATUS" | python3 -c "
@@ -154,7 +154,7 @@ printf '\033[0m'
 [tasks.ui]
 description = "Start admin UI dev server (port 5173)"
 dir = "shielded_vote_generator_ui"
-run = "npm run dev"
+run = "npm install --silent && npm run dev"
 
 [tasks.test]
 description = "E2E tests against running chain (requires: mise start)"
@@ -229,7 +229,15 @@ run = "make -C nullifier-ingest bootstrap"
 
 [tasks."nullifier:ingest"]
 description = "Sync nullifiers to SYNC_HEIGHT or chain tip"
-run = "make -C nullifier-ingest ingest SYNC_HEIGHT=${SYNC_HEIGHT:-}"
+run = '''
+#!/usr/bin/env bash
+set -e
+if [ -n "${SYNC_HEIGHT:-}" ]; then
+    make -C nullifier-ingest ingest SYNC_HEIGHT="$SYNC_HEIGHT"
+else
+    make -C nullifier-ingest ingest
+fi
+'''
 
 [tasks."nullifier:export"]
 description = "Build PIR tree and export tier files"
