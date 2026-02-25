@@ -35,6 +35,23 @@ make -C nullifier-ingest export-nf
 nohup make -C nullifier-ingest serve > nf-serve.log 2>&1 &
 ZALLY_PIR_URL=http://localhost:3000 nohup make -C sdk start > zallyd.log 2>&1 &
 printf '\033[32mStarted: nf-server → nf-serve.log | zallyd → zallyd.log\033[0m\n'
+
+# Wait for chain to accept transactions, then register the genesis validator's
+# Pallas key so per-round ceremony can proceed when a round is published.
+printf 'Waiting for chain to be ready...'
+for i in $(seq 1 30); do
+    if zallyd status --home ~/.zallyd 2>/dev/null | grep -q latest_block_height; then
+        printf ' \033[32mready\033[0m\n'
+        break
+    fi
+    printf '.'
+    sleep 2
+done
+zallyd tx vote register-pallas-key \
+    --from validator --chain-id zvote-1 --keyring-backend test \
+    --home ~/.zallyd -y > /dev/null 2>&1 \
+    && printf '\033[32mPallas key registered ✓\033[0m\n' \
+    || printf '\033[33mPallas key already registered (or registration skipped)\033[0m\n'
 '''
 
 [tasks.stop]
