@@ -9,6 +9,7 @@ There are two paths to join: **binary** (no repo needed) or **source** (for deve
 - Linux or macOS (amd64 or arm64)
 - `curl` and `jq` installed
 - Funded validator account (see Step 2)
+- **Pre-built binaries on DO Spaces** — the `release.yml` GitHub Action must have run at least once to upload `zallyd` and `create-val-tx` to `vote.fra1.digitaloceanspaces.com`. If `join.sh` fails to download binaries, trigger a release first.
 
 ### Step 1 — Run join.sh
 
@@ -83,7 +84,9 @@ zallyd query staking validators --node tcp://localhost:26657
 
 The EA key ceremony is automatic. When a new voting round is created, your validator is included in the ceremony if it is bonded and has a registered Pallas key (done automatically by `join.sh` / `join-dev.sh`). The block proposer handles dealing and acking via `PrepareProposal` — no manual steps required.
 
-If your validator fails to ack in 3 consecutive ceremonies, it will be jailed. Check status:
+If your validator fails to ack in 3 consecutive ceremonies, it will be jailed. There is currently no unjail mechanism — the slashing module is not registered, so `tx slashing unjail` is unavailable. A jailed validator must be replaced by joining with a new identity (re-run `join.sh`).
+
+Check ceremony status:
 
 ```bash
 mise status

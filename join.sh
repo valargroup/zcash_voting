@@ -12,6 +12,7 @@
 #   5. Generates a start.sh script that handles sync + validator registration
 #
 # Requirements: Linux or macOS (amd64 or arm64), curl, jq
+# Dependency: release.yml must have run to upload binaries to DO Spaces.
 
 set -euo pipefail
 
