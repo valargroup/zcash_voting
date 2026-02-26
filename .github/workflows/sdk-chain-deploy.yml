@@ -34,20 +34,12 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
 
       - name: Cache Rust build
         uses: actions/cache@v4
@@ -60,17 +52,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-sdk-circuits-
 
-      - name: Build Rust circuits library
-        run: make circuits
-
-      - name: Build zallyd with FFI
-        run: make build-ffi
-
-      - name: Build create-val-tx helper
-        run: go build -o create-val-tx ./scripts/create-val-tx
+      - name: Build SDK binaries
+        run: mise run build && mise run build:create-val-tx
 
       - name: Copy init script to build root
-        run: cp scripts/init_multi.sh init_multi.sh
+        run: cp sdk/scripts/init_multi.sh sdk/init_multi.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

@@ -37,23 +37,16 @@ jobs:
             cross: true
             rust_target: x86_64-apple-darwin
             goarch: amd64
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache-dependency-path: sdk/go.sum
+      - name: Install mise
+        uses: jdx/mise-action@v2
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target || '' }}
+      - name: Add Rust cross target
+        if: matrix.cross
+        run: rustup target add ${{ matrix.rust_target }}
 
       - name: Cache Rust build
         uses: actions/cache@v4
@@ -66,37 +59,26 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.platform }}-sdk-circuits-
 
-      - name: Build Rust circuits library
+      - name: Build SDK binaries
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cargo build --release --manifest-path circuits/Cargo.toml --target ${{ matrix.rust_target }}
-            # Symlink cross-compiled lib into the expected location for CGo
-            mkdir -p circuits/target/release
-            ln -sf $(pwd)/circuits/target/${{ matrix.rust_target }}/release/libzally_circuits.a \
-                   circuits/target/release/libzally_circuits.a
-          else
-            make circuits
-          fi
-
-      - name: Build zallyd with FFI
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            # Cross-compile Go+CGo for x86_64 from ARM64 macOS
+            # Cross-compile circuits for x86_64 from ARM64 macOS
+            cargo build --release --manifest-path sdk/circuits/Cargo.toml --target ${{ matrix.rust_target }}
+            mkdir -p sdk/circuits/target/release
+            ln -sf $(pwd)/sdk/circuits/target/${{ matrix.rust_target }}/release/libzally_circuits.a \
+                   sdk/circuits/target/release/libzally_circuits.a
+            # Cross-compile zallyd (Go+CGo)
+            cd sdk
             CC="clang -target x86_64-apple-macosx" \
             CGO_CFLAGS="-target x86_64-apple-macosx" \
             CGO_LDFLAGS="-target x86_64-apple-macosx" \
             CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.goarch }} \
               go build -tags "halo2,redpallas" -o zallyd ./cmd/zallyd
-          else
-            make build-ffi
-          fi
-
-      - name: Build create-val-tx helper
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
+            # Cross-compile create-val-tx (pure Go)
             CGO_ENABLED=0 GOOS=darwin GOARCH=${{ matrix.goarch }} go build -o create-val-tx ./scripts/create-val-tx
           else
-            go build -o create-val-tx ./scripts/create-val-tx
+            mise run build
+            mise run build:create-val-tx
           fi
 
       - name: Upload artifacts

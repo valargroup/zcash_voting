@@ -302,10 +302,11 @@ run = "make -C sdk build"
 
 [tasks."build:install"]
 description = "Install zallyd + create-val-tx with FFI to $GOBIN"
-run = '''
-make -C sdk install-ffi
-(cd sdk && go build -o "$HOME/go/bin/create-val-tx" ./scripts/create-val-tx)
-'''
+run = "make -C sdk install-ffi install-create-val-tx"
+
+[tasks."build:create-val-tx"]
+description = "Build create-val-tx helper locally"
+run = "make -C sdk build-create-val-tx"
 
 [tasks."build:circuits"]
 description = "Build Rust circuit static library"
@@ -362,8 +363,7 @@ if pgrep -f 'zallyd start --home.*val' > /dev/null 2>&1; then
 fi
 
 # ── Build + init ─────────────────────────────────────────────────
-make -C sdk install-ffi
-(cd sdk && go build -o "$HOME/go/bin/create-val-tx" ./scripts/create-val-tx)
+mise run build:install
 bash sdk/scripts/init_multi.sh
 
 # ── Start 3 validators ──────────────────────────────────────────
