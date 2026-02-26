@@ -119,7 +119,7 @@ export function RoundEditor({ round, onUpdateName, onUpdateSettings, onNavigate,
   // Ref to avoid stale closure — parent passes an inline arrow that changes
   // every render, but the callback logic should always use the latest version.
   const onUpdateSettingsRef = useRef(onUpdateSettings);
-  onUpdateSettingsRef.current = onUpdateSettings;
+  useEffect(() => { onUpdateSettingsRef.current = onUpdateSettings; });
 
   // Fetch snapshot height from PIR server. Returns true if serving.
   const fetchSnapshotHeight = useCallback(async () => {
