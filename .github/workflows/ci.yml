@@ -224,7 +224,7 @@ jobs:
           retention-days: 7
 
   test-multi-validator:
-    name: Multi-Validator Ceremony
+    name: Multi-Validator E2E
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -278,6 +278,14 @@ jobs:
           echo "ZALLY_NODE_URL=tcp://localhost:26157" >> $GITHUB_ENV
           echo "ZALLY_PALLAS_PK_PATH=$HOME/.zallyd-val1/pallas.pk" >> $GITHUB_ENV
       - name: Run E2E test (round_activation)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1418
+      - name: Restart val2 and verify recovery
+        run: bash sdk/scripts/test_validator_restart.sh
+        env:
+          ZALLY_PIR_URL: "disabled"
+      - name: Run E2E test (round_activation after restart)
         run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
         env:
           ZALLY_API_URL: http://localhost:1418

@@ -548,6 +548,10 @@ run = "make -C nullifier-ingest test"
 description = "Verify exclusion proofs against ingested data"
 run = "make -C nullifier-ingest test-proof"
 
+[tasks."test:restart"]
+description = "Test: kill val2, restart, verify it rejoins consensus"
+run = "bash sdk/scripts/test_validator_restart.sh"
+
 [tasks."test:join"]
 description = "Smoke test: validator join flow against running chain"
 run = "bash sdk/scripts/test_join_ci.sh"
