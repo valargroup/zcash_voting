@@ -14,17 +14,11 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache: false
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Go build
         uses: actions/cache@v4
         with:
@@ -33,23 +27,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-lint-go-
       - name: Run go vet
-        run: go vet ./...
+        run: mise run lint
 
   test-unit:
     name: Unit Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
@@ -57,42 +44,30 @@ jobs:
           key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-circuits-
-      - name: Build Rust circuits library
-        run: make circuits
+      - name: Build circuits
+        run: mise run build:circuits
       - name: Run unit tests
-        run: make test-unit
+        run: mise run test:unit
 
   test-helper:
     name: Helper Server Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Run helper tests
-        run: make test-helper
+        run: mise run test:helper
 
   test-integration:
     name: Integration Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
@@ -100,26 +75,19 @@ jobs:
           key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-circuits-
-      - name: Build Rust circuits library
-        run: make circuits
+      - name: Build circuits
+        run: mise run build:circuits
       - name: Run integration tests
-        run: make test-integration
+        run: mise run test:integration
 
   test-halo2:
     name: Halo2 ZKP Verification Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
@@ -127,29 +95,24 @@ jobs:
           key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-circuits-
-      - name: Build Rust circuits library
-        run: make circuits
+      - name: Build circuits
+        run: mise run build:circuits
       - name: Run Rust circuit tests
-        run: make circuits-test
+        run: mise run test:circuits
       - name: Run Go Halo2 verification tests
-        run: make test-halo2
+        run: mise run test:halo2
 
   test-api:
     name: API Integration Tests
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install mise
+        uses: jdx/mise-action@v2
+      - name: Add GOBIN to PATH
+        run: echo "$HOME/go/bin" >> $GITHUB_PATH
       - name: Cache Rust build (circuits + e2e-tests + tree client)
         uses: actions/cache@v4
         with:
@@ -167,17 +130,149 @@ jobs:
           key: ${{ runner.os }}-api-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-api-go-
-      - name: Build and install zallyd
-        run: make install-ffi
+      - name: Pre-build vote-commitment-tree-client
+        run: cargo build --release --manifest-path vote-commitment-tree-client/Cargo.toml
+      - name: Start chain
+        run: mise run start:chain
         env:
           GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
+          ZALLY_PIR_URL: "disabled"
+      - name: Run E2E test (round_activation)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1318
+      - name: Run E2E test (voting_flow_librustvoting)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test voting_flow_librustvoting -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1318
+          HELPER_SERVER_URL: http://localhost:1318
+          ZALLY_E2E_VOTE_WINDOW_SECS: "420"
+      - name: Upload chain log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-log
+          path: zallyd.log
+          retention-days: 7
+
+  test-multi-validator:
+    name: Multi-Validator E2E
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install mise
+        uses: jdx/mise-action@v2
+      - name: Add GOBIN to PATH
+        run: echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Cache Rust build (circuits + e2e-tests + tree client)
+        uses: actions/cache@v4
+        with:
+          path: |
+            sdk/circuits/target
+            e2e-tests/target
+            vote-commitment-tree-client/target
+          key: ${{ runner.os }}-multi-rust-${{ hashFiles('sdk/circuits/Cargo.lock', 'e2e-tests/Cargo.lock', 'vote-commitment-tree-client/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-multi-rust-
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: sdk/.cache/go-build
+          key: ${{ runner.os }}-multi-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-multi-go-
       - name: Pre-build vote-commitment-tree-client
-        run: cargo build --release --manifest-path ../vote-commitment-tree-client/Cargo.toml
+        run: cargo build --release --manifest-path vote-commitment-tree-client/Cargo.toml
+      - name: Start 3-validator chain
+        run: mise run multi:start-chain
+        env:
+          GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
+          ZALLY_PIR_URL: "disabled"
+      - name: Wait for helper server readiness
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:1418/api/v1/status > /dev/null 2>&1; then
+              echo "Helper server is ready on val1"
+              exit 0
+            fi
+            echo "Waiting for helper server... ($i/30)"
+            sleep 2
+          done
+          echo "Helper server failed to start"
+          tail -50 sdk/multi-val1.log
+          exit 1
+      - name: Set multi-validator env
+        run: |
+          echo "ZALLY_HOME=$HOME/.zallyd-val1" >> $GITHUB_ENV
+          echo "ZALLY_NODE_URL=tcp://localhost:26157" >> $GITHUB_ENV
+          echo "ZALLY_PALLAS_PK_PATH=$HOME/.zallyd-val1/pallas.pk" >> $GITHUB_ENV
+      - name: Run E2E test (round_activation)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1418
+      - name: Run E2E test (voting_flow_librustvoting)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test voting_flow_librustvoting -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1418
+          HELPER_SERVER_URL: http://localhost:1418
+          ZALLY_E2E_VOTE_WINDOW_SECS: "420"
+      - name: Restart val2 and verify recovery
+        run: mise run test:restart
+        env:
+          ZALLY_PIR_URL: "disabled"
+      - name: Run E2E test (round_activation after restart)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1418
+      - name: Upload validator logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-validator-logs
+          path: |
+            sdk/multi-val1.log
+            sdk/multi-val2.log
+            sdk/multi-val3.log
+          retention-days: 7
+
+  test-join:
+    name: Validator Join Flow
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install mise
+        uses: jdx/mise-action@v2
+      - name: Add GOBIN to PATH
+        run: echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Cache Rust build (circuits)
+        uses: actions/cache@v4
+        with:
+          path: sdk/circuits/target
+          key: ${{ runner.os }}-join-rust-${{ hashFiles('sdk/circuits/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-join-rust-
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: sdk/.cache/go-build
+          key: ${{ runner.os }}-join-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-join-go-
+      - name: Build and install zallyd + create-val-tx
+        run: |
+          mise run build:install
+          cd sdk && go build -o ~/go/bin/create-val-tx ./scripts/create-val-tx
+        env:
+          GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
       - name: Initialize chain
-        run: bash scripts/init.sh
+        run: mise run chain:init
       - name: Start chain in background
         run: |
-          zallyd start --home ~/.zallyd > chain.log 2>&1 &
+          zallyd start --home ~/.zallyd > sdk/chain.log 2>&1 &
           echo "Chain PID: $!"
       - name: Wait for chain readiness
         run: |
@@ -190,32 +285,16 @@ jobs:
             sleep 2
           done
           echo "Chain failed to start within 120s"
-          cat chain.log
+          cat sdk/chain.log
           exit 1
-      - name: Wait for helper server readiness
-        run: |
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:1318/api/v1/status > /dev/null 2>&1; then
-              echo "Helper server is ready (built into zallyd)"
-              exit 0
-            fi
-            echo "Waiting for helper server... ($i/15)"
-            sleep 1
-          done
-          echo "Helper server failed to start"
-          cat chain.log | tail -50
-          exit 1
-      - name: Run E2E test (voting_flow_librustvoting)
-        run: cargo test --release --manifest-path ../e2e-tests/Cargo.toml --test voting_flow_librustvoting -- --nocapture --ignored --test-threads=1
-        env:
-          ZALLY_API_URL: http://localhost:1318
-          ZALLY_EA_PK_PATH: /home/runner/.zallyd/ea.pk
-          HELPER_SERVER_URL: http://localhost:1318
-          ZALLY_E2E_VOTE_WINDOW_SECS: "420"
-      - name: Upload chain log on failure
+      - name: Run validator join smoke test
+        run: mise run test:join
+      - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: chain-log
-          path: sdk/chain.log
+          name: join-test-logs
+          path: |
+            sdk/chain.log
+            joiner.log
           retention-days: 7

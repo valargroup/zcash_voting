@@ -1,4 +1,4 @@
-//! Standalone ceremony bootstrap test.
+//! Round activation e2e test.
 //!
 //! Verifies the per-round ceremony flow: ensures the validator's Pallas key
 //! is registered, creates a voting round (which starts PENDING), then waits
@@ -8,7 +8,7 @@
 //! Usage (chain must be running via `make init && make start`):
 //!
 //!   cargo test --release --manifest-path e2e-tests/Cargo.toml \
-//!     ceremony_bootstrap -- --nocapture --ignored
+//!     round_activation -- --nocapture --ignored
 
 use e2e_tests::{
     api::{
@@ -25,7 +25,7 @@ const VOTE_MANAGER_ADDRESS: &str = "zvote15fjfr6rrs60vu4st6arrd94w5j6z7f6kxr92cg
 
 #[test]
 #[ignore = "requires running chain"]
-fn ceremony_bootstrap() {
+fn round_activation() {
     // Ensure the validator's Pallas key is in the global registry.
     // (Usually already registered via MsgCreateValidatorWithPallasKey during init.)
     e2e_tests::setup::ensure_pallas_key_registered();
@@ -60,5 +60,5 @@ fn ceremony_bootstrap() {
     eprintln!("[E2E] Waiting for round {} to become ACTIVE (auto-deal + auto-ack)...", &round_id_hex);
     wait_for_round_status(&round_id_hex, SESSION_STATUS_ACTIVE, 60_000, 2_000)
         .expect("round should become ACTIVE via per-round ceremony");
-    eprintln!("[E2E] Round {} is ACTIVE ✓", round_id_hex);
+    eprintln!("[E2E] Round {} is ACTIVE", round_id_hex);
 }
