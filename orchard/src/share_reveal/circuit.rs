@@ -531,6 +531,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         )?;
         let enc_c2_x_cond5 = enc_c2_x.clone();
 
+        // derive the commitment from primary blind
         let derived_comm = hash_share_commitment_in_circuit(
             config.poseidon_chip(),
             layouter.namespace(|| "cond4: Poseidon(blind, c1, c2)"),
@@ -546,6 +547,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             |mut region| {
                 config.q_share_comm_mux.enable(&mut region, 0)?;
 
+                // Create a selector map
                 let sel_values: [Value<pallas::Base>; 16] = core::array::from_fn(|i| {
                     self.share_index.map(|idx| {
                         if idx == pallas::Base::from(i as u64) {
@@ -556,50 +558,41 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     })
                 });
 
-                for i in 0..10 {
-                    region.assign_advice(
-                        || alloc::format!("sel_{i}"),
-                        config.advices[i],
-                        0,
-                        || sel_values[i],
-                    )?;
+                // Assign the one-hot selector bits into the region. We use assign_advice
+                // (fresh allocation) because sel_values are computed locally and have no
+                // prior cell to copy from. There are 16 bits spread across 10 advice
+                // columns, so they spill from row 0 into the first 6 columns of row 1.
+                // Layout table: (sel_start, count, advice_col_offset, row)
+                for (sel_start, count, col_off, row) in [(0, 10, 0, 0), (10, 6, 0, 1)] {
+                    for i in 0..count {
+                        region.assign_advice(
+                            || alloc::format!("sel_{}", sel_start + i),
+                            config.advices[col_off + i],
+                            row,
+                            || sel_values[sel_start + i],
+                        )?;
+                    }
                 }
 
-                for i in 0..6 {
-                    region.assign_advice(
-                        || alloc::format!("sel_{}", i + 10),
-                        config.advices[i],
-                        1,
-                        || sel_values[i + 10],
-                    )?;
-                }
-                for i in 0..4 {
-                    share_comms_cond4[i].copy_advice(
-                        || alloc::format!("comm_{i}"),
-                        &mut region,
-                        config.advices[i + 6],
-                        1,
-                    )?;
-                }
-
-                for i in 0..10 {
-                    share_comms_cond4[i + 4].copy_advice(
-                        || alloc::format!("comm_{}", i + 4),
-                        &mut region,
-                        config.advices[i],
-                        2,
-                    )?;
+                // Copy the 16 share commitments into the region. We use copy_advice
+                // (equality-constrained copy) instead of assign_advice because these
+                // cells were allocated earlier in separate regions; copy_advice ties
+                // this cell to the original via the permutation argument, preventing
+                // the prover from substituting a different value. The 16 commitments
+                // also spill across multiple rows alongside the selector bits above.
+                // Layout table: (comm_start, count, advice_col_offset, row)
+                for (comm_start, count, col_off, row) in [(0, 4, 6, 1), (4, 10, 0, 2), (14, 2, 0, 3)] {
+                    for i in 0..count {
+                        share_comms_cond4[comm_start + i].copy_advice(
+                            || alloc::format!("comm_{}", comm_start + i),
+                            &mut region,
+                            config.advices[col_off + i],
+                            row,
+                        )?;
+                    }
                 }
 
-                for i in 0..2 {
-                    share_comms_cond4[i + 14].copy_advice(
-                        || alloc::format!("comm_{}", i + 14),
-                        &mut region,
-                        config.advices[i],
-                        3,
-                    )?;
-                }
-
+                // Select the correct commitment via dot product selector.
                 let selected_comm_val = (0..16).fold(Value::known(pallas::Base::zero()), |acc, i| {
                     acc.zip(sel_values[i]).zip(share_comms_cond4[i].value().copied())
                         .map(|((a, s), c)| a + s * c)
@@ -622,6 +615,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             },
         )?;
 
+        // Ensure that the derived commitment is equal to selected
         layouter.assign_region(
             || "cond4: derived_comm == selected_comm",
             |mut region| region.constrain_equal(derived_comm.cell(), selected_comm.cell()),
