@@ -166,13 +166,14 @@ jobs:
         uses: jdx/mise-action@v2
       - name: Add GOBIN to PATH
         run: echo "$HOME/go/bin" >> $GITHUB_PATH
-      - name: Cache Rust build (circuits + e2e-tests)
+      - name: Cache Rust build (circuits + e2e-tests + tree client)
         uses: actions/cache@v4
         with:
           path: |
             sdk/circuits/target
             e2e-tests/target
-          key: ${{ runner.os }}-multi-rust-${{ hashFiles('sdk/circuits/Cargo.lock', 'e2e-tests/Cargo.lock') }}
+            vote-commitment-tree-client/target
+          key: ${{ runner.os }}-multi-rust-${{ hashFiles('sdk/circuits/Cargo.lock', 'e2e-tests/Cargo.lock', 'vote-commitment-tree-client/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-multi-rust-
       - name: Cache Go build
@@ -182,6 +183,8 @@ jobs:
           key: ${{ runner.os }}-multi-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-multi-go-
+      - name: Pre-build vote-commitment-tree-client
+        run: cargo build --release --manifest-path vote-commitment-tree-client/Cargo.toml
       - name: Start 3-validator chain
         run: mise run multi:start-chain
         env:
@@ -209,6 +212,12 @@ jobs:
         run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test round_activation -- --nocapture --ignored --test-threads=1
         env:
           ZALLY_API_URL: http://localhost:1418
+      - name: Run E2E test (voting_flow_librustvoting)
+        run: cargo test --release --manifest-path e2e-tests/Cargo.toml --test voting_flow_librustvoting -- --nocapture --ignored --test-threads=1
+        env:
+          ZALLY_API_URL: http://localhost:1418
+          HELPER_SERVER_URL: http://localhost:1418
+          ZALLY_E2E_VOTE_WINDOW_SECS: "420"
       - name: Restart val2 and verify recovery
         run: mise run test:restart
         env:
