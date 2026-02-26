@@ -10,9 +10,9 @@
 //   EDGE_CONFIG_ID     — ID of the Edge Config store (ecfg_...)
 //   CHAIN_API_URL      — Public URL of a chain node REST API (e.g. https://46-101-255-48.sslip.io)
 
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { sha256 } from '@noble/hashes/sha256';
-import { ripemd160 } from '@noble/hashes/ripemd160';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { ripemd160 } from '@noble/hashes/legacy.js';
 import { bech32 } from 'bech32';
 
 export const config = { runtime: 'edge' };
