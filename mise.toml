@@ -564,6 +564,10 @@ run = "make -C sdk test"
 description = "Rust circuit unit tests"
 run = "make -C sdk circuits-test"
 
+[tasks."test:halo2"]
+description = "Go Halo2 ZKP verification tests (requires circuits)"
+run = "make -C sdk test-halo2"
+
 [tasks."test:ffi"]
 description = "All FFI-backed tests (Halo2 + RedPallas)"
 run = "make -C sdk test-all-ffi"
