@@ -2,12 +2,21 @@
 //!
 //! [`GenericTreeServer`] is a single parameterised struct that backs both the
 //! production server ([`TreeServer`], KV-backed) and the in-memory test/POC
-//! server ([`MemoryTreeServer`]). The only difference between the two is the
-//! shard store implementation they use.
+//! server. The only difference between the two is the shard store
+//! implementation they use.
+//!
+//! [`SyncableServer`] wraps [`GenericTreeServer`] and adds per-block leaf
+//! tracking (`blocks`, `pending_leaves`, `pending_start`) needed to implement
+//! [`crate::sync_api::TreeSyncApi`]. This is a sync-protocol concern, not a
+//! tree concern, so it lives in a separate wrapper rather than on the core
+//! tree type. [`MemoryTreeServer`] is a convenience alias for
+//! `SyncableServer<MemoryShardStore<…>>`.
 //!
 //! In production, [`TreeServer`] is backed by a [`KvShardStore`] so all shard
 //! reads/writes go directly to the Cosmos KV store through Go callbacks,
 //! giving `ShardTree` true lazy loading.
+
+use std::collections::BTreeMap;
 
 use incrementalmerkletree::{Hashable, Level, Retention};
 use pasta_curves::{group::ff::PrimeField, Fp};
@@ -16,6 +25,7 @@ use shardtree::{error::ShardTreeError, store::{memory::MemoryShardStore, ShardSt
 use crate::hash::{MerkleHashVote, MAX_CHECKPOINTS, SHARD_HEIGHT, TREE_DEPTH};
 use crate::kv_shard_store::{KvCallbacks, KvError, KvShardStore};
 use crate::path::MerklePath;
+use crate::sync_api::BlockCommitments;
 
 // ---------------------------------------------------------------------------
 // GenericTreeServer
@@ -42,22 +52,32 @@ pub struct GenericTreeServer<S: shardtree::store::ShardStore<H = MerkleHashVote,
 /// Production vote commitment tree backed by the Cosmos KV store.
 pub type TreeServer = GenericTreeServer<KvShardStore>;
 
-/// In-memory vote commitment tree for tests and the POC helper server.
+/// A [`GenericTreeServer`] augmented with per-block leaf tracking for the
+/// [`crate::sync_api::TreeSyncApi`].
 ///
-/// This is a full struct (not a type alias) because it adds block-level leaf
-/// tracking on top of `GenericTreeServer` to support the `TreeSyncApi` — used
-/// by the client to sync incrementally via `get_block_commitments`. The
-/// production `TreeServer` does not need this tracking because the REST layer
-/// reads leaves directly from the application KV store.
-pub struct MemoryTreeServer {
-    pub(crate) inner: GenericTreeServer<MemoryShardStore<MerkleHashVote, u32>>,
+/// The sync protocol needs to know which leaves were appended in each block so
+/// that clients can download compact-block diffs. That tracking is a sync
+/// concern, not a tree concern, so it lives here rather than on
+/// [`GenericTreeServer`].
+///
+/// Use the [`MemoryTreeServer`] type alias for the common in-memory case.
+pub struct SyncableServer<S: ShardStore<H = MerkleHashVote, CheckpointId = u32>> {
+    pub(crate) tree: GenericTreeServer<S>,
     /// Completed blocks: height → commitments (populated on `checkpoint`).
-    pub(crate) blocks: std::collections::BTreeMap<u32, crate::sync_api::BlockCommitments>,
+    pub(crate) blocks: BTreeMap<u32, BlockCommitments>,
     /// Leaves accumulated for the current (not yet checkpointed) block.
     pending_leaves: Vec<MerkleHashVote>,
     /// Start index for the pending block.
     pending_start: u64,
 }
+
+/// In-memory vote commitment tree for tests and the POC helper server.
+///
+/// This is a type alias for [`SyncableServer`] backed by [`MemoryShardStore`].
+/// It supports [`crate::sync_api::TreeSyncApi`] via per-block leaf tracking
+/// inside `SyncableServer`. Tests that do not need sync can use
+/// `GenericTreeServer<MemoryShardStore<MerkleHashVote, u32>>` directly.
+pub type MemoryTreeServer = SyncableServer<MemoryShardStore<MerkleHashVote, u32>>;
 
 // ---------------------------------------------------------------------------
 // AppendFromKvError
@@ -102,7 +122,7 @@ impl std::error::Error for AppendFromKvError {}
 // CheckpointError
 // ---------------------------------------------------------------------------
 
-/// Error returned by [`GenericTreeServer::checkpoint`] and [`MemoryTreeServer::checkpoint`].
+/// Error returned by [`GenericTreeServer::checkpoint`] and [`SyncableServer::checkpoint`].
 #[derive(Debug)]
 pub enum CheckpointError<E> {
     /// The requested checkpoint height is not strictly greater than the most
@@ -217,34 +237,54 @@ impl TreeServer {
 }
 
 // ---------------------------------------------------------------------------
-// MemoryTreeServer constructor
+// SyncableServer constructor
 // ---------------------------------------------------------------------------
 
-impl MemoryTreeServer {
-    /// Create an empty in-memory tree.
+impl SyncableServer<MemoryShardStore<MerkleHashVote, u32>> {
+    /// Create an empty in-memory syncable tree.
     pub fn empty() -> Self {
         Self {
-            inner: GenericTreeServer {
+            tree: GenericTreeServer {
                 inner: ShardTree::new(MemoryShardStore::empty(), MAX_CHECKPOINTS),
                 latest_checkpoint: None,
                 next_position: 0,
             },
-            blocks: std::collections::BTreeMap::new(),
+            blocks: BTreeMap::new(),
+            pending_leaves: Vec::new(),
+            pending_start: 0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SyncableServer: shared impl for all S
+// ---------------------------------------------------------------------------
+
+impl<S> SyncableServer<S>
+where
+    S: ShardStore<H = MerkleHashVote, CheckpointId = u32>,
+    S::Error: std::fmt::Debug,
+{
+    /// Wrap an existing [`GenericTreeServer`] with sync tracking.
+    pub fn new(tree: GenericTreeServer<S>) -> Self {
+        Self {
+            tree,
+            blocks: BTreeMap::new(),
             pending_leaves: Vec::new(),
             pending_start: 0,
         }
     }
 
     /// Append a single leaf and record it in the pending block.
-    pub fn append(&mut self, leaf: Fp) -> Result<u64, shardtree::error::ShardTreeError<std::convert::Infallible>> {
+    pub fn append(&mut self, leaf: Fp) -> Result<u64, ShardTreeError<S::Error>> {
         let hash = MerkleHashVote::from_fp(leaf);
-        let idx = self.inner.append(leaf)?;
+        let idx = self.tree.append(leaf)?;
         self.pending_leaves.push(hash);
         Ok(idx)
     }
 
     /// Append two leaves (e.g. new VAN + VC from `MsgCastVote`).
-    pub fn append_two(&mut self, first: Fp, second: Fp) -> Result<u64, shardtree::error::ShardTreeError<std::convert::Infallible>> {
+    pub fn append_two(&mut self, first: Fp, second: Fp) -> Result<u64, ShardTreeError<S::Error>> {
         let idx = self.append(first)?;
         self.append(second)?;
         Ok(idx)
@@ -255,41 +295,41 @@ impl MemoryTreeServer {
     /// # Errors
     /// Returns [`CheckpointError::NotMonotonic`] if `height` is not strictly
     /// greater than the previous checkpoint height.
-    pub fn checkpoint(&mut self, height: u32) -> Result<(), CheckpointError<std::convert::Infallible>> {
-        self.inner.checkpoint(height)?;
-        let commitments = crate::sync_api::BlockCommitments {
+    pub fn checkpoint(&mut self, height: u32) -> Result<(), CheckpointError<S::Error>> {
+        self.tree.checkpoint(height)?;
+        let commitments = BlockCommitments {
             height,
             start_index: self.pending_start,
             leaves: std::mem::take(&mut self.pending_leaves),
         };
         self.blocks.insert(height, commitments);
-        self.pending_start = self.inner.next_position;
+        self.pending_start = self.tree.next_position;
         Ok(())
     }
 
     /// Current Merkle root (at the latest checkpoint).
     pub fn root(&self) -> Fp {
-        self.inner.root()
+        self.tree.root()
     }
 
     /// Root at a specific checkpoint height.
     pub fn root_at_height(&self, height: u32) -> Option<Fp> {
-        self.inner.root_at_height(height)
+        self.tree.root_at_height(height)
     }
 
     /// Number of leaves appended.
     pub fn size(&self) -> u64 {
-        self.inner.size()
+        self.tree.size()
     }
 
     /// Build a Merkle path for the leaf at `position` at `anchor_height`.
     pub fn path(&self, position: u64, anchor_height: u32) -> Option<MerklePath> {
-        self.inner.path(position, anchor_height)
+        self.tree.path(position, anchor_height)
     }
 
     /// Latest checkpoint height.
     pub fn latest_checkpoint(&self) -> Option<u32> {
-        self.inner.latest_checkpoint
+        self.tree.latest_checkpoint
     }
 }
 
@@ -379,11 +419,14 @@ where
         self.next_position = pos;
     }
 
-    /// Reset the in-memory `latest_checkpoint` to `None` without touching the
-    /// KV store. Used after handle recreation on rollback, where the KV store
-    /// may still hold checkpoint entries from the pre-rollback chain state.
-    /// Clearing this field allows the next `checkpoint(M)` call to succeed
-    /// without triggering the monotonicity assertion.
+    /// Reset the in-memory `latest_checkpoint` to `None`.
+    ///
+    /// On rollback the Go keeper calls [`TreeServer::truncate_kv_data`] before
+    /// recreating the handle, which wipes all checkpoint blobs from KV. The
+    /// fresh handle's [`TreeServer::new`] therefore reads `max_checkpoint_id()
+    /// = None` and already starts with `latest_checkpoint = None`. This method
+    /// is belt-and-suspenders: it makes the intent explicit and guards against
+    /// a future refactor that might skip `truncate_kv_data`.
     pub fn clear_latest_checkpoint(&mut self) {
         self.latest_checkpoint = None;
     }

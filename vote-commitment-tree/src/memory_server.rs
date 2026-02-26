@@ -1,10 +1,9 @@
-//! [`MemoryTreeServer`] — a lightweight in-memory tree for stateless
-//! (one-shot) use: stateless FFI helpers and unit tests.
+//! [`SyncableServer`] — augments [`GenericTreeServer`] with per-block leaf
+//! tracking and implements [`TreeSyncApi`] for in-process sync.
 //!
-//! `MemoryTreeServer` is defined in [`crate::server`] as a wrapper around
-//! `GenericTreeServer<MemoryShardStore>` that adds per-block leaf tracking
-//! for the [`TreeSyncApi`]. This module provides the `TreeSyncApi`
-//! implementation and the test suite.
+//! [`MemoryTreeServer`] is a convenience alias for
+//! `SyncableServer<MemoryShardStore<…>>`. Tests that do not need sync can use
+//! `GenericTreeServer<MemoryShardStore<MerkleHashVote, u32>>` directly.
 //!
 //! For the production incremental path use [`crate::server::TreeServer`]
 //! backed by [`crate::kv_shard_store::KvShardStore`].
@@ -12,15 +11,23 @@
 use std::convert::Infallible;
 
 use pasta_curves::Fp;
+use shardtree::store::ShardStore;
 
-use crate::server::MemoryTreeServer;
+use crate::hash::MerkleHashVote;
+use crate::server::SyncableServer;
 use crate::sync_api::{BlockCommitments, TreeState, TreeSyncApi};
 
 // ---------------------------------------------------------------------------
-// TreeSyncApi implementation for MemoryTreeServer
+// TreeSyncApi implementation for SyncableServer<S>
 // ---------------------------------------------------------------------------
 
-impl TreeSyncApi for MemoryTreeServer {
+impl<S> TreeSyncApi for SyncableServer<S>
+where
+    S: ShardStore<H = MerkleHashVote, CheckpointId = u32>,
+    S::Error: std::fmt::Debug,
+{
+    /// `SyncableServer` never fails when serving sync data — the `blocks` map
+    /// is an in-memory `BTreeMap` and all root lookups are infallible.
     type Error = Infallible;
 
     fn get_block_commitments(
@@ -58,7 +65,7 @@ mod tests {
     use super::*;
     use crate::anchor::Anchor;
     use crate::hash::EMPTY_ROOTS;
-    use crate::server::MemoryTreeServer;
+    use crate::server::{CheckpointError, MemoryTreeServer};
 
     fn fp(x: u64) -> Fp {
         Fp::from(x)
@@ -132,8 +139,6 @@ mod tests {
 
     #[test]
     fn checkpoint_monotonicity_returns_error_on_regression() {
-        use crate::server::CheckpointError;
-
         let mut tree = MemoryTreeServer::empty();
         tree.append(fp(1)).unwrap();
         tree.checkpoint(5).unwrap();
