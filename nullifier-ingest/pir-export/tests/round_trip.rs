@@ -341,7 +341,7 @@ fn test_subset_export_produces_different_root() {
 /// Test that tier export is deterministic: exporting the same tree
 /// twice produces byte-identical output.
 #[test]
-fn test_parallel_export_deterministic() {
+fn test_export_deterministic() {
     let raw_nfs: Vec<Fp> = (1u64..=100).map(|i| Fp::from(i * 1013)).collect();
     let ranges = build_ranges_with_sentinels(&raw_nfs);
     let tree = build_pir_tree(ranges).unwrap();
