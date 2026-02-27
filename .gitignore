@@ -1,6 +1,5 @@
-# make up log files
-ingest-serve.log
-zallyd.log
+# Log files
+*.log
 .claude/**
 
 # Go binary
@@ -55,7 +54,6 @@ nullifiers.bin
 nullifiers.checkpoint
 nullifiers.tree
 nullifiers.index
-nf-serve.log
 nullifier-ingest/pir-data/
 
 # macOS

@@ -118,9 +118,10 @@ Stored per `voting_round_id`. Created by `MsgCreateVotingSession`.
 
 ```protobuf
 message VotingSession {
-  bytes   voting_round_id       = 1;  // Blake2b(snapshot_height, snapshot_blockhash,
-                                      //         proposals_hash, vote_end_time,
-                                      //         nullifier_imt_root, nc_root)
+  bytes   voting_round_id       = 1;  // Poseidon(snapshot_height,
+                                      //         snapshot_blockhash_lo, snapshot_blockhash_hi,
+                                      //         proposals_hash_lo, proposals_hash_hi,
+                                      //         vote_end_time, nullifier_imt_root, nc_root)
   uint64  snapshot_height       = 2;
   bytes   snapshot_blockhash    = 3;  // 32 bytes
   bytes   proposals_hash        = 4;  // hash of proposals list
@@ -283,7 +284,7 @@ message MsgCreateVotingSessionResponse {
 - Initialize empty Vote Commitment Tree for this round.
 - Initialize empty nullifier sets (gov, van, share) for this round.
 - Initialize zero-valued tally accumulators for each `(proposal_id, decision)` pair.
-- Compute and store `voting_round_id = Blake2b(snapshot_height, snapshot_blockhash, proposals_hash, vote_end_time, nullifier_imt_root, nc_root)`.
+- Compute and store `voting_round_id = Poseidon(snapshot_height, snapshot_blockhash_lo, snapshot_blockhash_hi, proposals_hash_lo, proposals_hash_hi, vote_end_time, nullifier_imt_root, nc_root)` (canonical 32-byte Pallas Fp).
 
 ---
 
@@ -411,7 +412,7 @@ message MsgCastVote {
   // New VAN with decremented proposal authority (§3.5)
   FieldElement vote_authority_note_new = 4;
 
-  // Vote commitment: H(DOMAIN_VC, shares_hash, proposal_id, vote_decision) (§3.4)
+  // Vote commitment: H(DOMAIN_VC, voting_round_id, shares_hash, proposal_id, vote_decision) (§3.4)
   FieldElement vote_commitment  = 5;
 
   // Proposal being voted on (0-indexed, §Proposal IDs)

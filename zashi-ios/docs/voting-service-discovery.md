@@ -16,7 +16,7 @@ The first source that succeeds wins. This means a TestFlight build works out of 
 {
   "version": 1,
   "vote_servers": [
-    { "url": "https://46-101-255-48.sslip.io", "label": "Primary" }
+    { "url": "https://46-101-255-48.sslip.io", "label": "Primary", "operator_address": "zvote1abc..." }
   ],
   "pir_servers": [
     { "url": "https://46-101-255-48.sslip.io/nullifier", "label": "PIR Server" }
@@ -26,9 +26,27 @@ The first source that succeeds wins. This means a TestFlight build works out of 
 
 **Important:** The JSON keys must be `vote_servers` and `pir_servers` — these map to `VotingServiceConfig.CodingKeys` in Swift. Using other key names (e.g. `nullifier_providers`) will cause silent decode failure, falling through to CDN/fallback.
 
+The `operator_address` field is optional and used by the self-registration system to track which validator owns each entry. Swift `Codable` ignores unknown keys, so adding this field is backward-compatible with existing iOS builds.
+
 `vote_servers` entries each serve the full set of endpoints — both chain API (`/zally/v1/*`) and helper API (`/api/v1/shares`). This is because the SDK and helper server are a single merged binary.
 
 `pir_servers` serve the PIR nullifier exclusion proof protocol (port 3000 by default).
+
+## Self-registration
+
+Validators can register their URL with a single command via `join.sh`. The registration flow has two phases:
+
+**Phase 1 (not yet bonded):** `join.sh` signs a registration payload with the validator's operator key and POSTs it to `/api/register-validator`. Since the validator isn't bonded yet, the entry goes into a `pending-registrations` queue (7-day expiry). The vote-manager sees pending registrations in the admin UI and clicks "Approve & Fund" to move the URL to `vote_servers` and send stake in one action.
+
+**Phase 2 (bonded):** After `start.sh` registers the validator on-chain (via `create-val-tx`), it re-registers with the same endpoint. This time the edge function detects the validator is bonded and promotes the URL directly to `vote_servers` — no admin approval needed.
+
+Both phases use the same endpoint (`POST /api/register-validator`) and the same ADR-036 amino signature format. The edge function decides the path based on on-chain bonding status.
+
+The `zallyd sign-arbitrary` command provides the signature:
+```bash
+zallyd sign-arbitrary '{"operator_address":"...","url":"...","moniker":"...","timestamp":...}' \
+  --from validator --keyring-backend test --home ~/.zallyd
+```
 
 ## Local testing
 
@@ -83,7 +101,7 @@ Changes take effect immediately — no git push or redeploy needed. This is usef
    {
      "version": 1,
      "vote_servers": [
-       { "url": "https://46-101-255-48.sslip.io", "label": "Primary" }
+       { "url": "https://46-101-255-48.sslip.io", "label": "Primary", "operator_address": "zvote1..." }
      ],
      "pir_servers": [
        { "url": "https://46-101-255-48.sslip.io/nullifier", "label": "Primary" }

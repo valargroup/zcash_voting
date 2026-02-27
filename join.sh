@@ -27,6 +27,16 @@ HOME_DIR="${ZALLY_HOME:-$HOME/.zallyd}"
 DO_BASE="https://vote.fra1.digitaloceanspaces.com"
 VOTING_CONFIG_URL="${VOTING_CONFIG_URL:-https://zally-phi.vercel.app}"
 
+# Parse --domain flag for TLS hostname override.
+ZALLY_DOMAIN="${ZALLY_DOMAIN:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain) ZALLY_DOMAIN="$2"; shift 2 ;;
+    --domain=*) ZALLY_DOMAIN="${1#--domain=}"; shift ;;
+    *) shift ;;
+  esac
+done
+
 # ─── Preflight ────────────────────────────────────────────────────────────────
 
 echo "=== Zally validator join ==="
@@ -270,6 +280,106 @@ HELPERCFG
 
 echo "Node configured."
 
+# ─── TLS reverse proxy (Caddy) ──────────────────────────────────────────────
+# Sets up Caddy as a TLS reverse proxy in front of the chain REST API (port 1418).
+# Caddy auto-provisions Let's Encrypt certificates.
+
+echo ""
+echo "=== Setting up TLS reverse proxy ==="
+
+if [ -z "$ZALLY_DOMAIN" ]; then
+  # Auto-detect public IP and use sslip.io for a valid TLS hostname.
+  PUBLIC_IP=$(curl -fsSL --connect-timeout 5 https://ifconfig.me 2>/dev/null || echo "")
+  if [ -z "$PUBLIC_IP" ]; then
+    echo "WARNING: Could not detect public IP. Skipping Caddy setup."
+    echo "  Re-run with --domain <hostname> or set ZALLY_DOMAIN to configure TLS."
+    VALIDATOR_URL=""
+  else
+    ZALLY_DOMAIN="$(echo "$PUBLIC_IP" | tr '.' '-').sslip.io"
+    echo "Detected public IP: ${PUBLIC_IP}"
+    echo "Using sslip.io domain: ${ZALLY_DOMAIN}"
+  fi
+fi
+
+if [ -n "$ZALLY_DOMAIN" ]; then
+  VALIDATOR_URL="https://${ZALLY_DOMAIN}"
+
+  # Install Caddy if not present.
+  if ! command -v caddy > /dev/null 2>&1; then
+    OS_NAME=$(uname -s)
+    if [ "$OS_NAME" = "Linux" ]; then
+      echo "Installing Caddy..."
+      if command -v apt-get > /dev/null 2>&1; then
+        sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl > /dev/null 2>&1
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+        sudo apt-get update > /dev/null 2>&1
+        sudo apt-get install -y caddy > /dev/null 2>&1
+      else
+        echo "WARNING: apt not found. Install Caddy manually: https://caddyserver.com/docs/install"
+        VALIDATOR_URL=""
+      fi
+    else
+      echo "WARNING: Automatic Caddy installation is only supported on Linux (apt)."
+      echo "  Install Caddy manually: https://caddyserver.com/docs/install"
+      echo "  Then re-run join.sh."
+      VALIDATOR_URL=""
+    fi
+  fi
+fi
+
+if [ -n "$VALIDATOR_URL" ] && command -v caddy > /dev/null 2>&1; then
+  # Write Caddyfile.
+  echo "Configuring Caddy for ${ZALLY_DOMAIN} → localhost:1418..."
+  sudo tee /etc/caddy/Caddyfile > /dev/null <<CADDYEOF
+${ZALLY_DOMAIN} {
+    reverse_proxy localhost:1418
+}
+CADDYEOF
+
+  sudo systemctl restart caddy 2>/dev/null || sudo caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
+  echo "Caddy configured: ${VALIDATOR_URL} → localhost:1418"
+else
+  VALIDATOR_URL=""
+fi
+
+# ─── Phase 1: Register as pending validator ─────────────────────────────────
+# The validator exists (keys generated) but isn't bonded yet. Register with
+# the Vercel API so the vote-manager can see and approve it.
+
+if [ -n "$VALIDATOR_URL" ]; then
+  echo ""
+  echo "=== Registering with vote network ==="
+
+  TIMESTAMP=$(date +%s)
+  REG_PAYLOAD="{\"operator_address\":\"${VALIDATOR_ADDR}\",\"url\":\"${VALIDATOR_URL}\",\"moniker\":\"${MONIKER}\",\"timestamp\":${TIMESTAMP}}"
+
+  if SIG_JSON=$(zallyd sign-arbitrary "$REG_PAYLOAD" --from validator --keyring-backend test --home "${HOME_DIR}" 2>/dev/null); then
+    SIG=$(echo "$SIG_JSON" | jq -r '.signature')
+    PUB_KEY=$(echo "$SIG_JSON" | jq -r '.pub_key')
+
+    REG_BODY="{\"operator_address\":\"${VALIDATOR_ADDR}\",\"url\":\"${VALIDATOR_URL}\",\"moniker\":\"${MONIKER}\",\"timestamp\":${TIMESTAMP},\"signature\":\"${SIG}\",\"pub_key\":\"${PUB_KEY}\"}"
+
+    REG_RESULT=$(curl -fsSL -X POST "${VOTING_CONFIG_URL}/api/register-validator" \
+      -H "Content-Type: application/json" \
+      -d "$REG_BODY" 2>/dev/null || echo "")
+
+    if [ -n "$REG_RESULT" ]; then
+      REG_STATUS=$(echo "$REG_RESULT" | jq -r '.status // empty' 2>/dev/null || echo "")
+      if [ "$REG_STATUS" = "pending" ] || [ "$REG_STATUS" = "registered" ]; then
+        echo "Registered (${REG_STATUS}). The vote-manager will see your request."
+      else
+        echo "WARNING: Registration response: ${REG_RESULT}"
+      fi
+    else
+      echo "WARNING: Could not reach registration API. You can register manually later:"
+      echo "  zallyd sign-arbitrary '<payload>' --from validator --keyring-backend test --home ${HOME_DIR}"
+    fi
+  else
+    echo "WARNING: Could not sign registration payload. You can register manually later."
+  fi
+fi
+
 # ─── Generate start.sh ───────────────────────────────────────────────────────
 
 START_SCRIPT="${HOME_DIR}/start.sh"
@@ -284,6 +394,8 @@ HOME_DIR="${HOME_DIR}"
 INSTALL_DIR="${INSTALL_DIR}"
 MONIKER="${MONIKER}"
 VALIDATOR_ADDR="${VALIDATOR_ADDR}"
+VALIDATOR_URL="${VALIDATOR_URL}"
+VOTING_CONFIG_URL="${VOTING_CONFIG_URL}"
 LOG_FILE="\${HOME_DIR}/node.log"
 
 # Ensure binaries are on PATH.
@@ -291,6 +403,24 @@ case ":\${PATH}:" in
   *":\${INSTALL_DIR}:"*) ;;
   *) export PATH="\${INSTALL_DIR}:\${PATH}" ;;
 esac
+
+# Re-register URL with the vote network (idempotent).
+# Once bonded, this promotes the pending entry to vote_servers directly.
+register_url() {
+  if [ -z "\${VALIDATOR_URL}" ] || [ -z "\${VOTING_CONFIG_URL}" ]; then
+    return 0
+  fi
+  local ts=\$(date +%s)
+  local payload="{\"operator_address\":\"\${VALIDATOR_ADDR}\",\"url\":\"\${VALIDATOR_URL}\",\"moniker\":\"\${MONIKER}\",\"timestamp\":\${ts}}"
+  local sig_json
+  sig_json=\$(zallyd sign-arbitrary "\$payload" --from validator --keyring-backend test --home "\${HOME_DIR}" 2>/dev/null) || return 0
+  local sig=\$(echo "\$sig_json" | jq -r '.signature')
+  local pub_key=\$(echo "\$sig_json" | jq -r '.pub_key')
+  local body="{\"operator_address\":\"\${VALIDATOR_ADDR}\",\"url\":\"\${VALIDATOR_URL}\",\"moniker\":\"\${MONIKER}\",\"timestamp\":\${ts},\"signature\":\"\${sig}\",\"pub_key\":\"\${pub_key}\"}"
+  curl -fsSL -X POST "\${VOTING_CONFIG_URL}/api/register-validator" \
+    -H "Content-Type: application/json" \
+    -d "\$body" > /dev/null 2>&1 || true
+}
 
 echo "Starting zallyd..."
 echo "Logs: \${LOG_FILE}"
@@ -328,6 +458,8 @@ IS_VALIDATOR=\$(zallyd query staking validators --home "\${HOME_DIR}" --output j
 
 if [ -n "\$IS_VALIDATOR" ]; then
   echo "Already registered as validator: \${IS_VALIDATOR}"
+  # Re-register URL on restart (idempotent — ensures vote_servers is up to date).
+  register_url
 else
   # Wait for the account to be funded before attempting registration.
   echo "Waiting for account \${VALIDATOR_ADDR} to be funded..."
@@ -362,6 +494,8 @@ else
     exit 1
   fi
   echo "Validator registered: \${IS_NOW_VALIDATOR}"
+  # Re-register now that we're bonded — promotes to vote_servers.
+  register_url
 fi
 
 echo ""
@@ -403,11 +537,18 @@ fi
 
 echo "=== Next steps ==="
 echo ""
-echo "1. Fund your account. Ask the bootstrap operator to use the"
-echo "   admin UI to send stake to your address:"
-echo "   ${VALIDATOR_ADDR}"
-echo ""
-echo "2. Once funded, start your node (syncs and registers automatically):"
+if [ -n "$VALIDATOR_URL" ]; then
+  echo "1. Your registration request has been sent to the vote-manager."
+  echo "   They will approve and fund your account in the admin UI."
+  echo ""
+  echo "2. Once approved, start your node (syncs and registers automatically):"
+else
+  echo "1. Fund your account. Ask the vote-manager to approve your"
+  echo "   registration in the admin UI, or send stake to:"
+  echo "   ${VALIDATOR_ADDR}"
+  echo ""
+  echo "2. Once funded, start your node (syncs and registers automatically):"
+fi
 echo "   ${START_SCRIPT}"
 echo ""
 echo "   Then follow node logs with:"

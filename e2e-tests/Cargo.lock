@@ -607,6 +607,7 @@ dependencies = [
  "chacha20poly1305",
  "ff",
  "group",
+ "halo2_gadgets",
  "hex",
  "incrementalmerkletree",
  "librustvoting",
@@ -3766,6 +3767,7 @@ version = "0.1.0"
 dependencies = [
  "ff",
  "group",
+ "halo2_gadgets",
  "halo2_proofs",
  "hex",
  "incrementalmerkletree",
