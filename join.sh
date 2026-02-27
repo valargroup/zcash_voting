@@ -310,11 +310,12 @@ if [ -n "$ZALLY_DOMAIN" ]; then
     if [ "$OS_NAME" = "Linux" ]; then
       echo "Installing Caddy..."
       if command -v apt-get > /dev/null 2>&1; then
-        sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl > /dev/null 2>&1
+        export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+        sudo -E apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl > /dev/null 2>&1
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
-        sudo apt-get update > /dev/null 2>&1
-        sudo apt-get install -y caddy > /dev/null 2>&1
+        sudo -E apt-get update > /dev/null 2>&1
+        sudo -E apt-get install -y caddy > /dev/null 2>&1
       else
         echo "WARNING: apt not found. Install Caddy manually: https://caddyserver.com/docs/install"
         VALIDATOR_URL=""
@@ -475,7 +476,7 @@ else
   done
 
   echo "Registering as validator..."
-  if ! create-val-tx --moniker "\${MONIKER}" --amount 200000stake --home "\${HOME_DIR}" --rpc-url tcp://localhost:26657; then
+  if ! create-val-tx --moniker "\${MONIKER}" --amount 10000000stake --home "\${HOME_DIR}" --rpc-url tcp://localhost:26657; then
     echo ""
     echo "ERROR: create-val-tx exited with a non-zero status." >&2
     echo "  Check node logs for details: \${LOG_FILE}" >&2

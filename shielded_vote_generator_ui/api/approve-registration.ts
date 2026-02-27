@@ -1,15 +1,15 @@
-// Edge function for approving a pending validator registration.
+// Edge function for approving or rejecting a pending validator registration.
 //
-// Vote-manager auth (same pattern as update-voting-config.ts). The vote-manager
-// signs { action: "approve", operator_address } and this function moves the
-// pending entry to vote_servers in voting-config, then removes it from
-// pending-registrations. Both updates are sent as a single Edge Config PATCH
-// for atomicity.
+// Bootstrap admin auth — the signer must match ADMIN_ADDRESS. The admin
+// signs { action: "approve"|"reject", operator_address }. On approve, the
+// pending entry is moved to vote_servers in voting-config. On reject, it is
+// simply removed from pending-registrations. Both updates use a single Edge
+// Config PATCH for atomicity.
 //
 // Required env vars:
 //   VERCEL_API_TOKEN   — Vercel REST API token with Edge Config write access
 //   EDGE_CONFIG_ID     — ID of the Edge Config store (ecfg_...)
-//   CHAIN_API_URL      — Public URL of a chain node REST API
+//   ADMIN_ADDRESS      — Bech32 address of the bootstrap admin
 
 import { get } from '@vercel/edge-config';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
@@ -112,11 +112,10 @@ export default async function handler(req: Request) {
 
   const VERCEL_API_TOKEN = process.env.VERCEL_API_TOKEN;
   const EDGE_CONFIG_ID = process.env.EDGE_CONFIG_ID;
-  const CHAIN_API_URL = process.env.CHAIN_API_URL;
 
-  if (!VERCEL_API_TOKEN || !EDGE_CONFIG_ID || !CHAIN_API_URL) {
+  if (!VERCEL_API_TOKEN || !EDGE_CONFIG_ID) {
     return jsonResponse(
-      { error: 'Server misconfigured: missing VERCEL_API_TOKEN, EDGE_CONFIG_ID, or CHAIN_API_URL' },
+      { error: 'Server misconfigured: missing VERCEL_API_TOKEN or EDGE_CONFIG_ID' },
       500,
     );
   }
@@ -136,8 +135,8 @@ export default async function handler(req: Request) {
     );
   }
 
-  if (payload.action !== 'approve' || !payload.operator_address) {
-    return jsonResponse({ error: 'Invalid payload: expected { action: "approve", operator_address }' }, 400);
+  if ((payload.action !== 'approve' && payload.action !== 'reject') || !payload.operator_address) {
+    return jsonResponse({ error: 'Invalid payload: expected { action: "approve"|"reject", operator_address }' }, 400);
   }
 
   // 1. Verify secp256k1 signature.
@@ -164,20 +163,15 @@ export default async function handler(req: Request) {
     return jsonResponse({ error: 'Public key does not match signer address' }, 401);
   }
 
-  // 3. Verify the signer is the vote-manager.
-  let voteManager: string;
-  try {
-    const resp = await fetch(`${CHAIN_API_URL}/zally/v1/vote-manager`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    voteManager = data.address ?? '';
-  } catch (err) {
-    return jsonResponse({ error: `Failed to query vote-manager: ${err}` }, 502);
+  // 3. Verify the signer is the bootstrap admin.
+  const ADMIN_ADDRESS = process.env.ADMIN_ADDRESS;
+  if (!ADMIN_ADDRESS) {
+    return jsonResponse({ error: 'Server misconfigured: missing ADMIN_ADDRESS' }, 500);
   }
 
-  if (voteManager !== signerAddress) {
+  if (signerAddress !== ADMIN_ADDRESS) {
     return jsonResponse(
-      { error: `Signer ${signerAddress} is not the vote-manager (${voteManager})` },
+      { error: `Signer ${signerAddress} is not the admin (${ADMIN_ADDRESS})` },
       403,
     );
   }
@@ -193,7 +187,42 @@ export default async function handler(req: Request) {
     );
   }
 
-  // 5. Move to vote_servers in voting-config.
+  // Remove from pending (used by both approve and reject).
+  const updatedPending = currentPending.filter(
+    (p) => p.operator_address !== payload.operator_address,
+  );
+
+  if (payload.action === 'reject') {
+    // Just remove from pending — no vote_servers update.
+    try {
+      const resp = await fetch(
+        `https://api.vercel.com/v1/edge-config/${EDGE_CONFIG_ID}/items`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${VERCEL_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            items: [
+              { operation: 'upsert', key: 'pending-registrations', value: updatedPending },
+            ],
+          }),
+        },
+      );
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        return jsonResponse({ error: `Edge Config update failed: HTTP ${resp.status} – ${text}` }, 502);
+      }
+    } catch (err) {
+      return jsonResponse({ error: `Edge Config update failed: ${err}` }, 502);
+    }
+
+    return jsonResponse({ status: 'rejected', operator_address: entry.operator_address });
+  }
+
+  // 5. Approve: move to vote_servers in voting-config.
   const currentConfig = (await get('voting-config') as VotingConfig | null) ?? {
     version: 1,
     vote_servers: [],
@@ -215,11 +244,6 @@ export default async function handler(req: Request) {
   } else {
     currentConfig.vote_servers.push(serviceEntry);
   }
-
-  // Remove from pending.
-  const updatedPending = currentPending.filter(
-    (p) => p.operator_address !== payload.operator_address,
-  );
 
   // 6. Atomic Edge Config PATCH with both keys.
   try {
