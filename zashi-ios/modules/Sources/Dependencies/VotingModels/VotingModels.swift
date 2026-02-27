@@ -473,20 +473,17 @@ public struct SharePayload: Equatable, Sendable {
     public let voteDecision: UInt32
     public let encShare: EncryptedShare
     public let treePosition: UInt64
-    /// All encrypted shares (needed for enc_share lookup by the helper).
-    public let allEncShares: [EncryptedShare]
     /// Pre-computed per-share Poseidon commitments (N x 32 bytes).
     public let shareComms: [Data]
     /// Blind factor for this specific share (32 bytes).
     public let primaryBlind: Data
 
-    public init(sharesHash: Data, proposalId: UInt32, voteDecision: UInt32, encShare: EncryptedShare, treePosition: UInt64, allEncShares: [EncryptedShare], shareComms: [Data] = [], primaryBlind: Data = Data()) {
+    public init(sharesHash: Data, proposalId: UInt32, voteDecision: UInt32, encShare: EncryptedShare, treePosition: UInt64, shareComms: [Data] = [], primaryBlind: Data = Data()) {
         self.sharesHash = sharesHash
         self.proposalId = proposalId
         self.voteDecision = voteDecision
         self.encShare = encShare
         self.treePosition = treePosition
-        self.allEncShares = allEncShares
         self.shareComms = shareComms
         self.primaryBlind = primaryBlind
     }

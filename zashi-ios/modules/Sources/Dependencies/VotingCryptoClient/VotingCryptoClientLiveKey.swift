@@ -411,15 +411,6 @@ extension VotingCryptoClient: DependencyKey {
                             randomness: $0.encShare.randomness
                         ),
                         treePosition: $0.treePosition,
-                        allEncShares: $0.allEncShares.map {
-                            EncryptedShare(
-                                c1: $0.c1,
-                                c2: $0.c2,
-                                shareIndex: $0.shareIndex,
-                                plaintextValue: $0.plaintextValue,
-                                randomness: $0.randomness
-                            )
-                        },
                         shareComms: $0.shareComms.map { Data($0) },
                         primaryBlind: Data($0.primaryBlind)
                     )
