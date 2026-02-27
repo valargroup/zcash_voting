@@ -234,6 +234,8 @@ TODO: We should add any specific questions we have under the respective section 
 
 ### 6.1 Query Indistinguishability (Critical)
 
+- Our client currently constructs a fresh `YPIRClient` (and thus fresh keys s₁, s₂, packing key) for every individual query — Tier 1 and Tier 2 each get independent keys. Please verify that this is sufficient for privacy, and confirm there is no state leakage across queries via the `YPIRClient` construction or the underlying `spiral-rs` parameter setup.
+
 ### 6.2 YPIR Cryptographic Correctness (High)
 
 ### 6.3 Data Integrity (Medium)
