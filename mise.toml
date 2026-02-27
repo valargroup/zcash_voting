@@ -229,11 +229,12 @@ else
     printf '\033[31m✗ not exported\033[0m  run: mise run nullifier:export\n'
 fi
 
-# ── Voting rounds (only if chain is up) ──────────────────────────
+# ── Voting rounds + validators (only if chain is up) ────────────
 
 if [ "$CHAIN_UP" = true ]; then
-    echo ""
+    PALLAS_JSON=$(curl -sf "$API/zally/v1/pallas-keys" 2>/dev/null) || true
     ROUNDS_JSON=$(curl -sf "$API/zally/v1/rounds" 2>/dev/null) || true
+    echo ""
     if [ -n "$ROUNDS_JSON" ]; then
         echo "$ROUNDS_JSON" | python3 -c "
 import sys,json
@@ -258,6 +259,44 @@ else:
         if title: line+=f'  \"{title}\"'
         print(line)
 " 2>/dev/null || true
+    fi
+
+    # ── Validators: Pallas keys + ceremony acks ─────────────────
+    if [ -n "$PALLAS_JSON" ]; then
+        ROUNDS_JSON="$ROUNDS_JSON" python3 -c "
+import sys,json,os
+pallas=json.loads(sys.argv[1])
+validators=pallas.get('validators') or []
+if not validators:
+    print('\nNo Pallas keys registered')
+    sys.exit(0)
+
+# Find active/pending round's ceremony acks
+acked=set()
+rounds_raw=os.environ.get('ROUNDS_JSON','')
+if rounds_raw:
+    try:
+        rdata=json.loads(rounds_raw)
+        for r in (rdata.get('rounds') or []):
+            raw=r.get('status',0)
+            if raw in (1,4):  # active or pending
+                for a in (r.get('ceremony_acks') or []):
+                    acked.add(a.get('validator_address',''))
+                break
+    except: pass
+
+print()
+for v in validators:
+    addr=v.get('validator_address','')
+    short=addr[:24]+'...' if len(addr)>24 else addr
+    parts=[f'\033[32m🛡 pallas\033[0m']
+    if acked:
+        if addr in acked:
+            parts.append('\033[36mEA ack\033[0m')
+        else:
+            parts.append('\033[2mno ack\033[0m')
+    print(f'  {short}  {\"  \".join(parts)}')
+" "$PALLAS_JSON" 2>/dev/null || true
     fi
 fi
 
