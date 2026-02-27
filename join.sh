@@ -181,10 +181,11 @@ if [ -z "$NODE_ID" ]; then
   exit 1
 fi
 
-# Extract the host from the seed URL for the P2P address.
-# The REST API URL has a host; P2P uses port 26656.
+# Extract the host from the seed URL and the P2P port from the node's listen address.
 SEED_HOST=$(echo "$SEED_URL" | sed -E 's|^https?://||; s|:[0-9]+$||; s|/.*||')
-PERSISTENT_PEERS="${NODE_ID}@${SEED_HOST}:26656"
+P2P_PORT=$(echo "$LISTEN_ADDR" | sed -E 's|.*:([0-9]+)$|\1|')
+P2P_PORT="${P2P_PORT:-26656}"
+PERSISTENT_PEERS="${NODE_ID}@${SEED_HOST}:${P2P_PORT}"
 echo "Peers: ${PERSISTENT_PEERS}"
 
 # ─── Initialize node ─────────────────────────────────────────────────────────
