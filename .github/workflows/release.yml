@@ -1,4 +1,4 @@
-# Build pre-compiled binaries and publish a GitHub Release on version tags.
+# Build pre-compiled binaries and publish a GitgHub Release on version tags.
 #
 # Tarball layout:
 #   zally-<version>-<platform>/
@@ -13,7 +13,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -299,26 +299,3 @@ jobs:
           echo "${VERSION}" > /tmp/version.txt
           s3cmd -c /tmp/do-spaces.s3cfg put /tmp/version.txt s3://vote/version.txt --acl-public --force
           s3cmd -c /tmp/do-spaces.s3cfg put join.sh s3://vote/join.sh --acl-public --force
-
-      - name: Set up SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.CEREMONY_SSH_KEY }}" > ~/.ssh/ceremony_key
-          chmod 600 ~/.ssh/ceremony_key
-          cat >> ~/.ssh/config <<EOF
-          Host deploy-target
-            HostName ${{ secrets.DEPLOY_HOST }}
-            User ${{ secrets.DEPLOY_USER }}
-            IdentityFile ~/.ssh/ceremony_key
-            StrictHostKeyChecking no
-          EOF
-
-      - name: Upload release assets to server
-        run: |
-          ssh deploy-target "mkdir -p /opt/zally-chain/releases"
-          for PLATFORM in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-            TARBALL="zally-${VERSION}-${PLATFORM}.tar.gz"
-            scp "${TARBALL}" "${TARBALL}.sha256" deploy-target:/opt/zally-chain/releases/
-          done
-          scp join.sh deploy-target:/opt/zally-chain/releases/join.sh
-          ssh deploy-target "echo '${VERSION}' > /opt/zally-chain/releases/version.txt"
