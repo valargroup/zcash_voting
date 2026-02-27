@@ -16,7 +16,11 @@
 //!   binding the publicly revealed encrypted share to the committed set.
 //! - **Condition 5**: Share Nullifier Integrity — `share_nullifier` is
 //!   correctly derived as
-//!   `Poseidon(domain_tag, vote_commitment, share_index, c1_x, c2_x)`.
+//!   `Poseidon(domain_tag, vote_commitment, share_index, c1_x)`.
+//!   `c1_x = (g^r).x` supplies the ElGamal randomness that makes the
+//!   nullifier unlinkable without knowledge of the ciphertext. `c2_x` is
+//!   omitted — one coordinate is sufficient and saves one Poseidon
+//!   permutation (`ConstantLength<4>` vs the prior `ConstantLength<5>`).
 //!   Round-binding is transitive through `vote_commitment`, which already
 //!   commits to `voting_round_id`.
 //!
@@ -117,10 +121,14 @@ pub fn domain_tag_share_spend() -> pallas::Base {
 /// Out-of-circuit share nullifier hash (condition 5).
 ///
 /// ```text
-/// share_nullifier = Poseidon(domain_tag, vote_commitment, share_index, c1_x, c2_x)
+/// share_nullifier = Poseidon(domain_tag, vote_commitment, share_index, c1_x)
 /// ```
 ///
-/// Single `ConstantLength<5>` call (3 permutations at rate=2).
+/// Single `ConstantLength<4>` call (2 permutations at rate=2).
+/// `c1_x = (g^r).x` carries the ElGamal randomness `r`, providing the
+/// entropy needed to make the nullifier unlinkable to its vote commitment.
+/// `c2_x` is omitted — one random coordinate is sufficient and saves one
+/// Poseidon permutation vs the prior `ConstantLength<5>` variant.
 /// Round-binding comes transitively through `vote_commitment`, which
 /// already commits to `voting_round_id` as one of its Poseidon inputs.
 ///
@@ -129,14 +137,12 @@ pub fn share_nullifier_hash(
     vote_commitment: pallas::Base,
     share_index: pallas::Base,
     c1_x: pallas::Base,
-    c2_x: pallas::Base,
 ) -> pallas::Base {
-    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<5>, 3, 2>::init().hash([
+    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<4>, 3, 2>::init().hash([
         domain_tag_share_spend(),
         vote_commitment,
         share_index,
         c1_x,
-        c2_x,
     ])
 }
 
@@ -584,7 +590,6 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 )
             },
         )?;
-        let enc_c2_x_cond5 = enc_c2_x.clone();
 
         // derive the commitment from primary blind
         let derived_comm = hash_share_commitment_in_circuit(
@@ -848,9 +853,13 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // Condition 5: Share Nullifier Integrity.
         //
         // share_nullifier = Poseidon(domain_tag, vote_commitment, share_index,
-        //                            selected_c1, selected_c2)
+        //                            selected_c1)
         //
-        // Single ConstantLength<5> Poseidon hash (3 permutations at rate=2).
+        // Single ConstantLength<4> Poseidon hash (2 permutations at rate=2).
+        // c1_x = (g^r).x carries the ElGamal randomness r, which is the
+        // secret that makes the nullifier unlinkable to its vote commitment.
+        // c2_x is omitted — one random coordinate is sufficient and saves
+        // one Poseidon permutation vs the prior ConstantLength<5> variant.
         // Round-binding is transitive through vote_commitment, which already
         // commits to voting_round_id as one of its Poseidon inputs.
         // Matches helper-server/src/nullifier.rs exactly.
@@ -868,7 +877,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 pallas::Base,
                 _,
                 poseidon::P128Pow5T3,
-                ConstantLength<5>,
+                ConstantLength<4>,
                 3,
                 2,
             >::init(
@@ -876,9 +885,9 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                 layouter.namespace(|| "cond5: share nullifier Poseidon init"),
             )?
             .hash(
-                layouter.namespace(|| "cond5: Poseidon(tag, vc, idx, c1, c2)"),
+                layouter.namespace(|| "cond5: Poseidon(tag, vc, idx, c1)"),
                 [domain_tag, vote_commitment_cond5, share_index_cond5,
-                 enc_c1_x_cond5, enc_c2_x_cond5],
+                 enc_c1_x_cond5],
             )?;
 
             layouter.constrain_instance(
@@ -1041,8 +1050,6 @@ mod tests {
             vote_commitment,
             share_index_fp,
             enc_c1_x[share_idx as usize],
-            enc_c2_x[share_idx as usize],
-            voting_round_id,
         );
 
         let circuit = Circuit {
