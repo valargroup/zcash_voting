@@ -2394,4 +2394,91 @@ mod tests {
         }
         std::println!();
     }
+
+    /// Measures actual rows used by the delegation circuit via `CircuitCost::measure`.
+    ///
+    /// `CircuitCost` runs the floor planner against the circuit and tracks the
+    /// highest row offset assigned in any column, giving the real "rows consumed"
+    /// number rather than the theoretical 2^K capacity.
+    ///
+    /// Run with:
+    ///   cargo test row_budget -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn row_budget() {
+        use std::println;
+        use halo2_proofs::dev::CircuitCost;
+        use pasta_curves::vesta;
+
+        let t = make_test_data();
+
+        let cost = CircuitCost::<vesta::Point, _>::measure(K, &t.circuit);
+        let debug = alloc::format!("{cost:?}");
+
+        let extract = |field: &str| -> usize {
+            let prefix = alloc::format!("{field}: ");
+            debug.split(&prefix)
+                .nth(1)
+                .and_then(|s| s.split([',', ' ', '}']).next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        };
+
+        let max_rows         = extract("max_rows");
+        let max_advice_rows  = extract("max_advice_rows");
+        let max_fixed_rows   = extract("max_fixed_rows");
+        let total_available  = 1usize << K;
+
+        println!("=== delegation circuit row budget (K={K}) ===");
+        println!("  max_rows (floor-planner high-water mark): {max_rows}");
+        println!("  max_advice_rows:                          {max_advice_rows}");
+        println!("  max_fixed_rows:                           {max_fixed_rows}");
+        println!("  2^K  (total available rows):              {total_available}");
+        println!("  headroom:                                 {}", total_available.saturating_sub(max_rows));
+        println!("  utilisation:                              {:.1}%",
+            100.0 * max_rows as f64 / total_available as f64);
+        println!();
+        println!("  Full debug: {debug}");
+
+        // Witness-independence check: Circuit::default() (all unknowns)
+        // must produce exactly the same layout as the filled circuit.
+        let cost_default = CircuitCost::<vesta::Point, _>::measure(K, &Circuit::default());
+        let debug_default = alloc::format!("{cost_default:?}");
+        let max_rows_default = debug_default
+            .split("max_rows: ").nth(1)
+            .and_then(|s| s.split([',', ' ', '}']).next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(0);
+        if max_rows_default == max_rows {
+            println!("  Witness-independence: PASS \
+                (Circuit::default() max_rows={max_rows_default} == filled max_rows={max_rows})");
+        } else {
+            println!("  Witness-independence: FAIL \
+                (Circuit::default() max_rows={max_rows_default} != filled max_rows={max_rows}) \
+                — row count depends on witness values!");
+        }
+
+        println!("  MERKLE_DEPTH_ORCHARD (circuit constant): {MERKLE_DEPTH_ORCHARD}");
+        println!("  IMT_DEPTH (circuit constant):             {IMT_DEPTH}");
+
+        // Minimum-K probe: find the smallest K at which MockProver passes.
+        for probe_k in 11u32..=K {
+            let t = make_test_data();
+            match MockProver::run(probe_k, &t.circuit, vec![t.instance.to_halo2_instance()]) {
+                Err(_) => {
+                    println!("  K={probe_k}: not enough rows (synthesizer rejected)");
+                    continue;
+                }
+                Ok(p) => match p.verify() {
+                    Ok(()) => {
+                        println!("  Minimum viable K: {probe_k} (2^{probe_k} = {} rows, {:.1}% headroom)",
+                            1usize << probe_k,
+                            100.0 * (1.0 - max_rows as f64 / (1usize << probe_k) as f64));
+                        break;
+                    }
+                    Err(_) => println!("  K={probe_k}: too small"),
+                },
+            }
+        }
+    }
 }
