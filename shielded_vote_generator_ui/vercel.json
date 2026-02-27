@@ -1,5 +1,8 @@
 {
   "rewrites": [
     { "source": "/((?!zally|cosmos|api|nullifier|assets).*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/health-check-servers", "schedule": "0,30 * * * *" }
   ]
 }
