@@ -81,6 +81,7 @@ use orchard::constants::{
     OrchardCommitDomains, OrchardFixedBases, OrchardHashDomains,
 };
 use crate::circuit::van_integrity;
+use crate::circuit::vote_commitment;
 use crate::shares_hash::compute_shares_hash_in_circuit;
 #[cfg(test)]
 use crate::shares_hash::hash_share_commitment_in_circuit;
@@ -123,13 +124,7 @@ pub const VOTE_COMM_TREE_DEPTH: usize = 24;
 pub const K: u32 = 13;
 
 pub use van_integrity::DOMAIN_VAN;
-
-/// Domain tag for Vote Commitments.
-///
-/// Prepended as the first Poseidon input for domain separation from
-/// Vote Authority Notes in the shared vote commitment tree.
-/// `DOMAIN_VC = 1` for Vote Commitments, `DOMAIN_VAN = 0` for VANs.
-pub const DOMAIN_VC: u64 = 1;
+pub use vote_commitment::DOMAIN_VC;
 
 /// Maximum proposal_id bit index (exclusive upper bound). `proposal_id` is in `[1, MAX_PROPOSAL_ID)`,
 /// i.e. valid values are 1–15. Bit 0 is permanently reserved as the sentinel/unset value and is
@@ -177,6 +172,7 @@ const _: usize = VOTE_COMM_TREE_ANCHOR_HEIGHT;
 // ================================================================
 
 pub use van_integrity::van_integrity_hash;
+pub use vote_commitment::vote_commitment_hash;
 
 /// Returns the domain separator for the VAN nullifier inner hash.
 ///
@@ -255,34 +251,6 @@ pub fn shares_hash(
         share_commitment(share_blinds[i], enc_share_c1_x[i], enc_share_c2_x[i])
     });
     poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<16>, 3, 2>::init().hash(comms)
-}
-
-/// Out-of-circuit vote commitment hash (condition 12).
-///
-/// Computes:
-/// ```text
-/// Poseidon(DOMAIN_VC, voting_round_id, shares_hash, proposal_id, vote_decision)
-/// ```
-///
-/// This is the final vote commitment that is posted on-chain and
-/// inserted into the vote commitment tree. It binds the voting round,
-/// encrypted shares, the proposal choice, and the vote decision into a
-/// single hash with domain separation from VANs.
-///
-/// Used by the builder and tests to compute the expected vote commitment.
-pub fn vote_commitment_hash(
-    voting_round_id: pallas::Base,
-    shares_hash: pallas::Base,
-    proposal_id: pallas::Base,
-    vote_decision: pallas::Base,
-) -> pallas::Base {
-    poseidon::Hash::<_, poseidon::P128Pow5T3, ConstantLength<5>, 3, 2>::init().hash([
-        pallas::Base::from(DOMAIN_VC),
-        voting_round_id,
-        shares_hash,
-        proposal_id,
-        vote_decision,
-    ])
 }
 
 // ================================================================
@@ -1415,25 +1383,16 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Compute vote_commitment = Poseidon(DOMAIN_VC, voting_round_id,
         //                                    shares_hash, proposal_id, vote_decision).
-        // TODO: consider separating into shared with ZKP #3
-        let vote_commitment = {
-            let message = [domain_vc, voting_round_id_cond12, shares_hash, proposal_id, vote_decision];
-            let hasher = PoseidonHash::<
-                pallas::Base,
-                _,
-                poseidon::P128Pow5T3,
-                ConstantLength<5>,
-                3, // WIDTH
-                2, // RATE
-            >::init(
-                config.poseidon_chip(),
-                layouter.namespace(|| "vote commitment Poseidon init"),
-            )?;
-            hasher.hash(
-                layouter.namespace(|| "vote_commitment = Poseidon(DOMAIN_VC, ...)"),
-                message,
-            )?
-        };
+        let vote_commitment = vote_commitment::vote_commitment_poseidon(
+            &config.poseidon_config,
+            &mut layouter,
+            "cond12",
+            domain_vc,
+            voting_round_id_cond12,
+            shares_hash,
+            proposal_id,
+            vote_decision,
+        )?;
 
         // Bind the derived vote commitment to the VOTE_COMMITMENT public input.
         layouter.constrain_instance(

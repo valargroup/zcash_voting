@@ -56,7 +56,8 @@ use halo2_gadgets::{
     utilities::bool_check,
 };
 
-use crate::vote_proof::{DOMAIN_VC, VOTE_COMM_TREE_DEPTH};
+use crate::circuit::vote_commitment;
+use crate::vote_proof::VOTE_COMM_TREE_DEPTH;
 use crate::shares_hash::{
     compute_shares_hash_from_comms_in_circuit,
     hash_share_commitment_in_circuit,
@@ -683,29 +684,21 @@ impl plonk::Circuit<pallas::Base> for Circuit {
                     || "domain_vc",
                     config.advices[0],
                     0,
-                    pallas::Base::from(DOMAIN_VC),
+                    pallas::Base::from(vote_commitment::DOMAIN_VC),
                 )
             },
         )?;
 
-        let derived_vc = {
-            let message = [domain_vc, voting_round_id_cond2, shares_hash_cond2, proposal_id, vote_decision];
-            let hasher = PoseidonHash::<
-                pallas::Base,
-                _,
-                poseidon::P128Pow5T3,
-                ConstantLength<5>,
-                3,
-                2,
-            >::init(
-                config.poseidon_chip(),
-                layouter.namespace(|| "cond2: vote commitment Poseidon init"),
-            )?;
-            hasher.hash(
-                layouter.namespace(|| "cond2: vc = Poseidon(DOMAIN_VC, ...)"),
-                message,
-            )?
-        };
+        let derived_vc = vote_commitment::vote_commitment_poseidon(
+            &config.poseidon_config,
+            &mut layouter,
+            "cond2",
+            domain_vc,
+            voting_round_id_cond2,
+            shares_hash_cond2,
+            proposal_id,
+            vote_decision,
+        )?;
 
         // Constrain derived vote_commitment == witnessed vote_commitment.
         layouter.assign_region(
