@@ -32,7 +32,9 @@ export function getApiBase(): string {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = apiBase();
+  // /api/* routes are Vercel Edge Functions served from the same origin —
+  // never prefix them with the chain URL.
+  const base = path.startsWith("/api/") ? "" : apiBase();
   const resp = await fetch(`${base}${path}`, init);
   if (!resp.ok) {
     const body = await resp.text();

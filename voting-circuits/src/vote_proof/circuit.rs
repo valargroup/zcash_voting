@@ -844,7 +844,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         let vpk_g_d_cond6 = vpk_g_d.clone();
         let vpk_pk_d_cond6 = vpk_pk_d.clone();
         let total_note_value_cond6 = total_note_value.clone();
-        let total_note_value_cond7 = total_note_value.clone();
+        let total_note_value_cond8 = total_note_value.clone();
         let voting_round_id_cond6 = voting_round_id.clone();
         let van_comm_rand_cond6 = van_comm_rand.clone();
         let vsk_nk_cond4 = vsk_nk.clone();
@@ -1213,80 +1213,15 @@ impl plonk::Circuit<pallas::Base> for Circuit {
             .expect("always 16 elements");
 
         // Chain 15 additions: share_0 + share_1 + ... + share_15.
-        let partial_1 = config.add_chip().add(
-            layouter.namespace(|| "share_0 + share_1"),
-            &share_cells[0],
-            &share_cells[1],
-        )?;
-        let partial_2 = config.add_chip().add(
-            layouter.namespace(|| "partial_1 + share_2"),
-            &partial_1,
-            &share_cells[2],
-        )?;
-        let partial_3 = config.add_chip().add(
-            layouter.namespace(|| "partial_2 + share_3"),
-            &partial_2,
-            &share_cells[3],
-        )?;
-        let partial_4 = config.add_chip().add(
-            layouter.namespace(|| "partial_3 + share_4"),
-            &partial_3,
-            &share_cells[4],
-        )?;
-        let partial_5 = config.add_chip().add(
-            layouter.namespace(|| "partial_4 + share_5"),
-            &partial_4,
-            &share_cells[5],
-        )?;
-        let partial_6 = config.add_chip().add(
-            layouter.namespace(|| "partial_5 + share_6"),
-            &partial_5,
-            &share_cells[6],
-        )?;
-        let partial_7 = config.add_chip().add(
-            layouter.namespace(|| "partial_6 + share_7"),
-            &partial_6,
-            &share_cells[7],
-        )?;
-        let partial_8 = config.add_chip().add(
-            layouter.namespace(|| "partial_7 + share_8"),
-            &partial_7,
-            &share_cells[8],
-        )?;
-        let partial_9 = config.add_chip().add(
-            layouter.namespace(|| "partial_8 + share_9"),
-            &partial_8,
-            &share_cells[9],
-        )?;
-        let partial_10 = config.add_chip().add(
-            layouter.namespace(|| "partial_9 + share_10"),
-            &partial_9,
-            &share_cells[10],
-        )?;
-        let partial_11 = config.add_chip().add(
-            layouter.namespace(|| "partial_10 + share_11"),
-            &partial_10,
-            &share_cells[11],
-        )?;
-        let partial_12 = config.add_chip().add(
-            layouter.namespace(|| "partial_11 + share_12"),
-            &partial_11,
-            &share_cells[12],
-        )?;
-        let partial_13 = config.add_chip().add(
-            layouter.namespace(|| "partial_12 + share_13"),
-            &partial_12,
-            &share_cells[13],
-        )?;
-        let partial_14 = config.add_chip().add(
-            layouter.namespace(|| "partial_13 + share_14"),
-            &partial_13,
-            &share_cells[14],
-        )?;
-        let shares_sum = config.add_chip().add(
-            layouter.namespace(|| "partial_14 + share_15"),
-            &partial_14,
-            &share_cells[15],
+        let shares_sum = share_cells[1..].iter().enumerate().try_fold(
+            share_cells[0].clone(),
+            |acc, (i, share)| {
+                config.add_chip().add(
+                    layouter.namespace(|| alloc::format!("shares sum step {}", i + 1)),
+                    &acc,
+                    share,
+                )
+            },
         )?;
 
         // Constrain: shares_sum == total_note_value.
@@ -1295,7 +1230,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         layouter.assign_region(
             || "shares sum == total_note_value",
             |mut region| {
-                region.constrain_equal(shares_sum.cell(), total_note_value_cond7.cell())
+                region.constrain_equal(shares_sum.cell(), total_note_value_cond8.cell())
             },
         )?;
 
@@ -1473,6 +1408,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
 
         // Compute vote_commitment = Poseidon(DOMAIN_VC, shares_hash,
         //                                    proposal_id, vote_decision).
+        // TODO: consider separating into shared with ZKP #3
         let vote_commitment = {
             let message = [domain_vc, shares_hash, proposal_id, vote_decision];
             let hasher = PoseidonHash::<
