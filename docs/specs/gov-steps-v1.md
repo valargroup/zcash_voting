@@ -444,7 +444,13 @@ We use **16 shares** and replace the Merkle tree with a single hash over 16 encr
 
 Each share is encrypted as an El Gamal ciphertext under the election authority's public key `ea_pk` (see §3.4.1). The vote commitment hashes over these 16 encrypted shares rather than a Merkle tree root. If fewer than 16 shares are needed, the remaining slots are zero-padded.
 
-Each share is in `[0, 2^30)`. With 16 shares the maximum representable weight is `16 × (2^30 - 1) ≈ 17.2 billion`, which comfortably covers any realistic ZEC balance.
+Each share is in `[0, 2^30)` (denominated in ballots; 1 ballot = 0.125 ZEC). The range check is required for two reasons:
+
+1. **Base/scalar field correspondence (soundness).** The shares sum constraint (ZKP #2 condition 7) holds in the Pallas base field F_p, but El Gamal encryption operates in the scalar field F_q via `share_i * G`. Since p ≠ q for Pallas, a large base-field element (e.g. `p − 50`) reduces to a different value mod q, breaking the link between the constrained sum and the encrypted tally values. Bounding each share to `[0, 2^30)` ensures both field representations agree (no modular reduction in either field), so the homomorphic tally faithfully reflects the constrained sum. Without this, a malicious prover could craft shares that satisfy the base-field sum while producing arbitrary scalars in the El Gamal ciphertexts.
+
+2. **DLOG recovery at tally (performance).** After homomorphic accumulation, the EA decrypts to `total_value * G` and must solve a bounded discrete log (baby-step giant-step, O(√n)) to recover `total_value`. Bounded shares keep the per-decision aggregate small enough for efficient recovery.
+
+With 16 shares the maximum representable weight is `16 × (2^30 - 1) ≈ 17.2 billion` ballots. Since `2^30` ballots ≈ 134M ZEC (well above the 21M ZEC supply), the bound is never binding in practice.
 
 Large holders who need finer granularity can split across multiple delegations (§6.0).
 
@@ -597,7 +603,7 @@ Vote commitment construction:
 
 7. **(Shares Sum Correctness)** `sum(shares_1, ..., shares_16) = total_note_value`. The voting shares decomposition is consistent with the total delegated weight committed in the VAN.
 
-8. **(Shares Range)** Each `shares_j` is in `[0, 2^30)`. Prevents overflow and ensures each share fits within 30 bits. (See §3.3.1)
+8. **(Shares Range)** Each `shares_j` is in `[0, 2^30)`. The sum constraint (condition 7) holds in the base field F_p, but El Gamal encryption operates in the scalar field F_q. Since p ≠ q for Pallas, a share near p would reduce to a different value mod q, breaking the link between the constrained sum and the encrypted values. Bounding shares to `[0, 2^30)` ensures both representations agree, so the homomorphic tally faithfully reflects condition 7's sum. Also keeps the aggregate bounded for DLOG recovery at tally time (see §3.3.1, Appendix B).
 
 9. **(Shares Hash Integrity)** `shares_hash = H(share_comm_0, ..., share_comm_15)` where `share_comm_i = H(blind_i, C1_i_x, C2_i_x)`. The shares hash is correctly computed over the 16 blinded share commitments. No Merkle tree — just a single Poseidon hash over 16 blinded El Gamal ciphertext commitments.
 

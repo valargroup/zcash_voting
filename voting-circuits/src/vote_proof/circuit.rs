@@ -413,7 +413,8 @@ pub struct Circuit {
     /// This is the vpk_pk_d component of the voting hotkey address.
     /// Condition 3 (Diversified Address Integrity) constrains this to equal `[ivk_v] * vpk_g_d`.
     pub(crate) vpk_pk_d: Value<pallas::Affine>,
-    /// The voter's total delegated weight.
+    /// The voter's total delegated weight, denominated in ballots
+    /// (1 ballot = 0.125 ZEC; converted from zatoshi by ZKP #1 condition 8).
     pub(crate) total_note_value: Value<pallas::Base>,
     // Condition 6:
     /// Remaining proposal authority bitmask in the old VAN.
@@ -1049,7 +1050,7 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         // sum(share_0, ..., share_15) = total_note_value
         //
         // Proves the voting share decomposition is consistent with the
-        // total delegated weight. Uses 15 chained AddChip additions:
+        // total delegated weight (in ballots). Uses 15 chained AddChip additions:
         //   partial_1  = share_0  + share_1
         //   partial_2  = partial_1  + share_2
         //   ...
@@ -1097,14 +1098,28 @@ impl plonk::Circuit<pallas::Base> for Circuit {
         //
         // Each share_i in [0, 2^30)
         //
-        // Prevents overflow by ensuring each plaintext share fits in a
-        // bounded range. Uses 3 × 10-bit lookup words with strict mode,
-        // giving [0, 2^30). The protocol spec targets [0, 2^24), but
-        // halo2_gadgets v0.3's `short_range_check` is private, so we
-        // use the next available 10-bit-aligned bound. 30 bits (~1B per
-        // share) is still secure: max sum of 16 shares ≈ 17.2B, well within
-        // the Pallas field, and the homomorphic tally accumulates over
-        // far fewer voters than 2^30.
+        // Motivation: the sum constraint (condition 8) holds in the
+        // base field F_p, but El Gamal encryption operates in the
+        // scalar field F_q via `share_i * G`. For Pallas, p ≠ q, so a
+        // large base-field element (e.g. p − 50) reduces to a different
+        // value mod q, breaking the correspondence between the
+        // constrained sum and the encrypted values. Bounding each share
+        // to [0, 2^30) guarantees both representations agree (no
+        // modular reduction in either field), so the homomorphic tally
+        // faithfully reflects condition 8's sum.
+        //
+        // Secondary benefit: after accumulation the EA decrypts to
+        // `total_value * G` and must solve a bounded DLOG (BSGS) to
+        // recover `total_value`. Bounded shares keep the per-decision
+        // aggregate small enough for efficient recovery.
+        //
+        // Shares are denominated in ballots (1 ballot = 0.125 ZEC),
+        // converted from zatoshi in ZKP #1's condition 8 (ballot
+        // scaling). Uses 3 × 10-bit lookup words with strict mode,
+        // giving [0, 2^30). halo2_gadgets v0.3's `short_range_check`
+        // is private, so exact non-10-bit-aligned bounds (e.g. 24-bit)
+        // are unavailable. 2^30 ballots ≈ 134M ZEC — well above the
+        // 21M ZEC supply — so the bound is never binding in practice.
         //
         // If a share exceeds 2^30 (or wraps around the field, e.g.
         // from underflow), the 3-word decomposition produces a non-zero

@@ -23,7 +23,7 @@ Proves that a registered voter is casting a valid vote, without revealing which 
 - Private (VAN ownership — conditions 1–4, 5)
    * **vpk_g_d**: voting public key — diversified base point (full affine point from DiversifyHash(d)). Witnessed as `NonIdentityPoint`; x-coordinate extracted for Poseidon hashing (conditions 2, 7). This is the `vpk_d` component of the voting hotkey address. Matches ZKP 1 (delegation) VAN structure.
    * **vpk_pk_d**: voting public key — diversified transmission key (full affine point, pk_d = [ivk_v] * g_d). Witnessed as `NonIdentityPoint`; x-coordinate extracted for Poseidon hashing (conditions 2, 7). Condition 3 (Diversified Address Integrity) constrains this to equal `[ivk_v] * vpk_g_d`. Matches ZKP 1 VAN structure.
-   * **total_note_value**: the voter's total delegated weight.
+   * **total_note_value**: the voter's total delegated weight, denominated in ballots (1 ballot = 0.125 ZEC; converted from zatoshi by ZKP #1 condition 8).
    * **proposal_authority_old**: remaining proposal authority bitmask in the old VAN.
    * **van_comm_rand**: blinding randomness for the VAN commitment.
    * **vote_authority_note_old**: the old VAN commitment (two-layer Poseidon hash, same structure as ZKP 1 van_comm).
@@ -34,7 +34,7 @@ Proves that a registered voter is casting a valid vote, without revealing which 
    * **vsk_nk**: nullifier deriving key. Concretely `fvk.nk().inner()` — the standard Orchard `NullifierDerivingKey` derived from the spending key via `PRF_expand_nk(sk)`. The "vsk" prefix reflects its role in the voting key hierarchy (shared between condition 3's CommitIvk and condition 5's nullifier), not distinct key material. It is structurally identical to the `nk` used in ZKP 1's governance nullifier; cross-circuit uniqueness is ensured by the differing domain tags (see Condition 5).
 
 - Private (vote commitment — conditions 8–12)
-   * **shares_1..16**: the voting share vector (each in `[0, 2^24)`).
+   * **shares_1..16**: the voting share vector (each in `[0, 2^30)`).
    * **enc_share_c1_x[0..15]**: x-coordinates of C1_i = r_i * G (El Gamal first component, via ExtractP).
    * **enc_share_c2_x[0..15]**: x-coordinates of C2_i = shares_i * G + r_i * ea_pk (El Gamal second component, via ExtractP).
    * **share_randomness[0..15]**: El Gamal encryption randomness per share (base field elements, converted to scalars via `ScalarVar::from_base` in-circuit).
@@ -228,7 +228,7 @@ Where:
 
 ## Condition 8: Shares Sum Correctness ✅
 
-Purpose: voting shares decomposition is consistent with the total delegated weight.
+Purpose: voting shares decomposition is consistent with the total delegated weight (in ballots).
 
 ```
 sum(share_0, ..., share_15) = total_note_value
@@ -236,7 +236,7 @@ sum(share_0, ..., share_15) = total_note_value
 
 Where:
 - **share_0..share_15**: the 16 plaintext voting shares (private witnesses). Each share is a random portion of the voter's total delegated weight — the decomposition is chosen by the prover and serves as an amount-privacy mechanism: the on-chain El Gamal ciphertexts reveal no useful fingerprint about the weight, since the same total can be split in exponentially many ways. These cells will also be used by condition 9 (range check) and condition 11 (El Gamal encryption inputs).
-- **total_note_value**: the voter's total delegated weight. Cell-equality-linked to the same witness cell used in condition 2 (VAN integrity), binding the shares decomposition to the authenticated VAN.
+- **total_note_value**: the voter's total delegated weight in ballots (1 ballot = 0.125 ZEC). Cell-equality-linked to the same witness cell used in condition 2 (VAN integrity), binding the shares decomposition to the authenticated VAN.
 
 **Structure:** Fifteen chained `AddChip` additions (15 rows):
 - `partial_1  = share_0  + share_1`
@@ -258,9 +258,13 @@ Each share_i in [0, 2^30)
 ```
 
 Where:
-- **share_0..share_15**: the 16 plaintext voting shares from condition 8. Each share must fit in a bounded range to prevent overflow when shares are used in El Gamal encryption (condition 11) and accumulated homomorphically during tally.
+- **share_0..share_15**: the 16 plaintext voting shares from condition 8.
 
-**Bound:** The protocol spec targets `[0, 2^24)`, but halo2_gadgets v0.3's `short_range_check` is `pub(crate)` (private to the gadget crate), so the exact 24-bit decomposition (2 × 10-bit + 4-bit short check) is unavailable. We use the next 10-bit-aligned bound: `[0, 2^30)` via 3 × 10-bit words with strict mode. 30 bits (~1B per share) is secure: max sum of 16 shares ≈ 17.2B, well within the Pallas field, and the homomorphic tally accumulates over far fewer voters than 2^30.
+**Motivation:** The sum constraint (condition 8) holds in the base field F_p, but El Gamal encryption operates in the scalar field F_q via `share_i * G`. For Pallas, p ≠ q — a large base-field element (e.g. `p − 50`) reduces to a different value mod q, breaking the correspondence between the constrained sum and the encrypted values. Bounding each share to `[0, 2^30)` guarantees both representations agree (no modular reduction in either field), so the homomorphic tally faithfully reflects condition 8's sum. Without a range check, a malicious prover could craft shares that satisfy the base-field sum constraint while producing arbitrary scalar values in the El Gamal ciphertexts, allowing them to inject or remove weight from the tally.
+
+Secondary benefit: after accumulation the EA decrypts to `total_value * G` and must solve a bounded DLOG (baby-step giant-step, O(√n)) to recover `total_value`. Bounded shares keep the per-decision aggregate small enough for efficient recovery.
+
+**Bound:** `[0, 2^30)` via 3 × 10-bit words with strict mode. Shares are denominated in ballots (1 ballot = 0.125 ZEC, converted from zatoshi by ZKP #1's condition 8). halo2_gadgets v0.3's `short_range_check` is `pub(crate)` (private to the gadget crate), so exact non-10-bit-aligned bounds (e.g. 24-bit) are unavailable. 2^30 ballots ≈ 134M ZEC — well above the 21M ZEC supply — so the bound is never binding in practice.
 
 **Structure:** For each share, one `copy_check` call (16 calls total, ~64 rows):
 - `copy_check(share_i, 3, true)` — decomposes the share into 3 × 10-bit lookup words. Each word is range-checked via the 10-bit lookup table. The `true` (strict) flag constrains the final running sum `z_3` to equal 0, enforcing `share < 2^30`.
