@@ -14,7 +14,7 @@ A vote is a public reveal of (enc_share, proposal_id, decision) where `enc_share
 
 We don't want people to learn your total balance from looking at your vote. So we split up votes into many shares.
 
-A vote commitment is a commitment to a distribution of your votes. We split the total vote weight into 4 shares, each encrypted as an El Gamal ciphertext under the election authority's public key. We hash all 4 encrypted shares into a single `shares_hash`.
+A vote commitment is a commitment to a distribution of your votes. We split the total vote weight into 16 shares, each encrypted as an El Gamal ciphertext under the election authority's public key. We hash all 16 encrypted shares into a single `shares_hash`.
 
 The vote commitment is then a commitment to `(DOMAIN_VC, shares_hash, proposal_id, decision)`
 
@@ -80,9 +80,9 @@ This key exists because each voting share is encrypted under `ea_pk` using an ad
 
 ## Phase 1 (Keystone Signing)
 
-This phase details how you build the keystone signature to authorize a voting hotkey to vote on your behalf. We have one tx that can authorize up to 4 notes on your behalf for voting. Lets call that one bundle. If you have more than 4 notes, then we need one keystone signature for every chunk of up to 4. If your number of notes is not a multiple of 4, we pad with "padded notes". See section 1.3.5 for how we make padded notes.
+This phase details how you build the keystone signature to authorize a voting hotkey to vote on your behalf. We have one tx that can authorize up to 5 notes on your behalf for voting. Lets call that one bundle. If you have more than 5 notes, then we need one keystone signature for every chunk of up to 5. If your number of notes is not a multiple of 5, we pad with "padded notes". See section 1.3.5 for how we make padded notes.
 
-We write section 1.3 onwards and phase 2 in the context of a user has 1 bundle, because Zashi aims to maintain 4 notes on your behalf. However, if you have multiple bundles, you would run those steps for each bundle.
+We write section 1.3 onwards and phase 2 in the context of a user has 1 bundle, because Zashi aims to maintain up to 5 notes on your behalf. However, if you have multiple bundles, you would run those steps for each bundle.
 
 We require each bundle to have at least .125 ZEC .
 
@@ -173,7 +173,7 @@ We cannot alter the derivation for the nullifier we sign over, it must follow th
 
 However, because it is a dummy note, we can arbitrarily choose `rho, psi`. As in ZCash, we leave `psi` fully random. Thus we constrain `rho`, this is similar in spirit to Quantum Recoverable Orchard.
 
-We set `rho = Poseidon(note_comm_1, note_comm_2, note_comm_3, note_comm_4, van_cmx, vote_round_id)`, thus committing to each input we need. Here `van_cmx` is the commitment to the VAN (i.e. the Poseidon hash output from §1.3.3).
+We set `rho = Poseidon(note_comm_1, note_comm_2, note_comm_3, note_comm_4, note_comm_5, van_cmx, vote_round_id)`, thus committing to each input we need. Here `van_cmx` is the commitment to the VAN (i.e. the Poseidon hash output from §1.3.3). The circuit supports up to 5 input note slots (real notes plus zero-padded dummies per §1.3.5).
 
 #### 1.3.4.2 Constructing other inputs + Note commitment
 
@@ -188,14 +188,14 @@ So we define `rho` as above. We pick a random diversifier `d`, and then construc
 
 ### 1.3.5 Padded notes
 
-If the number of real notes in a bundle is less than 4, we pad to 4 with "padded notes." Each padded note is a dummy constructed as follows:
+If the number of real notes in a bundle is less than 5, we pad to 5 with "padded notes." Each padded note is a dummy constructed as follows:
 
 - Choose `rho_i` , `rcm_i` and `psi_i` at random
 - Choose a random diversifier `d_i`, derive `g_d_i` and `pk_d_i` from our key material (`ivk`)
 - Set `v_i = 0`
 - Compute `cm_i = NoteCommit_rcm_i(repr(g_d_i), repr(pk_d_i), 0, rho_i, psi_i)` as usual
 - Derive `real_nf_i = DeriveNullifier_nk(rho_i, psi_i, cm_i)` — this is a random-looking nullifier that won't collide with any real on-chain nullifier
-- Derive `gov_null_i = Poseidon_nk("governance authorization", voting_round_id, real_nf_i)` — still derived correctly so the circuit is uniform across all 4 slots
+- Derive `gov_null_i = Poseidon_nk("governance authorization", voting_round_id, real_nf_i)` — still derived correctly so the circuit is uniform across all 5 slots
 
 Each note slot in the circuit carries an `is_note_real_flag_i` (a private witness bit). When `is_note_real_flag_i = 0` (padded):
 
@@ -247,7 +247,7 @@ Public inputs to this ZKP:
 - `signed_note` nullifier
 - `rk` for who signed the note.
 - `vote_authority_note`
-- `gov_null_1`, `gov_null_2`, ..., `gov_null_4`
+- `gov_null_1`, `gov_null_2`, ..., `gov_null_5`
 - `nullifier_imt_root`
 - `vote_round_id`
 - `nc_root`
@@ -259,14 +259,14 @@ ZKP statements (intuition)
 - The input note im signing over has a validly constructed note commitment and nullifier.
   - This nullifier's `rho` value is further constrained as in section 1.3.4.1
 - The output note commitment commits to the address `gov_hotkey_addr`
-- I know (up to) 4 valid, unspent notes at the snapshot height.
-  - If note count is < 4, we ensure dummy notes for padding have random `gov_null` and `0 value`.
+- I know (up to) 5 valid, unspent notes at the snapshot height.
+  - If note count is < 5, we ensure dummy notes for padding have random `gov_null` and `0 value`.
 - The `ak` key that signed this action is also the `ak` that owns each of those notes
 - The `rk` revealed is correct randomization of `ak`
 - For each note, here is a validly constructed `gov_null`
 - `vote_authority_note` is constructed correctly
   - Uses `gov_hotkey_addr`
-  - has total value that is the sum of the 4 notes values, cast to "ballots"
+  - has total value that is the sum of the 5 notes values, cast to "ballots"
 	  - We cast to ballots by floor-dividing by 12_500_000, and the quotient is the number of ballots.
 
 Out of circuit, we check the signature of the SIGHASH relative to `rk`.
@@ -282,7 +282,7 @@ I will reference the exact name from the ZCash spec if its a re-used component, 
 - `nc_root` — note commitment tree anchor at snapshot height
 - `nullifier_imt_root` — IMT root of all on-chain nullifiers at snapshot height
 - `vote_authority_note` — the initial VAN commitment (binds hotkey, weight, round)
-- `gov_null_1, ..., gov_null_k` — governance nullifiers for each note (up to 4)
+- `gov_null_1, ..., gov_null_5` — governance nullifiers for each note (up to 5)
 - `vote_round_id`
 - `cmx_new` — the output note commitment (to the gov hotkey address)
 
@@ -300,7 +300,7 @@ I will reference the exact name from the ZCash spec if its a re-used component, 
 - For the output note:
   - `d_new = vpk_d, pk_d_new = vpk_pk_d`, `v_new (= 0), rho_new, psi_new, rcm_new`
   - i.e. the output note's address is the voting hotkey address — these are the same variables, not separate witnesses
-- For each note `i` (exactly 4 slots — real notes plus padded notes per §1.3.5):
+- For each note `i` (exactly 5 slots — real notes plus padded notes per §1.3.5):
   - `is_note_real_flag_i` — 1 if this is a real note, 0 if padded
   - `d_i, pk_d_i, v_i, rho_i, psi_i, rcm_i` — full note data
   - `cm_i` — the note commitment (Pallas point)
@@ -316,7 +316,7 @@ Conditions on the signed input note:
 
 2. (Nullifier Integrity) `signed_note_nullifier = DeriveNullifier_nk(rho_signed, psi_signed, cm_signed)` — the public nullifier is correctly derived. (Same as Orchard spec §5.4.7.3)
 
-3. **(Rho Binding) (NEW)** `rho_signed = Poseidon(cmx_1, cmx_2, cmx_3, cmx_4, van_cmx, vote_round_id)` — the signed note's rho is bound to the exact notes being delegated, the VAN commitment, and the round. This is what makes the keystone signature non-replayable and scoped. (Per §1.3.4.1)
+3. **(Rho Binding) (NEW)** `rho_signed = Poseidon(cmx_1, cmx_2, cmx_3, cmx_4, cmx_5, van_cmx, vote_round_id)` — the signed note's rho is bound to the exact 5 note slots being delegated (real and padded), the VAN commitment, and the round. This is what makes the keystone signature non-replayable and scoped. (Per §1.3.4.1)
 
 4. (Spend Authority) `rk = SpendAuthSig.RandomizePublic(alpha, ak)` i.e. `rk = ak + [alpha] * G` — the public `rk` is a valid rerandomization of `ak`. Links to the keystone signature verified out-of-circuit. (Same as Orchard spec §5.4.7.3)
 
@@ -337,7 +337,7 @@ Global conditions (computed once, not per-note):
 	3. There exists a 24 bit number 'remainder', s.t. `num_ballots * 12_500_000 + remainder = snapshot_balance`
 		1. 24 bits allows remainder to be greater than 12_500_000, but that would basically be lowering your num_ballots number. num_ballots is not in any governance nullifier, so would cause someone to short themself one ballot. 
 
-Conditions on each note `i` (all 4 slots — real and padded). Each slot has a private `is_note_real_flag_i` bit (per §1.3.5):
+Conditions on each note `i` (all 5 slots — real and padded). Each slot has a private `is_note_real_flag_i` bit (per §1.3.5):
 
 9. (Old Note Commitment Integrity) `NoteCommit_rcm_i(repr(g_d_i), repr(pk_d_i), v_i, rho_i, psi_i) ∈ {cm_i, ⊥}` — the note data is consistent with the commitment. Checked for both real and padded notes (uniform circuit). (Same as Orchard)
 
@@ -386,7 +386,7 @@ We now submit the vote on-chain. The data we post on-chain for establishing the 
 
 - Standard signed action data (standard zcash)
   - `rk`, `sig`, `signed_note_nullifier`, `cmx_new`, `enc_memo`, `tx_fee`, `transmission_key`
-- gov nullifiers: `gov_null_1`, `gov_null_2`, ..., `gov_null_4`
+- gov nullifiers: `gov_null_1`, `gov_null_2`, ..., `gov_null_5`
 - `vote_authority_note`
 - ZKP
 
@@ -432,7 +432,7 @@ For now, we set it to the binary decomposition, until I later figure out how we 
 
 The wallet decomposes the user's total delegated weight into powers of 2 via binary decomposition. E.g. 99 ZEC → `1100011` → 64 + 32 + 2 + 1 = 4 vote transactions per proposal.
 
-Each 1 bit here becomes a voting share. So above we would make 4 voting shares, `64, 32, 2, 1`.
+Each 1 bit here becomes a voting share. So above we would make 4 voting shares, `64, 32, 2, 1`. The circuit supports up to 16 shares (zero-padded if fewer are needed).
 
 The user does not need to be aware of how many splits they have.
 
@@ -440,27 +440,29 @@ TODO: Consider DP randomness
 
 #### 3.3.1 A note on maximum vote shares
 
-We reduce to **4 shares** and replace the Merkle tree with a single hash over 4 encrypted shares. Instead of proving a tree circuit, ZKP #2 now only needs to verify 4 hash preimage checks — this dramatically reduces proving cost.
+We use **16 shares** and replace the Merkle tree with a single hash over 16 encrypted shares. Instead of proving a tree circuit, ZKP #2 now only needs to verify 16 hash preimage checks — this reduces proving cost compared to a full Merkle tree while giving finer granularity than 4 shares.
 
-Each share is encrypted as an El Gamal ciphertext under the election authority's public key `ea_pk` (see §3.4.1). The vote commitment hashes over these 4 encrypted shares rather than a Merkle tree root.
+Each share is encrypted as an El Gamal ciphertext under the election authority's public key `ea_pk` (see §3.4.1). The vote commitment hashes over these 16 encrypted shares rather than a Merkle tree root. If fewer than 16 shares are needed, the remaining slots are zero-padded.
+
+Each share is in `[0, 2^30)`. With 16 shares the maximum representable weight is `16 × (2^30 - 1) ≈ 17.2 billion`, which comfortably covers any realistic ZEC balance.
 
 Large holders who need finer granularity can split across multiple delegations (§6.0).
 
-TODO: We consider changing this to 32 leaves to give more splits. This is delayed due to scope creep. We first want to get everything else working, and delegation. Then we consider the Merkle tree.
-
 ### 3.4 Construct new Vote Commitment
 
-**Current design (4 encrypted shares in a flat hash):**
+**Current design (16 encrypted shares in a flat hash):**
 
-The user organizes their voting shares into a vector of 4 entries. Each share `v_i` is encrypted under `ea_pk` as an El Gamal ciphertext `enc_share_i` (see §3.4.1). The shares hash is simply:
+The user organizes their voting shares into a vector of 16 entries. Each share `v_i` is encrypted under `ea_pk` as an El Gamal ciphertext `enc_share_i` (see §3.4.1). The shares hash is:
 
-`shares_hash = H(enc_share_1, enc_share_2, enc_share_3, enc_share_4)`
+`shares_hash = H(share_comm_0, share_comm_1, ..., share_comm_15)`
+
+where each `share_comm_i = H(blind_i, C1_i_x, C2_i_x)` is a blinded commitment to the i-th encrypted share. The blind factors prevent an on-chain observer from recomputing `shares_hash` from the public ciphertexts and linking it to a specific vote commitment.
 
 The vote commitment is then:
 
 `vc = H(DOMAIN_VC, voting_round_id, shares_hash, proposal_id, vote_decision)`
 
-This is cheap to prove — just 4 hash preimage checks, no tree circuit.
+This is cheap to prove — just 16 hash preimage checks, no tree circuit.
 
 **Future direction (Merkle tree):**
 
@@ -476,7 +478,7 @@ TODO: Consider making this a 4 -> 1 tree to save on circuit prover time. (~40%)
 
 Each voting share `v_i` is encrypted under the election authority's public key `ea_pk` using additively homomorphic El Gamal encryption (see Appendix A for formal definitions).
 
-For each share `v_i` (where `i` ranges from 1 to 4):
+For each share `v_i` (where `i` ranges from 1 to 16):
 
 1. Sample fresh randomness `r_i`
 2. Compute the El Gamal ciphertext: `enc_share_i = (r_i * G, v_i * G + r_i * ea_pk)`
@@ -534,9 +536,9 @@ Intuition:
 - Vote commitment is constructed correctly.
   - Namely correct proposal ID
   - Sum of voting shares = total note value
-    - Each voting share is in `[0, 2^24)`
+    - Each voting share is in `[0, 2^30)`
     - Each share is validly encrypted under `ea_pk` (El Gamal)
-    - shares hash is constructed correctly over 4 encrypted shares
+    - shares hash is constructed correctly over 16 encrypted shares
 
 #### ZKP #2 Statements
 
@@ -567,8 +569,9 @@ This ZKP proves that a registered voter is casting a valid vote, without reveali
 - `vote_comm_tree_path, vote_comm_tree_position` — Merkle path proving VAN membership
 - `vote_authority_note_old` — the old VAN commitment
 - For the vote commitment:
-  - `shares_1, ..., shares_4` — the voting share vector (each in `[0, 2^24)`)
-  - `r_1, ..., r_4` — El Gamal encryption randomness per share
+  - `shares_1, ..., shares_16` — the voting share vector (each in `[0, 2^30)`; unused slots are 0)
+  - `r_1, ..., r_16` — El Gamal encryption randomness per share
+  - `blind_1, ..., blind_16` — per-share blinding factors for the share commitments
 
 **ZKP conditions:**
 
@@ -592,11 +595,11 @@ New VAN construction:
 
 Vote commitment construction:
 
-7. **(Shares Sum Correctness)** `sum(shares_1, ..., shares_4) = total_note_value`. The voting shares decomposition is consistent with the total delegated weight committed in the VAN.
+7. **(Shares Sum Correctness)** `sum(shares_1, ..., shares_16) = total_note_value`. The voting shares decomposition is consistent with the total delegated weight committed in the VAN.
 
-8. **(Shares Range)** Each `shares_j` is in `[0, 2^24)`. Prevents overflow and ensures each share fits in the designated bit-width. (See §3.3.1)
+8. **(Shares Range)** Each `shares_j` is in `[0, 2^30)`. Prevents overflow and ensures each share fits within 30 bits. (See §3.3.1)
 
-9. **(Shares Hash Integrity)** `shares_hash = H(enc_share_1, enc_share_2, enc_share_3, enc_share_4)`. The shares hash is correctly computed over the 4 encrypted shares. No Merkle tree — just a single hash over 4 El Gamal ciphertexts.
+9. **(Shares Hash Integrity)** `shares_hash = H(share_comm_0, ..., share_comm_15)` where `share_comm_i = H(blind_i, C1_i_x, C2_i_x)`. The shares hash is correctly computed over the 16 blinded share commitments. No Merkle tree — just a single Poseidon hash over 16 blinded El Gamal ciphertext commitments.
 
 10. **(Encryption Integrity)** Each `enc_share_i = ElGamal(shares_i, r_i, ea_pk)`, i.e. `enc_share_i = (r_i * G, shares_i * G + r_i * ea_pk)`. Proves each ciphertext is a valid El Gamal encryption of the corresponding plaintext share under the election authority's public key. (See §3.4.1, Appendix A)
 
@@ -652,7 +655,7 @@ This requires sending a payload `delegated_voting_share_payload` to a server con
 - Position in the tree the vote commitment was created at
 - ONE encrypted share
   - `enc_share_i = (C1_i, C2_i)` — the El Gamal ciphertext
-  - `share_index` — which of the 4 shares this is
+  - `share_index` — which of the 16 shares this is (0..15)
 
 ## Phase 5: Construct Vote TX (Server-side)
 
@@ -695,7 +698,7 @@ This ZKP opens a single encrypted share from a registered vote commitment. Concr
 - We prove a valid `vote_commitment` exists in the vote commitment tree — without revealing which one
 - We reveal the El Gamal ciphertext `enc_share_i` — NOT the plaintext vote amount
 - We reveal the `proposal_id` and `vote_decision` that were committed to
-- We prove the ciphertext is one of the 4 committed in the shares hash
+- We prove the ciphertext is one of the 16 committed in the shares hash
 - We prove the share nullifier is correctly derived
 
 The privacy property: the server reveals `(enc_share, proposal_id, decision)` but not _which_ vote commitment the share came from, nor the plaintext amount. The chain accumulates ciphertexts homomorphically — only the election authority can decrypt the aggregate at tally time.
@@ -716,9 +719,10 @@ The privacy property: the server reveals `(enc_share, proposal_id, decision)` bu
 
 - `vote_commitment` — the vote commitment being opened (hidden — proven in-tree but not revealed)
 - `vote_comm_tree_path, vote_comm_tree_position` — Merkle path proving VC membership
-- `shares_hash` — hash of the 4 encrypted shares inside the vote commitment
-- `share_index` — which of the 4 shares is being opened (0..3)
-- `enc_share_1, ..., enc_share_4` — all 4 El Gamal ciphertexts (to recompute `shares_hash`)
+- `shares_hash` — hash of the 16 blinded share commitments inside the vote commitment
+- `share_index` — which of the 16 shares is being opened (0..15)
+- `enc_share_1, ..., enc_share_16` — all 16 El Gamal ciphertexts (to recompute `shares_hash`)
+- `blind_1, ..., blind_16` — all 16 per-share blinding factors (to recompute `share_comm_i`)
 
 **ZKP conditions:**
 
@@ -730,9 +734,9 @@ Vote commitment membership:
 
 Share opening:
 
-3. **(Shares Hash Integrity)** `shares_hash = H(enc_share_1, enc_share_2, enc_share_3, enc_share_4)`. Recomputes the shares hash from the 4 encrypted shares in the witness.
+3. **(Shares Hash Integrity)** `shares_hash = H(share_comm_0, ..., share_comm_15)` where `share_comm_i = H(blind_i, C1_i_x, C2_i_x)`. Recomputes the shares hash from the 16 blinded share commitments in the witness.
 
-4. **(Share Membership)** `enc_share = enc_share_{share_index}`. The publicly revealed ciphertext matches one of the 4 encrypted shares committed in the shares hash, at the position indicated by `share_index`.
+4. **(Share Membership)** `enc_share = enc_share_{share_index}`. The publicly revealed ciphertext matches one of the 16 encrypted shares committed in the shares hash, at the position indicated by `share_index`.
 
 Nullifier:
 
