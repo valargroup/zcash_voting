@@ -437,7 +437,21 @@ impl plonk::Circuit<pallas::Base> for Circuit {
     fn configure(meta: &mut plonk::ConstraintSystem<pallas::Base>) -> Self::Config {
         // ── Column declarations ──────────────────────────────────────────
 
-        // 10 advice columns used throughout the circuit.
+        // 10 advice columns — the minimum budget that satisfies every sub-chip
+        // simultaneously when their column ranges are overlapped:
+        //
+        //   EccChip               advices[0..10]  (needs all 10)
+        //   Sinsemilla/Merkle #1  advices[0..5] + advices[6] as witness
+        //   Sinsemilla/Merkle #2  advices[5..10] + advices[7] as witness
+        //   PoseidonChip          advices[5..9]   (partial-sbox + state)
+        //   AddChip / MulChip     advices[6..9]
+        //   LookupRangeCheck      advices[9]
+        //
+        // The two Sinsemilla pairs intentionally share advices[5..7]; each pair's
+        // gates are gated by their own selectors and are never active on the same
+        // rows, so the overlap is safe. Without it we would need 12 columns. EccChip
+        // is the widest consumer and already requires 10, so everything else fits
+        // within that budget. This matches the upstream Orchard column count.
         let advices = [
             meta.advice_column(),
             meta.advice_column(),

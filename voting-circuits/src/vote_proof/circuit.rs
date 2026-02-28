@@ -550,7 +550,21 @@ impl plonk::Circuit<pallas::Base> for Circuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<pallas::Base>) -> Self::Config {
-        // 10 advice columns, matching delegation circuit layout.
+        // 10 advice columns, matching the delegation circuit layout so the two
+        // circuits share the same column assignment and chip configurations.
+        // The count is driven by the ECC chip, which is the largest consumer
+        // and requires all 10 columns for its internal scalar-multiplication
+        // gates.  The remaining chips tile within that same 10-column window:
+        //
+        //   advices[0..5]  — general witness assignment, Sinsemilla pair 1
+        //                    message columns, and the Merkle swap gate
+        //                    (pos_bit / current / sibling / left / right).
+        //   advices[5]     — Poseidon partial S-box column; also the start of
+        //                    Sinsemilla pair 2 main columns (advices[5..10]).
+        //   advices[6..9]  — Poseidon width-3 state columns; AddChip uses these
+        //                    same three columns (a=advices[7], b=advices[8],
+        //                    c=advices[6]).
+        //   advices[9]     — LookupRangeCheck running-sum column.
         let advices: [Column<Advice>; 10] = core::array::from_fn(|_| meta.advice_column());
         for col in &advices {
             meta.enable_equality(*col);
