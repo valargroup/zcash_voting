@@ -17,21 +17,6 @@ zcaloooors/Voting/Gov Steps V1.md
 
 This document contains the full protocol specification: glossary, Phase 0–5, all three ZKP circuit definitions (ZKP #1 delegation, ZKP #2 vote, ZKP #3 share reveal), appendices on El Gamal and tally.
 
-## 2. Wallet SDK Operations → Cosmos SDK Messages (Figma)
-
-Fetch the FigJam board via the Figma MCP:
-
-- **Tool:** `get_figjam`
-- **fileKey:** `xJmIb490SVXlpUr9y1WrN4`
-- **nodeId:** `0:1`
-- **URL:** https://www.figma.com/board/CCKJMV6iozvYV8mT6H050a/Wallet-SDK-V2?node-id=0-1&p=f&t=lxxff1UiPJieH173-0
-
-This diagram maps the client/server/chain flow across four sections:
-- **Wallet SDK (Client)** — note identification, keystone signing, ZKP #1 and #2 generation
-- **Helper Server** — share payload relay with temporal unlinkability, ZKP #3 generation
-- **Cosmos SDK Vote Chain** — `MsgDelegateVote`, `MsgCastVote`, `MsgRevealShare`
-- **Chain State Updates** — nullifier sets, vote commitment trees, encrypted tally accumulator
-
 ## After loading
 
 Summarize what you loaded and confirm both sources are available. Then ask how to proceed.

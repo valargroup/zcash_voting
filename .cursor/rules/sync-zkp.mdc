@@ -17,22 +17,19 @@ zcaloooors/Voting/Gov Steps V1.md
 
 This document contains the **written details of the ZKPs**: full protocol specification, glossary, Phase 0–5, and the three ZKP circuit definitions (ZKP #1 delegation, ZKP #2 vote proof, ZKP #3 share reveal), plus appendices on El Gamal and tally.
 
-## 2. Figma diagram (all three ZKPs)
+## 2. Circuit locations in repo
 
-One FigJam board covers the full constraint flow for all three ZKPs. Fetch via the Figma MCP:
+- **ZKP #1 (delegation):** `voting-circuits/src/delegation/` — K=14, 13 public inputs, 15 conditions
+- **ZKP #2 (vote proof):** `voting-circuits/src/vote_proof/` — K=13, 11 public inputs, 12 conditions
+- **ZKP #3 (share reveal):** `voting-circuits/src/share_reveal/` — K=11, 7 public inputs, 5 conditions
+- **Shared gadgets:** `voting-circuits/src/circuit/` — address_ownership, elgamal, poseidon_merkle, van_integrity, vote_commitment
+- **FFI layer:** `sdk/circuits/src/ffi.rs` — C-compatible exports for Go (verify/generate proofs, vote tree ops)
+- **Toy circuit:** `sdk/circuits/src/toy.rs` — K=4, pipeline validation only
+- **Orchard base circuit:** `orchard/src/circuit.rs` — K=11, standard Zcash Action circuit (not voting-specific)
 
-- **ZKP 1 → 2 → 3 — Full Constraint Flow (Updated from Spec)**
-  - **Tool:** `get_figjam`
-  - **fileKey:** `zvRKEXyuFNrOds4nvHM8sp`
-  - **nodeId:** `0:1`
-  - **URL:** https://www.figma.com/board/zvRKEXyuFNrOds4nvHM8sp/ZKP--1--%3E--2--%3E--3-Full-Constraint-Flow--Updated-from-Spec-?node-id=0-1&p=f&t=LcFCcVDysK3HY2Td-0
+Each main circuit directory contains: `circuit.rs` (constraints), `builder.rs` (witness assembly), `prove.rs` (keygen/prove/verify).
 
-## 3. Circuit locations in repo
-
-- **ZKP 1 (delegation):** `orchard/src/delegation`
-- **ZKP 2 (vote proof):** `orchard/src/vote-proof`
-
-## 4. Individual ZKP docs — inject into GitBook
+## 3. Individual ZKP docs — inject into GitBook
 
 The following Obsidian docs are the **per-ZKP written specs**. When syncing ZKP context, also **inject them into the Orchard GitBook** so they appear in the book TOC and build.
 

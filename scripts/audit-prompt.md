@@ -8,14 +8,14 @@ This is a **Zcash-derived shielded voting system**. The components, ordered by s
 
 ### Tier 1 (Highest Risk) — ZKP Circuits
 
-- **ZKP #1 — Delegation** (`orchard/src/delegation/`)
-  Proves delegation of voting power from a Zcash note holder to a voting hotkey, via an Indexed Merkle Tree (IMT) membership proof. Creates a Vote Authority Note (VAN). 15 conditions, fully implemented.
+- **ZKP #1 — Delegation** (`voting-circuits/src/delegation/`)
+  Proves delegation of voting power from a Zcash note holder to a voting hotkey, via an Indexed Merkle Tree (IMT) membership proof. Creates a Vote Authority Note (VAN). K=14, 13 public inputs, 15 conditions.
 
-- **ZKP #2 — Vote Proof** (`orchard/src/vote_proof/`)
-  Proves a valid vote cast: VAN membership in Poseidon Merkle tree, spend authority, nullifier integrity, authority decrement, share decomposition + El Gamal encryption. 11 conditions total, conditions 1–8 implemented, 9–11 TODO.
+- **ZKP #2 — Vote Proof** (`voting-circuits/src/vote_proof/`)
+  Proves a valid vote cast: VAN membership in Poseidon Merkle tree, spend authority, nullifier integrity, authority decrement, share decomposition + El Gamal encryption. K=13, 11 public inputs, 12 conditions.
 
-- **ZKP #3 — Share Reveal** (not yet implemented, will live in `helper-server/`)
-  Will prove correct decryption of El Gamal encrypted shares for tally.
+- **ZKP #3 — Share Reveal** (`voting-circuits/src/share_reveal/`)
+  Proves revealed encrypted share belongs to a registered vote commitment. VC membership, commitment integrity, shares hash, share selection, share nullifier. K=11, 7 public inputs, 5 conditions.
 
 ### Tier 2 — Vote Commitment Tree
 
@@ -32,7 +32,7 @@ This is a **Zcash-derived shielded voting system**. The components, ordered by s
 
 ### Tier 4 — Helper Server
 
-- **helper-server/** — Rust server that relays share payloads with temporal unlinkability for ZKP #3. Handles share reveal flow: receives encrypted shares, generates ZKP #3, submits `MsgRevealShare` to chain. Security-critical for voter privacy (timing correlation attacks).
+- **sdk/internal/helper/** — Go helper server that relays share payloads with temporal unlinkability for ZKP #3. Handles share reveal flow: receives encrypted shares, generates ZKP #3 (via FFI to `voting-circuits`), submits `MsgRevealShare` to chain. Security-critical for voter privacy (timing correlation attacks).
 
 ### Tier 5 — Nullifier Ingest
 
@@ -110,7 +110,15 @@ This is a **Zcash-derived shielded voting system**. The components, ordered by s
 
 ## Spec vs Code
 
-The README.md files in each circuit directory ARE the spec. Compare implementation against README. The full protocol spec ("Gov Steps V1.md") is the canonical design doc covering all ZKPs, El Gamal, tally, and Cosmos SDK messages. Any divergence is a finding.
+Compare implementation against the spec files listed below. Any divergence is a finding — and the finding MUST cite the exact spec file and section where the expected behavior is defined.
+
+**Spec files (in priority order):**
+
+1. `docs/specs/gov-steps-v1.md` — Canonical protocol spec covering all ZKPs, El Gamal, tally, and Cosmos SDK messages. This is the single source of truth.
+2. `voting-circuits/src/delegation/README.md` — ZKP #1 delegation circuit spec (conditions, public inputs, witness layout).
+3. `voting-circuits/src/vote_proof/README.md` — ZKP #2 vote proof circuit spec.
+
+When reporting a divergence, use this format: `Code <file>:<detail> diverges from spec <spec-file>:<section/condition>`. For example: "Code `delegation/circuit.rs` uses `DOMAIN_VAN = 1` but spec `gov-steps-v1.md` §3.2 defines `DOMAIN_VAN = 0`."
 
 ## Output Format
 

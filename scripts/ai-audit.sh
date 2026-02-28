@@ -25,8 +25,8 @@ PROMPT_FILE="$REPO_ROOT/scripts/audit-prompt.md"
 # ─── Paths to spec and code ──────────────────────────────────────────
 
 SPEC_FILES=(
-  "$REPO_ROOT/orchard/src/vote_proof/README.md"
-  "$REPO_ROOT/orchard/src/delegation/README.md"
+  "$REPO_ROOT/voting-circuits/src/vote_proof/README.md"
+  "$REPO_ROOT/voting-circuits/src/delegation/README.md"
   "$REPO_ROOT/.cursor/rules/security-audit.mdc"
 )
 
@@ -39,11 +39,21 @@ SPEC_FILES=(
 # Tier 5: Nullifier ingest (exclusion proofs for ZKP #1)
 #
 CODE_FILES=(
-  # ── Tier 1: ZKP #1 Delegation + ZKP #2 Vote Proof ──
-  "$REPO_ROOT/orchard/src/vote_proof/circuit.rs"
-  "$REPO_ROOT/orchard/src/delegation/circuit.rs"
-  "$REPO_ROOT/orchard/src/delegation/builder.rs"
-  "$REPO_ROOT/orchard/src/delegation/imt.rs"
+  # ── Tier 1: ZKP #1 Delegation, ZKP #2 Vote Proof, ZKP #3 Share Reveal ──
+  "$REPO_ROOT/voting-circuits/src/delegation/circuit.rs"
+  "$REPO_ROOT/voting-circuits/src/delegation/builder.rs"
+  "$REPO_ROOT/voting-circuits/src/delegation/imt.rs"
+  "$REPO_ROOT/voting-circuits/src/delegation/imt_circuit.rs"
+  "$REPO_ROOT/voting-circuits/src/vote_proof/circuit.rs"
+  "$REPO_ROOT/voting-circuits/src/vote_proof/builder.rs"
+  "$REPO_ROOT/voting-circuits/src/vote_proof/authority_decrement.rs"
+  "$REPO_ROOT/voting-circuits/src/share_reveal/circuit.rs"
+  "$REPO_ROOT/voting-circuits/src/share_reveal/builder.rs"
+  "$REPO_ROOT/voting-circuits/src/circuit/address_ownership.rs"
+  "$REPO_ROOT/voting-circuits/src/circuit/elgamal.rs"
+  "$REPO_ROOT/voting-circuits/src/circuit/poseidon_merkle.rs"
+  "$REPO_ROOT/voting-circuits/src/circuit/van_integrity.rs"
+  "$REPO_ROOT/voting-circuits/src/circuit/vote_commitment.rs"
   "$REPO_ROOT/orchard/src/circuit/gadget/add_chip.rs"
 
   # ── Tier 2: Vote Commitment Tree ──
@@ -157,7 +167,7 @@ collect_context() {
   done
 
   # 4. Include git diff against main (uncommitted changes)
-  local scan_dirs="orchard/src/ vote-commitment-tree/src/ sdk/x/vote/ sdk/crypto/ sdk/app/ sdk/internal/helper/ nullifier-ingest/"
+  local scan_dirs="voting-circuits/src/ orchard/src/ vote-commitment-tree/src/ sdk/x/vote/ sdk/crypto/ sdk/app/ sdk/internal/helper/ sdk/circuits/src/ nullifier-ingest/"
   local diff
   diff=$(cd "$REPO_ROOT" && git diff HEAD -- $scan_dirs 2>/dev/null || true)
   if [ -n "$diff" ]; then
