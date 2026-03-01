@@ -28,7 +28,7 @@ todos:
     status: completed
   - id: step1-tests
     content: "Unit tests for shamir package, integration tests for modified ceremony + tally flow"
-    status: pending
+    status: completed
   - id: step2-dleq
     content: "Step 2: add DLEQ proofs to MsgSubmitPartialDecryption, on-chain verification against stored VK_i"
     status: pending
@@ -40,7 +40,7 @@ todos:
     status: pending
   - id: docs
     content: "Update README.md ceremony and tally documentation after each step"
-    status: pending
+    status: completed
 isProject: false
 ---
 
