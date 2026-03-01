@@ -19,10 +19,10 @@ todos:
     status: completed
   - id: step1-tally-combine
     content: "Modify tally PrepareProposal: when t partials exist on-chain, Lagrange-combine + BSGS, inject MsgSubmitTally"
-    status: pending
+    status: completed
   - id: step1-tally-verify
     content: "Modify MsgSubmitTally on-chain verification: recombine stored partials, check C2 - combined == totalValue * G"
-    status: pending
+    status: completed
   - id: step1-kv-storage
     content: "Add KV storage for partial decryptions and VK_i, accessor methods on Keeper"
     status: completed
