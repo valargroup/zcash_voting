@@ -6,10 +6,10 @@
 #
 # Source developer (has repo + mise):
 #   mise run build:install   # builds zallyd + create-val-tx → $HOME/go/bin
-#   ./join.sh                # detects local binaries, skips download
+#   ZALLY_LOCAL_BINARIES=1 ./join.sh   # uses local binaries, skips download
 #
 # What it does:
-#   1. Acquires zallyd + create-val-tx (downloads if not in PATH, else uses local)
+#   1. Acquires zallyd + create-val-tx (always downloads latest; set ZALLY_LOCAL_BINARIES=1 to use local)
 #   2. Discovers the network via the Vercel API (voting-config endpoint)
 #   3. Fetches genesis.json + node identity from a live validator
 #   4. Initializes a node, generates cryptographic keys
@@ -63,11 +63,12 @@ else
 fi
 
 # ─── Acquire binaries ────────────────────────────────────────────────────────
-# If zallyd and create-val-tx are already in PATH (e.g. from `mise run build:install`),
-# skip the download. Otherwise fetch pre-built binaries from DO Spaces.
+# Always download the latest release binaries from DO Spaces to avoid version
+# mismatches. Source developers who built from source can skip the download by
+# setting ZALLY_LOCAL_BINARIES=1 before running the script.
 
-if command -v zallyd > /dev/null 2>&1 && command -v create-val-tx > /dev/null 2>&1; then
-  echo "Using local binaries:"
+if [ "${ZALLY_LOCAL_BINARIES:-0}" = "1" ] && command -v zallyd > /dev/null 2>&1 && command -v create-val-tx > /dev/null 2>&1; then
+  echo "Using local binaries (ZALLY_LOCAL_BINARIES=1):"
   echo "  zallyd:         $(command -v zallyd)"
   echo "  create-val-tx:  $(command -v create-val-tx)"
 else
