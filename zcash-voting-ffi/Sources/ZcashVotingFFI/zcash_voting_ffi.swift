@@ -1507,7 +1507,6 @@ public struct DelegationSubmission {
     public var sighash: Data
     public var nfSigned: Data
     public var cmxNew: Data
-    public var encMemo: Data
     public var govComm: Data
     public var govNullifiers: [Data]
     public var proof: Data
@@ -1515,13 +1514,12 @@ public struct DelegationSubmission {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(rk: Data, spendAuthSig: Data, sighash: Data, nfSigned: Data, cmxNew: Data, encMemo: Data, govComm: Data, govNullifiers: [Data], proof: Data, voteRoundId: String) {
+    public init(rk: Data, spendAuthSig: Data, sighash: Data, nfSigned: Data, cmxNew: Data, govComm: Data, govNullifiers: [Data], proof: Data, voteRoundId: String) {
         self.rk = rk
         self.spendAuthSig = spendAuthSig
         self.sighash = sighash
         self.nfSigned = nfSigned
         self.cmxNew = cmxNew
-        self.encMemo = encMemo
         self.govComm = govComm
         self.govNullifiers = govNullifiers
         self.proof = proof
@@ -1551,9 +1549,6 @@ extension DelegationSubmission: Equatable, Hashable {
         if lhs.cmxNew != rhs.cmxNew {
             return false
         }
-        if lhs.encMemo != rhs.encMemo {
-            return false
-        }
         if lhs.govComm != rhs.govComm {
             return false
         }
@@ -1575,7 +1570,6 @@ extension DelegationSubmission: Equatable, Hashable {
         hasher.combine(sighash)
         hasher.combine(nfSigned)
         hasher.combine(cmxNew)
-        hasher.combine(encMemo)
         hasher.combine(govComm)
         hasher.combine(govNullifiers)
         hasher.combine(proof)
@@ -1597,7 +1591,6 @@ public struct FfiConverterTypeDelegationSubmission: FfiConverterRustBuffer {
                 sighash: FfiConverterData.read(from: &buf),
                 nfSigned: FfiConverterData.read(from: &buf),
                 cmxNew: FfiConverterData.read(from: &buf),
-                encMemo: FfiConverterData.read(from: &buf),
                 govComm: FfiConverterData.read(from: &buf),
                 govNullifiers: FfiConverterSequenceData.read(from: &buf),
                 proof: FfiConverterData.read(from: &buf),
@@ -1611,7 +1604,6 @@ public struct FfiConverterTypeDelegationSubmission: FfiConverterRustBuffer {
         FfiConverterData.write(value.sighash, into: &buf)
         FfiConverterData.write(value.nfSigned, into: &buf)
         FfiConverterData.write(value.cmxNew, into: &buf)
-        FfiConverterData.write(value.encMemo, into: &buf)
         FfiConverterData.write(value.govComm, into: &buf)
         FfiConverterSequenceData.write(value.govNullifiers, into: &buf)
         FfiConverterData.write(value.proof, into: &buf)

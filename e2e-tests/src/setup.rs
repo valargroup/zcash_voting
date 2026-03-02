@@ -225,8 +225,6 @@ pub fn build_delegation_bundle_for_test(
         .iter()
         .map(|g| g.to_repr())
         .collect();
-    let enc_memo = [0x05u8; 64];
-
     // Sighash: in production this is the ZIP-244 sighash extracted from the
     // governance PCZT. The e2e test builds the bundle directly (no PCZT), so
     // we use a deterministic 32-byte value. The chain only checks
@@ -250,7 +248,6 @@ pub fn build_delegation_bundle_for_test(
         sighash: sighash.to_vec(),
         signed_note_nullifier: nf_signed_bytes.to_vec(),
         cmx_new: cmx_new_bytes[..].to_vec(),
-        enc_memo: enc_memo.to_vec(),
         van_cmx: van_cmx_bytes[..].to_vec(),
         gov_nullifiers: gov_null_bytes.iter().map(|b| b.to_vec()).collect(),
         proof,

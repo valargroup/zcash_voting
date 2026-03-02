@@ -359,7 +359,6 @@ extension VotingAPIClient: DependencyKey {
                     "sighash": registration.sighash.base64EncodedString(),
                     "signed_note_nullifier": registration.signedNoteNullifier.base64EncodedString(),
                     "cmx_new": registration.cmxNew.base64EncodedString(),
-                    "enc_memo": registration.encMemo.base64EncodedString(),
                     "van_cmx": registration.vanCmx.base64EncodedString(),
                     "gov_nullifiers": registration.govNullifiers.map { $0.base64EncodedString() },
                     "proof": registration.proof.base64EncodedString(),

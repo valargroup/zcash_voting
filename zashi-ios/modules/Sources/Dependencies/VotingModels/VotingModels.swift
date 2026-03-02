@@ -358,7 +358,6 @@ public struct DelegationRegistration: Equatable, Sendable {
     public let spendAuthSig: Data
     public let signedNoteNullifier: Data
     public let cmxNew: Data
-    public let encMemo: Data
     public let vanCmx: Data
     public let govNullifiers: [Data]
     public let proof: Data
@@ -370,7 +369,6 @@ public struct DelegationRegistration: Equatable, Sendable {
         spendAuthSig: Data,
         signedNoteNullifier: Data,
         cmxNew: Data,
-        encMemo: Data,
         vanCmx: Data,
         govNullifiers: [Data],
         proof: Data,
@@ -381,7 +379,6 @@ public struct DelegationRegistration: Equatable, Sendable {
         self.spendAuthSig = spendAuthSig
         self.signedNoteNullifier = signedNoteNullifier
         self.cmxNew = cmxNew
-        self.encMemo = encMemo
         self.vanCmx = vanCmx
         self.govNullifiers = govNullifiers
         self.proof = proof

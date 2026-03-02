@@ -521,7 +521,6 @@ Maps to `MsgDelegateVote` (see [cosmos-sdk-messages-spec.md §4.2](cosmos-sdk-me
 | `spendAuthSig`        | `Data`   | 64 bytes     | SpendAuthSig over sighash (from Keystone) |
 | `signedNoteNullifier` | `Data`   | 32 bytes     | `nfSigned` from `DelegationAction`        |
 | `cmxNew`              | `Data`   | 32 bytes     | Output note commitment                    |
-| `encMemo`             | `Data`   | variable     | Encrypted memo field                      |
 | `govComm`             | `Data`   | 32 bytes     | VAN (governance commitment)               |
 | `govNullifiers`       | `[Data]` | 4 × 32 bytes | Governance nullifiers                     |
 | `proof`               | `Data`   | variable     | Halo2 ZKP #1 proof                        |
