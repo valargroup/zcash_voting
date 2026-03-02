@@ -385,7 +385,7 @@ Do the Halo2 call for this.
 We now submit the vote on-chain. The data we post on-chain for establishing the vote hotkey.
 
 - Standard signed action data (standard zcash)
-  - `rk`, `sig`, `signed_note_nullifier`, `cmx_new`, `enc_memo`, `tx_fee`, `transmission_key`
+  - `rk`, `sig`, `signed_note_nullifier`, `cmx_new`, `tx_fee`, `transmission_key`
 - gov nullifiers: `gov_null_1`, `gov_null_2`, ..., `gov_null_5`
 - `vote_authority_note`
 - ZKP
