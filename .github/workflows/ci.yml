@@ -113,6 +113,13 @@ jobs:
         uses: actions/checkout@v4
       - name: Install mise
         uses: jdx/mise-action@v2
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: sdk/circuits/target
+          key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-circuits-
       - name: Cache Go build
         uses: actions/cache@v4
         with:
@@ -120,6 +127,8 @@ jobs:
           key: ${{ runner.os }}-vc-van-deterministic-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-vc-van-deterministic-go-
+      - name: Build circuits
+        run: mise run build:circuits
       - name: Run deterministic VC/VAN tree stress tests
         run: mise run test:tree-stress
         env:
