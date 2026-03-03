@@ -6,8 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    - cron: "0 3 * * *"
 
 permissions:
   contents: read
@@ -108,31 +106,25 @@ jobs:
     name: VC/VAN Deterministic Stress
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/sdk/.cache/go-mod
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install mise
         uses: jdx/mise-action@v2
-      - name: Cache Rust build
-        uses: actions/cache@v4
-        with:
-          path: sdk/circuits/target
-          key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-circuits-
       - name: Cache Go build
         uses: actions/cache@v4
         with:
-          path: sdk/.cache/go-build
-          key: ${{ runner.os }}-vc-van-deterministic-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          path: |
+            ${{ env.GOCACHE }}
+            ${{ env.GOMODCACHE }}
+          key: ${{ runner.os }}-vc-van-deterministic-go-${{ hashFiles('sdk/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-vc-van-deterministic-go-
-      - name: Build circuits
-        run: mise run build:circuits
       - name: Run deterministic VC/VAN tree stress tests
         run: mise run test:tree-stress
-        env:
-          GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
 
   test-api:
     name: API Integration Tests
@@ -271,7 +263,7 @@ jobs:
 
   test-vc-van-realism:
     name: VC/VAN Real-Proof Stress
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -347,7 +339,7 @@ jobs:
           RUN_RESTART_PHASE: "1"
           ZALLY_PIR_URL: "disabled"
       - name: Run Tier 3 crash recovery with real-proof load (nightly + manual)
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: mise run test:tree-crash-recovery:real
         env:
           REAL_PROOF_API_URL: http://localhost:1418

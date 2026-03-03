@@ -190,6 +190,6 @@ The suite passes only when all of the following hold:
 ## CI Intent
 
 - **PR path:** deterministic VC/VAN stress (`test:tree-stress`) for fast signal.
-- **main/workflow_dispatch/schedule:** real-proof sync stress plus real-proof VC flow
+- **main/workflow_dispatch:** real-proof sync stress plus real-proof VC flow
   (`voting_flow_librustvoting`), followed by multi-validator realism checks.
 
