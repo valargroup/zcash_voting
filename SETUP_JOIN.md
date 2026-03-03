@@ -101,12 +101,24 @@ curl -s localhost:1318/zally/v1/rounds | jq
 zallyd status --home ~/.zallyd | jq '.sync_info'
 
 # Follow node logs
-journalctl -u zallyd -f
+tail -f ~/.zallyd/node.log            # macOS
+journalctl -u zallyd -f               # Linux
+```
 
-# Service management
+### Service management (Linux — systemd)
+
+```bash
 sudo systemctl status zallyd
 sudo systemctl stop zallyd
 sudo systemctl restart zallyd
+```
+
+### Service management (macOS — launchd)
+
+```bash
+launchctl print gui/$(id -u)/com.zally.validator
+launchctl bootout gui/$(id -u)/com.zally.validator
+launchctl kickstart -k gui/$(id -u)/com.zally.validator
 ```
 
 ## Chain info
