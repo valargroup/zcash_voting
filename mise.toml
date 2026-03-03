@@ -227,7 +227,7 @@ run = "bash sdk/scripts/test_validator_restart.sh"
 [tasks."test:tree-stress"]
 description = "VC/VAN in-process determinism stress tests (debug_tree)"
 dir = "sdk"
-run = "go test -tags debug_tree -count=1 -run TestTreeStress ./app/..."
+run = "go test -tags debug_tree -count=1 -run TestTreeStress ./app"
 
 [tasks."test:tree-consistency"]
 description = "VC/VAN per-height multi-validator consistency checks (requires load)"
