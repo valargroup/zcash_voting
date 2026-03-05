@@ -1,21 +1,21 @@
-//! Tier 2 export: 524,288 rows, each a depth-19 subtree with 6 internal layers + leaf records.
+//! Tier 2 export: 262,144 rows, each a depth-18 subtree with 8 internal layers + leaf records.
 //!
-//! Row layout (12,224 bytes):
+//! Row layout (24,512 bytes):
 //! ```text
-//! [internal nodes: 126 × 32 bytes, relative depths 1-6 in BFS order]
-//!   depth 1: 2 nodes  → bytes [0..64)
-//!   depth 2: 4 nodes  → bytes [64..192)
+//! [internal nodes: 254 × 32 bytes, relative depths 1-7 in BFS order]
+//!   depth 1: 2 nodes   → bytes [0..64)
+//!   depth 2: 4 nodes   → bytes [64..192)
 //!   ...
-//!   depth 6: 64 nodes → bytes [3008..4032)
-//! [leaf records: 128 × (32-byte key + 32-byte value)]
-//!   record i: key (low) at 4032+i*64, value (width) at 4032+i*64+32
+//!   depth 7: 128 nodes → bytes [6080..8128)
+//! [leaf records: 256 × (32-byte key + 32-byte value)]
+//!   record i: key (low) at 8128+i*64, value (width) at 8128+i*64+32
 //! ```
 //!
-//! Internal node at relative depth d (1..6), position p:
+//! Internal node at relative depth d (1..7), position p:
 //!   byte offset = ((2^d - 2) + p) * 32
 //!
-//! Leaf record i (0..127):
-//!   byte offset = 126 * 32 + i * 64
+//! Leaf record i (0..255):
+//!   byte offset = 254 * 32 + i * 64
 
 use std::io::Write;
 
@@ -52,9 +52,9 @@ pub fn export(
     Ok(())
 }
 
-/// Write a single Tier 2 row for subtree index `s` (at depth 19).
+/// Write a single Tier 2 row for subtree index `s` (at depth 18).
 ///
-/// The subtree root is at bottom-up level `PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS` = 7,
+/// The subtree root is at bottom-up level `PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS` = 8,
 /// index `s`.
 fn write_row(
     levels: &[Vec<Fp>],
@@ -86,7 +86,7 @@ fn write_row(
 
     debug_assert_eq!(offset, TIER2_INTERNAL_NODES * 32);
 
-    // ── Leaf records: 128 entries at relative depth 7 (depth 26 = tree leaves) ──
+    // ── Leaf records: 256 entries at relative depth 8 (depth 26 = tree leaves) ──
     //
     // Each record: 32-byte key (low) + 32-byte value (width).
     // These are the raw range data, NOT hashes — the client hashes them as needed.
@@ -135,7 +135,7 @@ impl<'a> Tier2Row<'a> {
         Ok(Self { data })
     }
 
-    /// Internal node at relative depth d (1..6), position p (0..2^d - 1).
+    /// Internal node at relative depth d (1..7), position p (0..2^d - 1).
     pub fn internal_node(&self, rel_depth: usize, pos: usize) -> Fp {
         debug_assert!((1..TIER2_LAYERS).contains(&rel_depth));
         debug_assert!(pos < (1 << rel_depth));
@@ -144,7 +144,7 @@ impl<'a> Tier2Row<'a> {
         crate::read_fp(&self.data[offset..offset + 32])
     }
 
-    /// Leaf record at index i (0..127): (key=low, value=width).
+    /// Leaf record at index i (0..255): (key=low, value=width).
     pub fn leaf_record(&self, i: usize) -> (Fp, Fp) {
         debug_assert!(i < TIER2_LEAVES);
         let base = TIER2_INTERNAL_NODES * 32 + i * 64;
@@ -193,9 +193,9 @@ impl<'a> Tier2Row<'a> {
         }
     }
 
-    /// Extract the 7 sibling hashes from this Tier 2 row for a given leaf index.
+    /// Extract the 8 sibling hashes from this Tier 2 row for a given leaf index.
     ///
-    /// Returns siblings at bottom-up levels 0..=6 (plan depths 26..=20).
+    /// Returns siblings at bottom-up levels 0..=7 (plan depths 26..=19).
     ///
     /// The sibling at the leaf level (bottom-up 0) is computed from the sibling leaf
     /// record when that sibling is populated, otherwise it uses the empty-leaf hash.

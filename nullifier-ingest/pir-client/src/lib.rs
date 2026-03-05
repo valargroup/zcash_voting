@@ -202,13 +202,13 @@ impl PirClient {
             .find_sub_subtree(nullifier)
             .context("nullifier not found in any Tier 1 sub-subtree")?;
 
-        // Extract 8 siblings from Tier 1 (bottom-up levels 7..14)
+        // Extract 7 siblings from Tier 1 (bottom-up levels 8..14)
         let tier1_siblings = tier1.extract_siblings(s2);
         for (i, &sib) in tier1_siblings.iter().enumerate() {
-            path[PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS + i] = sib; // path[7..15]
+            path[PIR_DEPTH - TIER0_LAYERS - TIER1_LAYERS + i] = sib; // path[8..15]
         }
 
-        // ── Tier 2: YPIR query for row (s1 * 256 + s2) ──────────────────
+        // ── Tier 2: YPIR query for row (s1 * 128 + s2) ──────────────────
         let t2_row_idx = s1 * TIER1_LEAVES + s2;
         let (tier2_row, tier2_timing) = self.ypir_query_tier2(t2_row_idx).await?;
         let tier2 = Tier2Row::from_bytes(&tier2_row)?;
@@ -218,10 +218,10 @@ impl PirClient {
             .find_leaf(nullifier, valid_leaves)
             .context("nullifier not found in Tier 2 leaf scan")?;
 
-        // Extract 7 siblings from Tier 2 (bottom-up levels 0..6)
+        // Extract 8 siblings from Tier 2 (bottom-up levels 0..7)
         let tier2_siblings = tier2.extract_siblings(leaf_local_idx, valid_leaves, &hasher);
         for (i, &sib) in tier2_siblings.iter().enumerate() {
-            path[i] = sib; // path[0..7]
+            path[i] = sib; // path[0..8]
         }
 
         // ── Path padding (depth 26 → 29) ────────────────────────────────

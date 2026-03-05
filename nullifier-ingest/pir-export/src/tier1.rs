@@ -1,22 +1,22 @@
-//! Tier 1 export: 2,048 rows, each a depth-11 subtree with 8 internal layers + leaf records.
+//! Tier 1 export: 2,048 rows, each a depth-11 subtree with 7 internal layers + leaf records.
 //!
-//! Row layout (24,512 bytes):
+//! Row layout (12,224 bytes):
 //! ```text
-//! [internal nodes: 254 × 32 bytes, relative depths 1-7 in BFS order]
-//!   depth 1: 2 nodes   → bytes [0..64)
-//!   depth 2: 4 nodes   → bytes [64..192)
-//!   depth 3: 8 nodes   → bytes [192..448)
+//! [internal nodes: 126 × 32 bytes, relative depths 1-6 in BFS order]
+//!   depth 1: 2 nodes  → bytes [0..64)
+//!   depth 2: 4 nodes  → bytes [64..192)
+//!   depth 3: 8 nodes  → bytes [192..448)
 //!   ...
-//!   depth 7: 128 nodes → bytes [6080..8128)
-//! [leaf records: 256 × (32-byte hash + 32-byte min_key)]
-//!   record i: hash at 8128+i*64, min_key at 8128+i*64+32
+//!   depth 6: 64 nodes → bytes [3008..4032)
+//! [leaf records: 128 × (32-byte hash + 32-byte min_key)]
+//!   record i: hash at 4032+i*64, min_key at 4032+i*64+32
 //! ```
 //!
-//! Internal node at relative depth d (1..7), position p:
+//! Internal node at relative depth d (1..6), position p:
 //!   byte offset = ((2^d - 2) + p) * 32
 //!
-//! Leaf record i (0..255):
-//!   byte offset = 254 * 32 + i * 64
+//! Leaf record i (0..127):
+//!   byte offset = 126 * 32 + i * 64
 
 use std::io::Write;
 
@@ -83,9 +83,9 @@ fn write_row(
 
     debug_assert_eq!(offset, TIER1_INTERNAL_NODES * 32);
 
-    // ── Leaf records: 256 entries at relative depth 8 (depth 19) ─────────
+    // ── Leaf records: 128 entries at relative depth 7 (depth 18) ─────────
     //
-    // Bottom-up level = bu_base - TIER1_LAYERS = 15 - 8 = 7.
+    // Bottom-up level = bu_base - TIER1_LAYERS = 15 - 7 = 8.
     // Each record: 32-byte hash + 32-byte min_key.
     let bu_leaf = bu_base - TIER1_LAYERS; // 7
     let leaf_start = s * TIER1_LEAVES; // s * 256
@@ -130,7 +130,7 @@ impl<'a> Tier1Row<'a> {
         Ok(Self { data })
     }
 
-    /// Internal node at relative depth d (1..7), position p (0..2^d - 1).
+    /// Internal node at relative depth d (1..6), position p (0..2^d - 1).
     pub fn internal_node(&self, rel_depth: usize, pos: usize) -> Fp {
         debug_assert!((1..TIER1_LAYERS).contains(&rel_depth));
         debug_assert!(pos < (1 << rel_depth));
@@ -139,7 +139,7 @@ impl<'a> Tier1Row<'a> {
         crate::read_fp(&self.data[offset..offset + 32])
     }
 
-    /// Leaf record at index i (0..255): (hash, min_key).
+    /// Leaf record at index i (0..127): (hash, min_key).
     pub fn leaf_record(&self, i: usize) -> (Fp, Fp) {
         debug_assert!(i < TIER1_LEAVES);
         let base = TIER1_INTERNAL_NODES * 32 + i * 64;
@@ -148,7 +148,7 @@ impl<'a> Tier1Row<'a> {
         (hash, min_key)
     }
 
-    /// Binary search the 256 leaf min_keys to find which sub-subtree contains `value`.
+    /// Binary search the 128 leaf min_keys to find which sub-subtree contains `value`.
     pub fn find_sub_subtree(&self, value: Fp) -> Option<usize> {
         let base = TIER1_INTERNAL_NODES * 32;
         let mut lo = 0usize;
@@ -170,9 +170,9 @@ impl<'a> Tier1Row<'a> {
         }
     }
 
-    /// Extract the 8 sibling hashes from this Tier 1 row for a given sub-subtree index.
+    /// Extract the 7 sibling hashes from this Tier 1 row for a given sub-subtree index.
     ///
-    /// Returns siblings at bottom-up levels 7..=14 (plan depths 19..=12).
+    /// Returns siblings at bottom-up levels 8..=14 (plan depths 18..=12).
     pub fn extract_siblings(&self, sub_idx: usize) -> [Fp; TIER1_LAYERS] {
         let mut siblings = [Fp::default(); TIER1_LAYERS];
 
