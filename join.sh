@@ -139,9 +139,18 @@ else
   tar xzf /tmp/zally-release.tar.gz -C /tmp "${TARBALL_DIR}/bin/zallyd" "${TARBALL_DIR}/bin/create-val-tx"
 
   # Stop running service before overwriting (avoids "Text file busy").
-  if systemctl is-active --quiet zallyd 2>/dev/null; then
-    echo "Stopping running zallyd service before upgrading..."
-    systemctl stop zallyd
+  OS_NAME=$(uname -s)
+  if [ "$OS_NAME" = "Darwin" ]; then
+    PLIST_LABEL="com.zally.validator"
+    if launchctl print "gui/$(id -u)/${PLIST_LABEL}" >/dev/null 2>&1; then
+      echo "Stopping running ${PLIST_LABEL} service before upgrading..."
+      launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
+    fi
+  else
+    if systemctl is-active --quiet zallyd 2>/dev/null; then
+      echo "Stopping running zallyd service before upgrading..."
+      systemctl stop zallyd
+    fi
   fi
 
   cp "/tmp/${TARBALL_DIR}/bin/zallyd" "${INSTALL_DIR}/zallyd"
@@ -328,8 +337,18 @@ if [ -n "$ZALLY_DOMAIN" ]; then
         echo "WARNING: apt not found. Install Caddy manually: https://caddyserver.com/docs/install"
         VALIDATOR_URL=""
       fi
+    elif [ "$OS_NAME" = "Darwin" ]; then
+      if command -v brew > /dev/null 2>&1; then
+        echo "Installing Caddy via Homebrew..."
+        brew install caddy > /dev/null 2>&1
+      else
+        echo "WARNING: Homebrew not found. Install Caddy manually:"
+        echo "  brew install caddy   (after installing Homebrew from https://brew.sh)"
+        echo "  Then re-run join.sh."
+        VALIDATOR_URL=""
+      fi
     else
-      echo "WARNING: Automatic Caddy installation is only supported on Linux (apt)."
+      echo "WARNING: Automatic Caddy installation is only supported on Linux (apt) and macOS (Homebrew)."
       echo "  Install Caddy manually: https://caddyserver.com/docs/install"
       echo "  Then re-run join.sh."
       VALIDATOR_URL=""
@@ -338,15 +357,38 @@ if [ -n "$ZALLY_DOMAIN" ]; then
 fi
 
 if [ -n "$VALIDATOR_URL" ] && command -v caddy > /dev/null 2>&1; then
-  # Write Caddyfile.
+  OS_NAME=$(uname -s)
+  if [ "$OS_NAME" = "Darwin" ]; then
+    CADDY_DIR="${HOME}/.config/caddy"
+    CADDYFILE="${CADDY_DIR}/Caddyfile"
+    mkdir -p "${CADDY_DIR}"
+  else
+    CADDY_DIR="/etc/caddy"
+    CADDYFILE="${CADDY_DIR}/Caddyfile"
+  fi
+
   echo "Configuring Caddy for ${ZALLY_DOMAIN} → localhost:1317..."
-  sudo tee /etc/caddy/Caddyfile > /dev/null <<CADDYEOF
+
+  if [ "$OS_NAME" = "Darwin" ]; then
+    cat > "${CADDYFILE}" <<CADDYEOF
 ${ZALLY_DOMAIN} {
     reverse_proxy localhost:1317
 }
 CADDYEOF
+  else
+    sudo tee "${CADDYFILE}" > /dev/null <<CADDYEOF
+${ZALLY_DOMAIN} {
+    reverse_proxy localhost:1317
+}
+CADDYEOF
+  fi
 
-  sudo systemctl restart caddy 2>/dev/null || sudo caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
+  if [ "$OS_NAME" = "Darwin" ]; then
+    # On macOS, Caddy is managed as part of the launchd plist (see below).
+    :
+  else
+    sudo systemctl restart caddy 2>/dev/null || sudo caddy reload --config "${CADDYFILE}" 2>/dev/null || true
+  fi
   echo "Caddy configured: ${VALIDATOR_URL} → localhost:1317"
 else
   VALIDATOR_URL=""
@@ -389,8 +431,9 @@ if [ -n "$VALIDATOR_URL" ]; then
   fi
 fi
 
-# ─── Systemd service ─────────────────────────────────────────────────────────
-# Install a systemd unit so zallyd survives SSH disconnects and reboots.
+# ─── Service installation ─────────────────────────────────────────────────────
+# Install a persistent service so zallyd survives terminal closes and reboots.
+# Uses systemd on Linux and launchd on macOS.
 
 LOG_FILE="${HOME_DIR}/node.log"
 ZALLYD_BIN=$(command -v zallyd)
@@ -415,9 +458,102 @@ register_url() {
 }
 
 echo ""
-echo "=== Installing systemd service ==="
+OS_NAME=$(uname -s)
 
-sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<SVCEOF
+if [ "$OS_NAME" = "Darwin" ]; then
+  # ── macOS: launchd ──────────────────────────────────────────────────────────
+  echo "=== Installing launchd service ==="
+
+  PLIST_LABEL="com.zally.validator"
+  PLIST_DIR="${HOME}/Library/LaunchAgents"
+  PLIST_FILE="${PLIST_DIR}/${PLIST_LABEL}.plist"
+  mkdir -p "${PLIST_DIR}"
+
+  # Unload existing service if present.
+  launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
+
+  cat > "${PLIST_FILE}" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${ZALLYD_BIN}</string>
+        <string>start</string>
+        <string>--home</string>
+        <string>${HOME_DIR}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${LOG_FILE}</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_FILE}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
+PLISTEOF
+
+  launchctl bootstrap "gui/$(id -u)" "${PLIST_FILE}"
+  echo "Service ${PLIST_LABEL} started (survives terminal close and reboots)."
+  echo "Logs: ${LOG_FILE}"
+
+  # Start Caddy as a launchd service if configured.
+  if [ -n "${VALIDATOR_URL:-}" ] && command -v caddy > /dev/null 2>&1; then
+    CADDY_LABEL="com.zally.caddy"
+    CADDY_PLIST="${PLIST_DIR}/${CADDY_LABEL}.plist"
+    CADDY_LOG="${HOME_DIR}/caddy.log"
+    CADDY_BIN=$(command -v caddy)
+
+    launchctl bootout "gui/$(id -u)/${CADDY_LABEL}" 2>/dev/null || true
+
+    cat > "${CADDY_PLIST}" <<CADDYPLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${CADDY_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${CADDY_BIN}</string>
+        <string>run</string>
+        <string>--config</string>
+        <string>${HOME}/.config/caddy/Caddyfile</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${CADDY_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${CADDY_LOG}</string>
+</dict>
+</plist>
+CADDYPLISTEOF
+
+    launchctl bootstrap "gui/$(id -u)" "${CADDY_PLIST}"
+    echo "Caddy service started: ${VALIDATOR_URL} → localhost:1317"
+  fi
+
+else
+  # ── Linux: systemd ──────────────────────────────────────────────────────────
+  echo "=== Installing systemd service ==="
+
+  sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<SVCEOF
 [Unit]
 Description=Zally validator (${MONIKER})
 After=network.target
@@ -435,11 +571,12 @@ StandardError=append:${LOG_FILE}
 WantedBy=multi-user.target
 SVCEOF
 
-sudo systemctl daemon-reload
-sudo systemctl enable ${SERVICE_NAME}
-sudo systemctl start ${SERVICE_NAME}
-echo "Service ${SERVICE_NAME} started (survives SSH disconnect and reboots)."
-echo "Logs: ${LOG_FILE}"
+  sudo systemctl daemon-reload
+  sudo systemctl enable ${SERVICE_NAME}
+  sudo systemctl start ${SERVICE_NAME}
+  echo "Service ${SERVICE_NAME} started (survives SSH disconnect and reboots)."
+  echo "Logs: ${LOG_FILE}"
+fi
 
 # Give the node a moment to start up.
 sleep 5
@@ -511,11 +648,19 @@ fi
 
 echo ""
 echo "============================================="
-echo "  Validator is running as systemd service"
+echo "  Validator is running"
 echo "============================================="
 echo ""
-echo "  Service:  ${SERVICE_NAME}"
-echo "  Logs:     journalctl -u ${SERVICE_NAME} -f"
-echo "  Status:   sudo systemctl status ${SERVICE_NAME}"
-echo "  Stop:     sudo systemctl stop ${SERVICE_NAME}"
-echo "  Restart:  sudo systemctl restart ${SERVICE_NAME}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  echo "  Service:  ${PLIST_LABEL} (launchd)"
+  echo "  Logs:     tail -f ${LOG_FILE}"
+  echo "  Status:   launchctl print gui/$(id -u)/${PLIST_LABEL}"
+  echo "  Stop:     launchctl bootout gui/$(id -u)/${PLIST_LABEL}"
+  echo "  Restart:  launchctl kickstart -k gui/$(id -u)/${PLIST_LABEL}"
+else
+  echo "  Service:  ${SERVICE_NAME} (systemd)"
+  echo "  Logs:     journalctl -u ${SERVICE_NAME} -f"
+  echo "  Status:   sudo systemctl status ${SERVICE_NAME}"
+  echo "  Stop:     sudo systemctl stop ${SERVICE_NAME}"
+  echo "  Restart:  sudo systemctl restart ${SERVICE_NAME}"
+fi

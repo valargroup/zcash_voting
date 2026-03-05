@@ -18,6 +18,9 @@ use rand::Rng;
 use imt_tree::tree::{build_nf_ranges, build_sentinel_tree};
 
 use pir_export::build_pir_tree;
+use pir_export::{
+    TIER1_ITEM_BITS, TIER1_ROWS, TIER1_ROW_BYTES, TIER2_ITEM_BITS, TIER2_ROWS, TIER2_ROW_BYTES,
+};
 
 #[derive(Parser)]
 #[command(name = "pir-test", about = "PIR system end-to-end testing")]
@@ -72,6 +75,13 @@ enum Command {
         #[arg(long, default_value = "100")]
         num_proofs: usize,
     },
+
+    /// Benchmark YPIR query/response sizes and timing in-process (no HTTP).
+    Bench {
+        /// Number of YPIR queries per tier.
+        #[arg(long, default_value = "3")]
+        num_queries: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -96,6 +106,7 @@ fn main() -> Result<()> {
             nullifiers,
             num_proofs,
         } => run_compare(nullifiers, num_proofs),
+        Command::Bench { num_queries } => run_bench(num_queries),
     }
 }
 
@@ -526,6 +537,238 @@ fn run_compare(nullifiers_path: PathBuf, num_proofs: usize) -> Result<()> {
 
     eprintln!("\n=== PASSED ===");
     Ok(())
+}
+
+// ── Bench mode ───────────────────────────────────────────────────────────────
+
+fn run_bench(num_queries: usize) -> Result<()> {
+    use pir_server::{OwnedTierState, YpirScenario};
+
+    eprintln!("=== PIR Benchmark: in-process YPIR ({} queries per tier) ===\n", num_queries);
+    eprintln!(
+        "  Config: TIER1_LAYERS={}, TIER2_LAYERS={}",
+        pir_export::TIER1_LAYERS,
+        pir_export::TIER2_LAYERS
+    );
+    eprintln!(
+        "  Tier 1: {} rows × {} bytes/row ({} bits/item), instances={}",
+        TIER1_ROWS,
+        TIER1_ROW_BYTES,
+        TIER1_ITEM_BITS,
+        (TIER1_ITEM_BITS as f64 / (2048.0 * 14.0)).ceil() as usize,
+    );
+    eprintln!(
+        "  Tier 2: {} rows × {} bytes/row ({} bits/item), instances={}",
+        TIER2_ROWS,
+        TIER2_ROW_BYTES,
+        TIER2_ITEM_BITS,
+        (TIER2_ITEM_BITS as f64 / (2048.0 * 14.0)).ceil() as usize,
+    );
+
+    // Build a small tree to get valid tier data
+    eprintln!("\nBuilding synthetic tree (1000 nullifiers)...");
+    let mut rng = rand::thread_rng();
+    let raw_nfs: Vec<Fp> = (0..1000).map(|_| Fp::random(&mut rng)).collect();
+    let mut sorted = raw_nfs;
+    sorted.sort();
+    let step = Fp::from(2u64).pow([250, 0, 0, 0]);
+    let sentinels: Vec<Fp> = (0u64..=16).map(|k| step * Fp::from(k)).collect();
+    let mut all_nfs = sentinels;
+    all_nfs.extend_from_slice(&sorted);
+    all_nfs.sort();
+    all_nfs.dedup();
+    let ranges = build_nf_ranges(all_nfs.iter().copied());
+    let tree = build_pir_tree(ranges)?;
+
+    // Export tier data
+    eprintln!("Exporting tier data...");
+    let mut tier1_data = Vec::new();
+    pir_export::tier1::export(&tree.levels, &tree.ranges, &tree.empty_hashes, &mut tier1_data)?;
+    let mut tier2_data = Vec::new();
+    pir_export::tier2::export(&tree.levels, &tree.ranges, &tree.empty_hashes, &mut tier2_data)?;
+    eprintln!("  Tier 1: {} bytes", tier1_data.len());
+    eprintln!("  Tier 2: {} bytes", tier2_data.len());
+
+    // Initialize YPIR servers
+    eprintln!("\nInitializing YPIR servers...");
+    let tier1_scenario = YpirScenario {
+        num_items: TIER1_ROWS,
+        item_size_bits: TIER1_ITEM_BITS,
+    };
+    let t0 = Instant::now();
+    let tier1_server = OwnedTierState::new(&tier1_data, tier1_scenario.clone());
+    eprintln!("  Tier 1 YPIR server ready in {:.1}s", t0.elapsed().as_secs_f64());
+    drop(tier1_data);
+
+    let tier2_scenario = YpirScenario {
+        num_items: TIER2_ROWS,
+        item_size_bits: TIER2_ITEM_BITS,
+    };
+    let t0 = Instant::now();
+    let tier2_server = OwnedTierState::new(&tier2_data, tier2_scenario.clone());
+    eprintln!("  Tier 2 YPIR server ready in {:.1}s", t0.elapsed().as_secs_f64());
+    drop(tier2_data);
+
+    // Run tier 1 benchmarks
+    eprintln!("\n── Tier 1 YPIR Benchmark ──────────────────────────────────");
+    let tier1_results = bench_tier(
+        "tier1",
+        tier1_scenario.num_items,
+        tier1_scenario.item_size_bits,
+        tier1_server.server(),
+        num_queries,
+    )?;
+
+    // Run tier 2 benchmarks
+    eprintln!("\n── Tier 2 YPIR Benchmark ──────────────────────────────────");
+    let tier2_results = bench_tier(
+        "tier2",
+        tier2_scenario.num_items,
+        tier2_scenario.item_size_bits,
+        tier2_server.server(),
+        num_queries,
+    )?;
+
+    // Summary table
+    eprintln!("\n══════════════════════════════════════════════════════════════");
+    eprintln!("  SUMMARY (averages over {} queries)", num_queries);
+    eprintln!("══════════════════════════════════════════════════════════════");
+    eprintln!(
+        "  {:>10} {:>12} {:>12} {:>10} {:>10} {:>10}",
+        "", "Query(up)", "Response(dn)", "ClientGen", "ServerComp", "ClientDec"
+    );
+    eprintln!(
+        "  {:>10} {:>12} {:>12} {:>10} {:>10} {:>10}",
+        "Tier 1",
+        format_bytes(tier1_results.avg_query_bytes),
+        format_bytes(tier1_results.avg_response_bytes),
+        format_ms(tier1_results.avg_gen_ms),
+        format_ms(tier1_results.avg_server_ms),
+        format_ms(tier1_results.avg_decode_ms),
+    );
+    eprintln!(
+        "  {:>10} {:>12} {:>12} {:>10} {:>10} {:>10}",
+        "Tier 2",
+        format_bytes(tier2_results.avg_query_bytes),
+        format_bytes(tier2_results.avg_response_bytes),
+        format_ms(tier2_results.avg_gen_ms),
+        format_ms(tier2_results.avg_server_ms),
+        format_ms(tier2_results.avg_decode_ms),
+    );
+    eprintln!(
+        "  {:>10} {:>12} {:>12}",
+        "TOTAL",
+        format_bytes(tier1_results.avg_query_bytes + tier2_results.avg_query_bytes),
+        format_bytes(tier1_results.avg_response_bytes + tier2_results.avg_response_bytes),
+    );
+    eprintln!("══════════════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+struct BenchResults {
+    avg_query_bytes: usize,
+    avg_response_bytes: usize,
+    avg_gen_ms: f64,
+    avg_server_ms: f64,
+    avg_decode_ms: f64,
+}
+
+fn bench_tier(
+    name: &str,
+    num_items: usize,
+    item_size_bits: usize,
+    server: &pir_server::TierServer<'static>,
+    num_queries: usize,
+) -> Result<BenchResults> {
+    use ypir::client::YPIRClient;
+
+    let ypir_client = YPIRClient::from_db_sz(num_items as u64, item_size_bits as u64, true);
+
+    let mut total_query_bytes = 0usize;
+    let mut total_response_bytes = 0usize;
+    let mut total_gen_ms = 0.0f64;
+    let mut total_server_ms = 0.0f64;
+    let mut total_decode_ms = 0.0f64;
+
+    for i in 0..num_queries {
+        let row_idx = i % num_items;
+
+        // Client: generate query
+        let t_gen = Instant::now();
+        let (query, seed) = ypir_client.generate_query_simplepir(row_idx);
+        let gen_ms = t_gen.elapsed().as_secs_f64() * 1000.0;
+
+        // Serialize query (same format as pir-client)
+        let pqr = query.0.as_slice();
+        let pp = query.1.as_slice();
+        let pqr_byte_len = pqr.len() * 8;
+        let mut payload = Vec::with_capacity(8 + (pqr.len() + pp.len()) * 8);
+        payload.extend_from_slice(&(pqr_byte_len as u64).to_le_bytes());
+        for &v in pqr {
+            payload.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in pp {
+            payload.extend_from_slice(&v.to_le_bytes());
+        }
+        let query_bytes = payload.len();
+
+        // Server: answer query
+        let t_server = Instant::now();
+        let answer = server.answer_query(&payload)?;
+        let server_ms = t_server.elapsed().as_secs_f64() * 1000.0;
+        let response_bytes = answer.response.len();
+
+        // Client: decode response
+        let t_decode = Instant::now();
+        let _decoded = ypir_client.decode_response_simplepir(seed, &answer.response);
+        let decode_ms = t_decode.elapsed().as_secs_f64() * 1000.0;
+
+        eprintln!(
+            "  {} query {}/{}: up={} dn={} gen={:.0}ms server={:.0}ms decode={:.0}ms",
+            name,
+            i + 1,
+            num_queries,
+            format_bytes(query_bytes),
+            format_bytes(response_bytes),
+            gen_ms,
+            server_ms,
+            decode_ms,
+        );
+
+        total_query_bytes += query_bytes;
+        total_response_bytes += response_bytes;
+        total_gen_ms += gen_ms;
+        total_server_ms += server_ms;
+        total_decode_ms += decode_ms;
+    }
+
+    let n = num_queries as f64;
+    Ok(BenchResults {
+        avg_query_bytes: total_query_bytes / num_queries,
+        avg_response_bytes: total_response_bytes / num_queries,
+        avg_gen_ms: total_gen_ms / n,
+        avg_server_ms: total_server_ms / n,
+        avg_decode_ms: total_decode_ms / n,
+    })
+}
+
+fn format_bytes(b: usize) -> String {
+    if b >= 1_048_576 {
+        format!("{:.2} MB", b as f64 / 1_048_576.0)
+    } else if b >= 1024 {
+        format!("{:.1} KB", b as f64 / 1024.0)
+    } else {
+        format!("{} B", b)
+    }
+}
+
+fn format_ms(ms: f64) -> String {
+    if ms >= 1000.0 {
+        format!("{:.1}s", ms / 1000.0)
+    } else {
+        format!("{:.0}ms", ms)
+    }
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────

@@ -1154,22 +1154,12 @@ public func FfiConverterTypeBundleSetupResult_lower(_ value: BundleSetupResult) 
 
 /**
  * Computed signature fields for cast-vote TX submission.
+ * The sighash is computed on-chain from message fields; the client only
+ * provides the signature (which was signed over the same sighash).
  */
 public struct CastVoteSignature {
     /**
-     * Decompressed r_vpk x-coordinate (32 bytes).
-     */
-    public var rVpkX: Data
-    /**
-     * Decompressed r_vpk y-coordinate (32 bytes).
-     */
-    public var rVpkY: Data
-    /**
-     * Canonical cast-vote sighash (32 bytes).
-     */
-    public var sighash: Data
-    /**
-     * Spend auth signature over sighash (64 bytes).
+     * Spend auth signature over the canonical sighash (64 bytes).
      */
     public var voteAuthSig: Data
 
@@ -1177,20 +1167,8 @@ public struct CastVoteSignature {
     // declare one manually.
     public init(
         /**
-         * Decompressed r_vpk x-coordinate (32 bytes).
-         */rVpkX: Data,
-        /**
-         * Decompressed r_vpk y-coordinate (32 bytes).
-         */rVpkY: Data,
-        /**
-         * Canonical cast-vote sighash (32 bytes).
-         */sighash: Data,
-        /**
-         * Spend auth signature over sighash (64 bytes).
+         * Spend auth signature over the canonical sighash (64 bytes).
          */voteAuthSig: Data) {
-        self.rVpkX = rVpkX
-        self.rVpkY = rVpkY
-        self.sighash = sighash
         self.voteAuthSig = voteAuthSig
     }
 }
@@ -1202,15 +1180,6 @@ extension CastVoteSignature: Sendable {}
 
 extension CastVoteSignature: Equatable, Hashable {
     public static func ==(lhs: CastVoteSignature, rhs: CastVoteSignature) -> Bool {
-        if lhs.rVpkX != rhs.rVpkX {
-            return false
-        }
-        if lhs.rVpkY != rhs.rVpkY {
-            return false
-        }
-        if lhs.sighash != rhs.sighash {
-            return false
-        }
         if lhs.voteAuthSig != rhs.voteAuthSig {
             return false
         }
@@ -1218,9 +1187,6 @@ extension CastVoteSignature: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(rVpkX)
-        hasher.combine(rVpkY)
-        hasher.combine(sighash)
         hasher.combine(voteAuthSig)
     }
 }
@@ -1234,17 +1200,11 @@ public struct FfiConverterTypeCastVoteSignature: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CastVoteSignature {
         return
             try CastVoteSignature(
-                rVpkX: FfiConverterData.read(from: &buf),
-                rVpkY: FfiConverterData.read(from: &buf),
-                sighash: FfiConverterData.read(from: &buf),
                 voteAuthSig: FfiConverterData.read(from: &buf)
         )
     }
 
     public static func write(_ value: CastVoteSignature, into buf: inout [UInt8]) {
-        FfiConverterData.write(value.rVpkX, into: &buf)
-        FfiConverterData.write(value.rVpkY, into: &buf)
-        FfiConverterData.write(value.sighash, into: &buf)
         FfiConverterData.write(value.voteAuthSig, into: &buf)
     }
 }

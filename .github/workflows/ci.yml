@@ -22,7 +22,9 @@ jobs:
       - name: Cache Go build
         uses: actions/cache@v4
         with:
-          path: ~/.cache/go-build
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
           key: ${{ runner.os }}-lint-go-${{ hashFiles('sdk/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-lint-go-
@@ -102,9 +104,42 @@ jobs:
       - name: Run Go Halo2 verification tests
         run: mise run test:halo2
 
+  test-vc-van-deterministic:
+    name: VC/VAN Deterministic Stress
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/sdk/.cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/sdk/.cache/go-mod
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install mise
+        uses: jdx/mise-action@v2
+      - name: Cache Rust build (circuits)
+        uses: actions/cache@v4
+        with:
+          path: sdk/circuits/target
+          key: ${{ runner.os }}-circuits-${{ hashFiles('sdk/circuits/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-circuits-
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.GOCACHE }}
+            ${{ env.GOMODCACHE }}
+          key: ${{ runner.os }}-vc-van-deterministic-go-${{ hashFiles('sdk/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-vc-van-deterministic-go-
+      - name: Build circuits
+        run: mise run build:circuits
+      - name: Run deterministic VC/VAN tree stress tests
+        run: mise run test:tree-stress
+
   test-api:
     name: API Integration Tests
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -126,8 +161,10 @@ jobs:
       - name: Cache Go build
         uses: actions/cache@v4
         with:
-          path: sdk/.cache/go-build
-          key: ${{ runner.os }}-api-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          path: |
+            sdk/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-api-go-${{ hashFiles('sdk/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-api-go-
       - name: Pre-build vote-commitment-tree-client
@@ -157,7 +194,7 @@ jobs:
 
   test-multi-validator:
     name: Multi-Validator E2E
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -179,8 +216,10 @@ jobs:
       - name: Cache Go build
         uses: actions/cache@v4
         with:
-          path: sdk/.cache/go-build
-          key: ${{ runner.os }}-multi-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          path: |
+            sdk/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-multi-go-${{ hashFiles('sdk/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-multi-go-
       - name: Pre-build vote-commitment-tree-client
@@ -239,7 +278,7 @@ jobs:
 
   test-join:
     name: Validator Join Flow
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -258,8 +297,10 @@ jobs:
       - name: Cache Go build
         uses: actions/cache@v4
         with:
-          path: sdk/.cache/go-build
-          key: ${{ runner.os }}-join-go-${{ hashFiles('sdk/go.sum', 'sdk/circuits/Cargo.lock') }}
+          path: |
+            sdk/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-join-go-${{ hashFiles('sdk/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-join-go-
       - name: Build and install zallyd + create-val-tx

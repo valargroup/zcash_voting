@@ -82,21 +82,21 @@ The server should return correct data. Incorrect responses would cause proof gen
 └────────────────────────┴───────────────────────────┘
 ```
 
-### Tier Structure (11 + 8 + 7 Layers)
+### Tier Structure (11 + 7 + 8 Layers)
 
 The nullifier tree is a sorted Indexed Merkle Tree (IMT) with ~50 million leaves at depth 26 (extended to depth 29 for the ZK circuit). To retrieve a full 26-sibling authentication path privately, the tree is split into three tiers. Each tier is a self-contained subtree that the client can binary-search locally after retrieval.
 
 | Tier | Depth Range | Rows          | Row Contents                                                        | Row Size | Total Size | Retrieval         |
 | ---- | ----------- | ------------- | ------------------------------------------------------------------- | -------- | ---------- | ----------------- |
 | 0    | 0–10        | 1 (flat blob) | 2,047 internal node hashes + 2,048 subtree records (hash + min_key) | 192 KB   | 192 KB     | **Plaintext** GET |
-| 1    | 11–18       | 2,048         | 254 internal nodes + 256 leaf records (hash + min_key) per row      | ~24 KB   | ~48 MB     | **YPIR** POST     |
-| 2    | 19–25       | 524,288       | 126 internal nodes + 128 leaf records (key + value) per row         | ~12 KB   | ~6 GB      | **YPIR** POST     |
+| 1    | 11–17       | 2,048         | 126 internal nodes + 128 leaf records (hash + min_key) per row      | ~12 KB   | ~24 MB     | **YPIR** POST     |
+| 2    | 18–25       | 262,144       | 254 internal nodes + 256 leaf records (key + value) per row         | ~24 KB   | ~6 GB      | **YPIR** POST     |
 
 **Tier 0** is public and identical for all clients — it contains the top 11 layers of the tree. The client binary-searches the 2,048 subtree records to find which depth-11 subtree contains their nullifier, and extracts 11 sibling hashes directly from the internal nodes.
 
-**Tier 1** rows each contain a complete 8-layer subtree rooted at depth 11. After decrypting the YPIR response, the client binary-searches the 256 leaf records within the row to identify the depth-19 sub-subtree, extracting 8 more sibling hashes from the internal nodes.
+**Tier 1** rows each contain a complete 7-layer subtree rooted at depth 11. After decrypting the YPIR response, the client binary-searches the 128 leaf records within the row to identify the depth-18 sub-subtree, extracting 7 more sibling hashes from the internal nodes.
 
-**Tier 2** rows each contain a complete 7-layer subtree rooted at depth 19. The client binary-searches 128 leaf records to locate the target key, extracts the final 7 sibling hashes, and computes exactly one hash (the sibling leaf) — the only client-side hash in the entire retrieval.
+**Tier 2** rows each contain a complete 8-layer subtree rooted at depth 18. The client binary-searches 256 leaf records to locate the target key, extracts the final 8 sibling hashes, and computes exactly one hash (the sibling leaf) — the only client-side hash in the entire retrieval.
 
 **Sentinel partitioning:** Seventeen sentinel nullifiers are inserted at positions k × 2²⁵⁰ (k = 0..16) to ensure all gap widths satisfy the ZK circuit's range constraints.
 

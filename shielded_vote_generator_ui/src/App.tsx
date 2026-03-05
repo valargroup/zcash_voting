@@ -1707,8 +1707,8 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
     }
   };
 
-  const fetchValidators = async () => {
-    setLoading(true);
+  const fetchValidators = async (silent = false) => {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const [valResp, ceremonyResp, pallasResp, vcResp, pendingResp] = await Promise.all([
@@ -1724,9 +1724,9 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
       setVotingConfig(vcResp);
       setPendingRegistrations(pendingResp);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (!silent) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -1866,6 +1866,8 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
 
   useEffect(() => {
     fetchValidators();
+    const id = setInterval(() => fetchValidators(true), 5000);
+    return () => clearInterval(id);
   }, []);
 
   // Build a set of per-round ceremony participants for cross-referencing.
@@ -1919,7 +1921,7 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
               Fund validator
             </button>
             <button
-              onClick={fetchValidators}
+              onClick={() => fetchValidators()}
               className="p-2 hover:bg-surface-3 rounded-lg text-text-muted hover:text-text-secondary cursor-pointer"
               title="Refresh"
             >
@@ -2354,7 +2356,7 @@ function FundValidatorModal({
   const [devKeyVisible, setDevKeyVisible] = useState(false);
   const [recipientAddress, setRecipientAddress] = useState("");
   const [addressError, setAddressError] = useState("");
-  const [amount, setAmount] = useState("1000000");
+  const [amount, setAmount] = useState("10000000");
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ success: boolean; txHash?: string; error?: string } | null>(null);
   const walletConnected = !!wallet.address;
@@ -2486,7 +2488,7 @@ function FundValidatorModal({
                     type="text"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value.trim())}
-                    placeholder="1000000"
+                    placeholder="10000000"
                     spellCheck={false}
                     autoComplete="off"
                     className="w-full px-3 py-2 bg-surface-2 border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/50 font-mono"
