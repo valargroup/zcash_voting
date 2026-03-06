@@ -536,10 +536,12 @@ public struct CastVoteSignature: Equatable, Sendable {
 public struct TxConfirmation: Equatable, Sendable {
     public let height: UInt64
     public let code: UInt32
+    public let log: String
 
-    public init(height: UInt64, code: UInt32) {
+    public init(height: UInt64, code: UInt32, log: String = "") {
         self.height = height
         self.code = code
+        self.log = log
     }
 }
 

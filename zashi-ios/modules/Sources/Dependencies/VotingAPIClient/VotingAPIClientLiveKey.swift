@@ -102,6 +102,16 @@ private func postJSON(_ path: String, body: [String: Any], baseURL: String? = ni
         throw ZallyAPIError.invalidResponse("not an HTTP response")
     }
     guard http.statusCode == 200 else {
+        // 422 = chain processed the request but rejected the TX (non-zero CheckTx code).
+        // Parse the structured body for code/log instead of returning a raw HTTP error.
+        if http.statusCode == 422,
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let code = (json["code"] as? NSNumber)?.uint32Value ?? 0
+            let log = json["log"] as? String ?? ""
+            if code != 0 {
+                throw ZallyAPIError.txFailed(code: code, log: log)
+            }
+        }
         let body = String(data: data, encoding: .utf8) ?? ""
         throw ZallyAPIError.httpError(statusCode: http.statusCode, message: body)
     }
@@ -144,6 +154,43 @@ private func parseTxResult(_ json: [String: Any]) throws -> TxResult {
         throw ZallyAPIError.txFailed(code: code, log: log)
     }
     return TxResult(txHash: txHash, code: code, log: log)
+}
+
+// MARK: - Broadcast Retry
+
+/// Whether a broadcast error is transient and worth retrying.
+/// Network failures and 502/503 (CometBFT gateway errors) are retryable.
+/// Deterministic failures like 422 (CheckTx rejection) and 400 (bad request) are not.
+private func isBroadcastRetryable(_ error: Error) -> Bool {
+    if error is URLError { return true }
+    if case ZallyAPIError.httpError(let status, _) = error {
+        return status == 502 || status == 503
+    }
+    return false
+}
+
+/// Retry an async operation with exponential backoff.
+/// Only retries when `isRetryable` returns true for the thrown error.
+private func retryWithBackoff<T>(
+    maxAttempts: Int = 3,
+    initialDelay: TimeInterval = 2,
+    factor: Double = 2,
+    isRetryable: (Error) -> Bool,
+    operation: () async throws -> T
+) async throws -> T {
+    var delay = initialDelay
+    for attempt in 1...maxAttempts {
+        do {
+            return try await operation()
+        } catch {
+            let isLast = attempt == maxAttempts
+            if isLast || !isRetryable(error) { throw error }
+            print("[zally-api] broadcast attempt \(attempt)/\(maxAttempts) failed (\(error.localizedDescription)), retrying in \(delay)s")
+            try await Task.sleep(for: .seconds(delay))
+            delay *= factor
+        }
+    }
+    fatalError("unreachable")
 }
 
 // MARK: - Protobuf JSON Parsing Helpers
@@ -364,8 +411,10 @@ extension VotingAPIClient: DependencyKey {
                     "proof": registration.proof.base64EncodedString(),
                     "vote_round_id": registration.voteRoundId.base64EncodedString()
                 ]
-                let json = try await postJSON("/zally/v1/delegate-vote", body: body)
-                return try parseTxResult(json)
+                return try await retryWithBackoff(isRetryable: isBroadcastRetryable) {
+                    let json = try await postJSON("/zally/v1/delegate-vote", body: body)
+                    return try parseTxResult(json)
+                }
             },
             submitVoteCommitment: { bundle, signature in
                 // voteRoundId is a hex string; chain expects base64-encoded bytes
@@ -381,8 +430,10 @@ extension VotingAPIClient: DependencyKey {
                     "r_vpk": bundle.rVpkBytes.base64EncodedString(),
                     "vote_auth_sig": signature.voteAuthSig.base64EncodedString()
                 ]
-                let json = try await postJSON("/zally/v1/cast-vote", body: body)
-                return try parseTxResult(json)
+                return try await retryWithBackoff(isRetryable: isBroadcastRetryable) {
+                    let json = try await postJSON("/zally/v1/cast-vote", body: body)
+                    return try parseTxResult(json)
+                }
             },
             delegateShares: { payloads, roundIdHex in
                 // Distribute shares across healthy vote servers with per-share failover.
@@ -474,10 +525,20 @@ extension VotingAPIClient: DependencyKey {
             },
             checkTxConfirmed: { txHash in
                 do {
-                    let json = try await getJSON("/zally/v1/tx/\(txHash)")
+                    let base = await ZallyAPIConfigStore.shared.baseURL
+                    guard let url = URL(string: "\(base)/zally/v1/tx/\(txHash)") else { return nil }
+                    let (data, response) = try await httpSession.data(from: url)
+                    guard let http = response as? HTTPURLResponse else { return nil }
+
+                    // 200 = TX confirmed with code 0; 422 = TX confirmed with non-zero code.
+                    // Both mean the TX is in a block — parse the body for height/code/log.
+                    guard http.statusCode == 200 || http.statusCode == 422 else { return nil }
+
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
                     let height = parseUInt64(json["height"])
                     let code = parseUInt32(json["code"])
-                    return TxConfirmation(height: height, code: code)
+                    let log = json["log"] as? String ?? ""
+                    return TxConfirmation(height: height, code: code, log: log)
                 } catch {
                     // TX not yet confirmed (404 or network error)
                     return nil
