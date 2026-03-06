@@ -1,0 +1,34 @@
+[workspace]
+members = [
+    "librustvoting",
+    "zcash-voting-ffi",
+    "vote-commitment-tree",
+    "vote-commitment-tree-client",
+    "imt-tree",
+    "pir-export",
+    "pir-client",
+]
+resolver = "2"
+
+# All crate patches live here (workspace-level).
+# Individual member Cargo.tomls use crates-io version strings;
+# Cargo resolves them from these overrides.
+#
+# orchard: use the copy bundled in voting-circuits repo (upstream 0.11 +
+#   pub visibility for constants/spec + shared_primitives gadget).
+#   This ensures type compatibility with voting-circuits.
+#
+# librustzcash crates: use the maint/zcash_client_sqlite-0.19.x branch
+#   (orchard 0.11 compatible) with our governance visibility changes.
+[patch.crates-io]
+orchard = { git = "https://github.com/z-cale/voting-circuits.git" }
+
+pczt              = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_keys        = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_protocol    = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_address     = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_encoding    = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_transparent = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_client_sqlite  = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_client_backend = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_primitives  = { git = "https://github.com/z-cale/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }

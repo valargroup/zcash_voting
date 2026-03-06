@@ -1,0 +1,24 @@
+[package]
+name = "imt-tree"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+ff = "0.13"
+hex = "0.4"
+pasta_curves = "0.5"
+halo2_gadgets = { version = "0.3", default-features = false }
+rayon = "1"
+
+[dev-dependencies]
+orchard = "0.11"
+voting-circuits = { git = "https://github.com/z-cale/voting-circuits.git" }
+halo2_proofs = { version = "0.3" }
+rand = "0.8"
+incrementalmerkletree = "0.8.1"
+criterion = "0.5"
+
+[[bench]]
+name = "tree_build"
+harness = false
