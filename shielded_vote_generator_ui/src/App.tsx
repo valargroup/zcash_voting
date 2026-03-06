@@ -1665,7 +1665,6 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
   const [validators, setValidators] = useState<chainApi.Validator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [sortBy, setSortBy] = useState<"power" | "moniker">("power");
   const [ceremony, setCeremony] = useState<chainApi.CeremonyState | null>(null);
   const [pallasKeys, setPallasKeys] = useState<Set<string>>(new Set());
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1883,12 +1882,7 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
     ceremony?.ceremony?.validators?.map((v) => v.validator_address) ?? []
   );
 
-  // Sort validators.
   const sorted = [...validators].sort((a, b) => {
-    if (sortBy === "power") {
-      return Number(BigInt(b.tokens ?? "0") - BigInt(a.tokens ?? "0"));
-    }
-    // moniker
     const aName = (a.description?.moniker ?? "").toLowerCase();
     const bName = (b.description?.moniker ?? "").toLowerCase();
     return aName.localeCompare(bName);
@@ -1898,9 +1892,6 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
   const totalPower = validators
     .filter((v) => v.status === "BOND_STATUS_BONDED")
     .reduce((sum, v) => sum + BigInt(v.tokens ?? "0"), BigInt(0));
-
-  const bondedCount = validators.filter((v) => v.status === "BOND_STATUS_BONDED").length;
-  const jailedCount = validators.filter((v) => v.jailed).length;
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1937,42 +1928,6 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
             </button>
           </div>
         </div>
-
-        {/* Summary stats */}
-        {!loading && !error && validators.length > 0 && (
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            <div className="bg-surface-1 border border-border-subtle rounded-xl p-4 text-center">
-              <p className="text-lg font-bold text-text-primary">{bondedCount}</p>
-              <p className="text-[10px] text-text-muted uppercase tracking-wider">Active</p>
-            </div>
-            <div className="bg-surface-1 border border-border-subtle rounded-xl p-4 text-center">
-              <p className="text-lg font-bold text-text-primary">{validators.length}</p>
-              <p className="text-[10px] text-text-muted uppercase tracking-wider">Total</p>
-            </div>
-            <div className="bg-surface-1 border border-border-subtle rounded-xl p-4 text-center">
-              <p className="text-lg font-bold text-text-primary">{jailedCount}</p>
-              <p className="text-[10px] text-text-muted uppercase tracking-wider">Jailed</p>
-            </div>
-          </div>
-        )}
-
-        {/* Election authority notice */}
-        {pallasKeys.size > 0 && (
-          <div className="bg-accent/5 border border-accent/20 rounded-xl p-4 mb-6">
-            <div className="flex items-center gap-2 mb-1">
-              <ShieldCheck size={14} className="text-accent" />
-              <span className="text-xs font-semibold text-text-primary">
-                Election Authority
-              </span>
-            </div>
-            <p className="text-[11px] text-text-secondary">
-              {pallasKeys.size} validator{pallasKeys.size !== 1 ? "s have" : " has"} registered
-              a Pallas key (<ShieldCheck size={10} className="text-accent inline" />) and {pallasKeys.size !== 1 ? "are" : "is"} eligible
-              to participate in EA key ceremonies.
-              {ceremonyValidators.size > 0 && <>{" "}Validators with <span className="text-[9px] px-1 py-0.5 rounded-full bg-accent/15 text-accent font-semibold">EA</span> are participating in the current round{"'"}s ceremony.</>}
-            </p>
-          </div>
-        )}
 
         {/* Pending validator registrations */}
         {pendingRegistrations.length > 0 && wallet.address && (
@@ -2076,17 +2031,20 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
           </div>
         )}
 
-        {/* Approved servers with pulse status */}
+        {/* Approved submission servers with pulse status */}
         {approvedServers.length > 0 && (
           <div className="mb-6">
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-2">
               <span className="text-[10px] text-text-muted uppercase tracking-wider">
-                Approved servers
+                Approved Submission Servers
               </span>
               <span className="text-[9px] bg-accent/20 text-accent px-1.5 py-0.5 rounded-full">
                 {approvedServers.length}
               </span>
             </div>
+            <p className="text-[10px] text-text-secondary mb-3">
+              Servers that ZODL and other client apps connect to for share submission and chain interaction. Admins can remove unreliable validators from this list without unbonding them.
+            </p>
             <div className="space-y-1.5">
               {approvedServers.map((srv) => {
                 const pulseTime = serverPulses[srv.url];
@@ -2155,27 +2113,31 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
           </div>
         )}
 
-        {/* Sort controls */}
-        {!loading && validators.length > 0 && (
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] text-text-muted uppercase tracking-wider">Sort by</span>
-            {(["power", "moniker"] as const).map((key) => (
-              <button
-                key={key}
-                onClick={() => setSortBy(key)}
-                className={`px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer ${
-                  sortBy === key
-                    ? "bg-accent/15 text-accent"
-                    : "text-text-muted hover:text-text-secondary hover:bg-surface-2"
-                }`}
-              >
-                {key === "power" ? "Voting power" : "Name"}
-              </button>
-            ))}
+        {/* Election Authority */}
+        {!loading && !error && validators.length > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] text-text-muted uppercase tracking-wider">
+                Election Authority
+              </span>
+              <span className="text-[9px] bg-accent/20 text-accent px-1.5 py-0.5 rounded-full">
+                {validators.length}
+              </span>
+            </div>
+            <p className="text-[10px] text-text-secondary mb-1">
+              All bonded validators on-chain. A validator can be bonded and producing blocks but not listed as an approved submission server if it has been taken out of client rotation by an admin.
+            </p>
+            {pallasKeys.size > 0 && (
+              <p className="text-[10px] text-text-secondary">
+                {pallasKeys.size} validator{pallasKeys.size !== 1 ? "s have" : " has"} registered
+                a Pallas key (<ShieldCheck size={10} className="text-accent inline" />) and {pallasKeys.size !== 1 ? "are" : "is"} eligible
+                to participate in EA key ceremonies.
+                {ceremonyValidators.size > 0 && <>{" "}Validators with <span className="text-[9px] px-1 py-0.5 rounded-full bg-accent/15 text-accent font-semibold">EA</span> are participating in the current round{"'"}s ceremony.</>}
+              </p>
+            )}
           </div>
         )}
 
-        {/* Validator list */}
         <div className="space-y-2">
           {sorted.map((val, i) => {
             const moniker = val.description?.moniker || "Unknown";
@@ -2199,12 +2161,6 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      {/* Rank for bonded validators */}
-                      {val.status === "BOND_STATUS_BONDED" && sortBy === "power" && (
-                        <span className="text-[10px] font-bold text-text-muted bg-surface-3 rounded px-1.5 py-0.5 shrink-0">
-                          #{i + 1}
-                        </span>
-                      )}
                       <span className="text-xs font-semibold text-text-primary truncate">
                         {moniker}
                       </span>
