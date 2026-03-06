@@ -427,6 +427,25 @@ export async function getApprovedServers(): Promise<ServiceEntry[]> {
   }
 }
 
+export interface RemoveApprovedServerParams {
+  payload: { action: "remove-approved"; operator_address: string };
+  signature: string;
+  pubKey: string;
+  signerAddress: string;
+}
+
+/**
+ * Remove a server from approved-servers (and vote_servers + server-pulses).
+ * Requires a wallet signature for vote-manager authorization.
+ */
+export async function removeApprovedServer(params: RemoveApprovedServerParams): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>("/api/remove-approved-server", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
 /** Pulse timestamps: { [url]: unix_timestamp }. */
 export type ServerPulses = Record<string, number>;
 

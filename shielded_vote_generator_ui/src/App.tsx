@@ -1681,6 +1681,8 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
   // Approved servers + pulse status.
   const [approvedServers, setApprovedServers] = useState<chainApi.ServiceEntry[]>([]);
   const [serverPulses, setServerPulses] = useState<chainApi.ServerPulses>({});
+  const [removingServer, setRemovingServer] = useState<string | null>(null);
+  const [removeResult, setRemoveResult] = useState<{ addr: string; ok: boolean; msg: string } | null>(null);
 
   // Edge Config network management state.
   const [votingConfig, setVotingConfig] = useState<chainApi.VotingConfig | null>(null);
@@ -1871,6 +1873,33 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
     }
   };
 
+  const handleRemoveApprovedServer = async (srv: chainApi.ServiceEntry) => {
+    if (!wallet.address || !srv.operator_address) return;
+    setRemovingServer(srv.operator_address);
+    setRemoveResult(null);
+    try {
+      const removePayload = { action: "remove-approved" as const, operator_address: srv.operator_address };
+      const payloadStr = JSON.stringify(removePayload);
+      const sig = await wallet.signPayload(payloadStr);
+      await chainApi.removeApprovedServer({
+        payload: removePayload,
+        signature: sig.signature,
+        pubKey: sig.pubKey,
+        signerAddress: wallet.address,
+      });
+      setApprovedServers((prev) => prev.filter((s) => s.operator_address !== srv.operator_address));
+      setRemoveResult({ addr: srv.operator_address, ok: true, msg: "Removed" });
+    } catch (err) {
+      setRemoveResult({
+        addr: srv.operator_address,
+        ok: false,
+        msg: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setRemovingServer(null);
+    }
+  };
+
   useEffect(() => {
     fetchValidators();
     const id = setInterval(() => fetchValidators(true), 5000);
@@ -1911,22 +1940,13 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/90 hover:bg-accent text-surface-0 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
-            >
-              <Plus size={12} />
-              Fund validator
-            </button>
-            <button
-              onClick={() => fetchValidators()}
-              className="p-2 hover:bg-surface-3 rounded-lg text-text-muted hover:text-text-secondary cursor-pointer"
-              title="Refresh"
-            >
-              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-            </button>
-          </div>
+          <button
+            onClick={() => fetchValidators()}
+            className="p-2 hover:bg-surface-3 rounded-lg text-text-muted hover:text-text-secondary cursor-pointer"
+            title="Refresh"
+          >
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+          </button>
         </div>
 
         {/* Pending validator registrations */}
@@ -2055,36 +2075,49 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
                   : "never";
 
                 return (
-                  <div
-                    key={srv.url}
-                    className="flex items-center justify-between bg-surface-1 border border-border-subtle rounded-lg px-3 py-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-success" : "bg-text-muted"}`} />
-                        <span className="text-[11px] font-semibold text-text-primary truncate">
-                          {srv.label}
-                        </span>
-                        <span className="text-[9px] text-text-muted font-mono truncate">
-                          {srv.operator_address ? `${srv.operator_address.slice(0, 12)}…` : ""}
-                        </span>
+                  <div key={srv.url}>
+                    <div className="flex items-center justify-between bg-surface-1 border border-border-subtle rounded-lg px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-1.5 h-1.5 rounded-full ${isActive ? "bg-success" : "bg-text-muted"}`} />
+                          <span className="text-[11px] font-semibold text-text-primary truncate">
+                            {srv.label}
+                          </span>
+                          <span className="text-[9px] text-text-muted font-mono truncate">
+                            {srv.operator_address ? `${srv.operator_address.slice(0, 12)}…` : ""}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-text-secondary truncate ml-3.5 mt-0.5">
+                          {srv.url}
+                        </p>
                       </div>
-                      <p className="text-[10px] text-text-secondary truncate ml-3.5 mt-0.5">
-                        {srv.url}
-                      </p>
+                      <div className="shrink-0 flex items-center gap-2 ml-3">
+                        <div className="text-right">
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${
+                            isActive
+                              ? "bg-success/15 text-success"
+                              : "bg-text-muted/15 text-text-muted"
+                          }`}>
+                            {isActive ? "Active" : "Inactive"}
+                          </span>
+                          <p className="text-[9px] text-text-muted mt-0.5">
+                            {pulseTime ? `Pulse: ${lastSeen}` : "No pulse"}
+                          </p>
+                        </div>
+                        {wallet.address && srv.operator_address && (
+                          <button
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-danger/15 text-danger hover:bg-danger/25 transition-colors cursor-pointer disabled:opacity-50"
+                            disabled={removingServer === srv.operator_address}
+                            onClick={() => handleRemoveApprovedServer(srv)}
+                          >
+                            {removingServer === srv.operator_address ? "…" : "Remove"}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="shrink-0 text-right ml-3">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${
-                        isActive
-                          ? "bg-success/15 text-success"
-                          : "bg-text-muted/15 text-text-muted"
-                      }`}>
-                        {isActive ? "Active" : "Inactive"}
-                      </span>
-                      <p className="text-[9px] text-text-muted mt-0.5">
-                        {pulseTime ? `Pulse: ${lastSeen}` : "No pulse"}
-                      </p>
-                    </div>
+                    {removeResult && removeResult.addr === srv.operator_address && !removeResult.ok && (
+                      <p className="text-[9px] text-danger mt-1 px-3">{removeResult.msg}</p>
+                    )}
                   </div>
                 );
               })}
@@ -2116,13 +2149,22 @@ function ValidatorsView({ wallet }: { wallet: UseWallet }) {
         {/* Election Authority */}
         {!loading && !error && validators.length > 0 && (
           <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-[10px] text-text-muted uppercase tracking-wider">
-                Election Authority
-              </span>
-              <span className="text-[9px] bg-accent/20 text-accent px-1.5 py-0.5 rounded-full">
-                {validators.length}
-              </span>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-text-muted uppercase tracking-wider">
+                  Election Authority
+                </span>
+                <span className="text-[9px] bg-accent/20 text-accent px-1.5 py-0.5 rounded-full">
+                  {validators.length}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center gap-1 px-2 py-0.5 bg-accent/90 hover:bg-accent text-surface-0 rounded text-[10px] font-semibold transition-colors cursor-pointer"
+              >
+                <Plus size={10} />
+                Fund
+              </button>
             </div>
             <p className="text-[10px] text-text-secondary mb-1">
               All bonded validators on-chain. A validator can be bonded and producing blocks but not listed as an approved submission server if it has been taken out of client rotation by an admin.
