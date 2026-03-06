@@ -489,6 +489,7 @@ public struct Voting {
             // MARK: - Navigation
 
             case .dismissFlow:
+                state.screenStack = [.loading]
                 return .merge(
                     .cancel(id: cancelStateStreamId),
                     .cancel(id: cancelStatusPollingId),

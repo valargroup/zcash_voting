@@ -436,14 +436,16 @@ extension VotingAPIClient: DependencyKey {
                 }
             },
             delegateShares: { payloads, roundIdHex in
-                // Distribute shares across healthy vote servers with per-share failover.
+                // Anti-censorship: send each share to a majority (floor(n/2)+1) of
+                // healthy helpers so no minority coalition can suppress a vote.
+                // The chain deduplicates via share nullifiers — only the first
+                // MsgRevealShare per nullifier is accepted.
                 let tracker = ServerHealthTracker.shared
                 let healthy = await tracker.healthyServers().shuffled()
+                let quorum = max(1, healthy.count / 2 + 1)
 
                 var lastError: Error?
                 for (i, payload) in payloads.enumerated() {
-                    let serverURL = healthy[i % healthy.count]
-
                     let body: [String: Any] = [
                         "shares_hash": payload.sharesHash.base64EncodedString(),
                         "proposal_id": payload.proposalId,
@@ -460,33 +462,60 @@ extension VotingAPIClient: DependencyKey {
                         "primary_blind": payload.primaryBlind.base64EncodedString()
                     ]
 
-                    do {
-                        _ = try await postServerJSON(serverURL, "/api/v1/shares", body: body)
-                        await tracker.recordSuccess(for: serverURL)
-                    } catch {
-                        await tracker.recordFailure(for: serverURL)
-                        print("[VotingAPI] Share \(i) failed on \(serverURL): \(error.localizedDescription)")
+                    // Pick `quorum` distinct servers, rotating the start offset per
+                    // share so load is distributed evenly across helpers.
+                    let targets = (0..<quorum).map { j in healthy[(i + j) % healthy.count] }
 
-                        // Retry once on a different server
-                        let fallbacks = await tracker.healthyServers().shuffled().filter { $0 != serverURL }
-                        if let fallback = fallbacks.first {
+                    // Send to all targets concurrently; the share is "delegated" if
+                    // at least one server accepted it.
+                    var accepted = false
+                    var shareError: Error?
+                    await withTaskGroup(of: (String, Bool).self) { group in
+                        for server in targets {
+                            group.addTask {
+                                do {
+                                    _ = try await postServerJSON(server, "/api/v1/shares", body: body)
+                                    await tracker.recordSuccess(for: server)
+                                    return (server, true)
+                                } catch {
+                                    await tracker.recordFailure(for: server)
+                                    return (server, false)
+                                }
+                            }
+                        }
+                        for await (server, ok) in group {
+                            if ok {
+                                accepted = true
+                            } else {
+                                print("[VotingAPI] Share \(i) failed on \(server)")
+                            }
+                        }
+                    }
+
+                    if !accepted {
+                        // All quorum servers failed — try remaining healthy servers as fallback.
+                        let targetSet = Set(targets)
+                        let fallbacks = await tracker.healthyServers().filter { !targetSet.contains($0) }.shuffled()
+                        for fallback in fallbacks {
                             do {
                                 _ = try await postServerJSON(fallback, "/api/v1/shares", body: body)
                                 await tracker.recordSuccess(for: fallback)
+                                accepted = true
                                 print("[VotingAPI] Share \(i) succeeded on fallback \(fallback)")
-                                continue
+                                break
                             } catch {
                                 await tracker.recordFailure(for: fallback)
-                                lastError = error
-                                print("[VotingAPI] Share \(i) fallback also failed on \(fallback): \(error.localizedDescription)")
+                                shareError = error
                             }
-                        } else {
-                            lastError = error
                         }
+                    }
+
+                    if !accepted {
+                        print("[VotingAPI] Share \(i) failed on all servers")
+                        lastError = shareError ?? ZallyAPIError.invalidResponse("all servers rejected share \(i)")
                     }
                 }
 
-                // If any shares failed after retry, surface the error so the outer retry loop can handle it
                 if let lastError {
                     throw lastError
                 }
