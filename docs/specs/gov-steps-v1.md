@@ -2,7 +2,7 @@
 
 #### Vote Authority Note
 
-This is a spendable ZCash-like note. It represents (Owner, amount, authorized_proposals).
+A UTXO-style ZCash-like note. It represents (Owner, amount, authorized_proposals).
 
 A vote consumes this note (via nullifier), and produces a new Vote Authority Note with the same owner, amount, but the authorized proposals decremented. It also produces a vote commitment.
 
