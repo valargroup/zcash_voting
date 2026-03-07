@@ -3242,6 +3242,7 @@ dependencies = [
 name = "voting-circuits"
 version = "0.1.0"
 dependencies = [
+ "blake2b_simd",
  "ff",
  "group",
  "halo2_gadgets",

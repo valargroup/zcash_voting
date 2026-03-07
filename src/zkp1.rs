@@ -479,10 +479,11 @@ mod tests {
     use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength};
     use incrementalmerkletree::{Hashable, Level};
     use orchard::{
-        delegation::imt::IMT_DEPTH as TEST_IMT_DEPTH, keys::Scope,
-        note::commitment::ExtractedNoteCommitment, note::Rho, tree::MerkleHashOrchard,
-        value::NoteValue, NOTE_COMMITMENT_TREE_DEPTH as TEST_TREE_DEPTH,
+        keys::Scope, note::commitment::ExtractedNoteCommitment, note::Rho,
+        tree::MerkleHashOrchard, value::NoteValue,
+        NOTE_COMMITMENT_TREE_DEPTH as TEST_TREE_DEPTH,
     };
+    use voting_circuits::delegation::imt::IMT_DEPTH as TEST_IMT_DEPTH;
 
     struct TestReporter {
         count: Arc<AtomicU32>,
