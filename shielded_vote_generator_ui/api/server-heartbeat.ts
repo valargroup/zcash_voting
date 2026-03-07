@@ -6,7 +6,7 @@
 //
 // If the server's operator_address is in approved-servers, the URL is
 // upserted into vote_servers and the pulse timestamp is recorded. Stale
-// entries (no pulse for >2 minutes) are evicted from vote_servers on each
+// entries (no pulse for >6 hours) are evicted from vote_servers on each
 // call (piggybacked eviction).
 //
 // If the server is NOT in approved-servers, it is added to the
