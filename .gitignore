@@ -64,3 +64,4 @@ e2e-tests/fixtures/**/cast_vote_inputs.json
 
 # macOS
 .DS_Store
+.vercel
