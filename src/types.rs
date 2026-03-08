@@ -151,7 +151,7 @@ pub struct EncryptedShare {
     pub share_index: u32,
     pub plaintext_value: u64,
     /// El Gamal randomness `r` (32 bytes, LE pallas::Scalar repr).
-    /// Deterministically derived from (sk, round_id, proposal_id, share_index)
+    /// Deterministically derived from (sk, round_id, proposal_id, van_commitment, share_index)
     /// so the client can re-derive it after a crash. Must NOT be sent over the network.
     pub randomness: Vec<u8>,
 }
@@ -176,7 +176,7 @@ pub struct VoteCommitmentBundle {
     /// Intermediate value: vote_commitment = H(DOMAIN_VC, voting_round_id, shares_hash, proposal_id, vote_decision).
     pub shares_hash: Vec<u8>,
     /// Per-share blind factors (16 x 32 bytes, LE pallas::Base repr).
-    /// Deterministically derived from (sk, round_id, proposal_id, share_index).
+    /// Deterministically derived from (sk, round_id, proposal_id, van_commitment, share_index).
     pub share_blinds: Vec<Vec<u8>>,
     /// Pre-computed per-share Poseidon commitments (N x 32 bytes, LE pallas::Base repr).
     /// share_comm_i = Poseidon(blind_i, c1_i_x, c2_i_x).

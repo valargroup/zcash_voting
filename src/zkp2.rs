@@ -17,8 +17,10 @@ use crate::types::{
 /// ensuring the ciphertexts in the proof match those returned in `enc_shares`.
 ///
 /// Share encryption randomness and blind factors are derived deterministically
-/// from the spending key and round context, so the same call with the same
-/// inputs always produces the same encrypted shares and commitments.
+/// from the spending key, round context, and VAN commitment, so the same call
+/// with the same inputs always produces the same encrypted shares and commitments.
+/// The VAN commitment binding prevents El Gamal nonce reuse when a user has
+/// multiple VANs from separate delegation bundles.
 ///
 /// # Arguments
 ///
