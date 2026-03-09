@@ -4,9 +4,6 @@ members = [
     "zcash-voting-ffi",
     "vote-commitment-tree",
     "vote-commitment-tree-client",
-    "imt-tree",
-    "pir-export",
-    "pir-client",
 ]
 resolver = "2"
 
