@@ -5,7 +5,6 @@
 //! can use.
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::time::Instant;
 
@@ -15,6 +14,14 @@ use spiral_rs::params::Params;
 use ypir::params::{params_for_scenario_simplepir, DbRowsCols, PtModulusBits};
 use ypir::serialize::{FilePtIter, OfflinePrecomputedValues};
 use ypir::server::YServer;
+
+// Re-export shared types so existing consumers can still import from pir_server.
+pub use pir_types::{HealthInfo, RootInfo, YpirScenario};
+
+// Re-export constants from pir-export for convenience.
+pub use pir_export::{
+    TIER1_ITEM_BITS, TIER1_ROWS, TIER1_ROW_BYTES, TIER2_ITEM_BITS, TIER2_ROWS, TIER2_ROW_BYTES,
+};
 
 /// 64-byte aligned u64 buffer for AVX-512 operations.
 struct Aligned64 {
@@ -48,21 +55,6 @@ impl Drop for Aligned64 {
     fn drop(&mut self) {
         unsafe { dealloc(self.ptr as *mut u8, self.layout) }
     }
-}
-
-// Re-export constants from pir-export for convenience.
-pub use pir_export::{
-    TIER1_ITEM_BITS, TIER1_ROWS, TIER1_ROW_BYTES, TIER2_ITEM_BITS, TIER2_ROWS, TIER2_ROW_BYTES,
-};
-
-// ── YPIR scenario params ─────────────────────────────────────────────────────
-
-/// Parameters needed for a YPIR scenario. Serialized over HTTP so the client
-/// can reconstruct matching params locally.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct YpirScenario {
-    pub num_items: usize,
-    pub item_size_bits: usize,
 }
 
 /// Tier 1 YPIR scenario.
@@ -292,28 +284,6 @@ impl Drop for TierServer<'_> {
             std::mem::ManuallyDrop::drop(&mut self.offline);
         }
     }
-}
-
-// ── Root info ────────────────────────────────────────────────────────────────
-
-/// Root and metadata returned by GET /root.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RootInfo {
-    pub root29: String,
-    pub root26: String,
-    pub num_ranges: usize,
-    pub pir_depth: usize,
-    pub height: Option<u64>,
-}
-
-/// Health check response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthInfo {
-    pub status: String,
-    pub tier1_rows: usize,
-    pub tier2_rows: usize,
-    pub tier1_row_bytes: usize,
-    pub tier2_row_bytes: usize,
 }
 
 // ── OwnedTierState ────────────────────────────────────────────────────────────
