@@ -175,7 +175,9 @@ impl PirClient {
         }
 
         // ── Tier 1: YPIR query for row s1 ────────────────────────────────
-        let (tier1_row, tier1_timing) = self.ypir_query_tier1(s1).await?;
+        let (tier1_row, tier1_timing) = self
+            .ypir_query(&self.tier1_scenario, "tier1", s1, TIER1_ROW_BYTES)
+            .await?;
         let tier1 = Tier1Row::from_bytes(&tier1_row)?;
 
         let s2 = tier1
@@ -190,7 +192,9 @@ impl PirClient {
 
         // ── Tier 2: YPIR query for row (s1 * 128 + s2) ──────────────────
         let t2_row_idx = s1 * TIER1_LEAVES + s2;
-        let (tier2_row, tier2_timing) = self.ypir_query_tier2(t2_row_idx).await?;
+        let (tier2_row, tier2_timing) = self
+            .ypir_query(&self.tier2_scenario, "tier2", t2_row_idx, TIER2_ROW_BYTES)
+            .await?;
         let tier2 = Tier2Row::from_bytes(&tier2_row)?;
         let valid_leaves = valid_leaves_for_row(self.num_ranges, t2_row_idx);
 
@@ -347,22 +351,26 @@ impl PirClient {
         Ok(proofs)
     }
 
-    /// Send a YPIR query for a Tier 1 row and return the decrypted row bytes.
-    async fn ypir_query_tier1(&self, row_idx: usize) -> Result<(Vec<u8>, TierTiming)> {
+    /// Send a YPIR query for a tier row and return the decrypted row bytes.
+    async fn ypir_query(
+        &self,
+        scenario: &YpirScenario,
+        tier_name: &str,
+        row_idx: usize,
+        expected_row_bytes: usize,
+    ) -> Result<(Vec<u8>, TierTiming)> {
         anyhow::ensure!(
-            row_idx < self.tier1_scenario.num_items,
-            "tier1 row_idx {} >= num_items {}",
-            row_idx,
-            self.tier1_scenario.num_items
+            row_idx < scenario.num_items,
+            "{} row_idx {} >= num_items {}",
+            tier_name, row_idx, scenario.num_items
         );
         let t0 = Instant::now();
         let ypir_client = YPIRClient::from_db_sz(
-            self.tier1_scenario.num_items as u64,
-            self.tier1_scenario.item_size_bits as u64,
+            scenario.num_items as u64,
+            scenario.item_size_bits as u64,
             true,
         );
 
-        // Generate encrypted YPIR query
         let (query, seed) = ypir_client.generate_query_simplepir(row_idx);
         let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -380,15 +388,14 @@ impl PirClient {
         }
         let upload_bytes = payload.len();
 
-        // Send to server
         let t1 = Instant::now();
-        let url = format!("{}/tier1/query", self.server_url);
+        let url = format!("{}/{}/query", self.server_url, tier_name);
         let send_result = self.http.post(&url).body(payload).send().await;
         let send_ms = t1.elapsed().as_secs_f64() * 1000.0;
         let resp = match send_result {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("  YPIR tier1 send error: {:?}", e);
+                eprintln!("  YPIR {} send error: {:?}", tier_name, e);
                 return Err(e.into());
             }
         };
@@ -401,130 +408,28 @@ impl PirClient {
         let response_bytes = resp.bytes().await?;
         if !status.is_success() {
             anyhow::bail!(
-                "tier1 query failed: HTTP {} body={}",
-                status,
-                String::from_utf8_lossy(&response_bytes)
+                "{} query failed: HTTP {} body={}",
+                tier_name, status, String::from_utf8_lossy(&response_bytes)
             );
         }
         let rtt_ms = t1.elapsed().as_secs_f64() * 1000.0;
         let download_from_server_ms = (rtt_ms - send_ms).max(0.0);
         let net_queue_ms = server_total_ms.map(|server_ms| (rtt_ms - server_ms).max(0.0));
         let upload_to_server_ms = server_total_ms.map(|server_ms| {
-            // Approximate upload+request-path time as time-to-headers minus server compute.
             (send_ms - server_ms).max(0.0)
         });
 
-        // Decode YPIR response to get the plaintext row
         let t2 = Instant::now();
         let decoded = ypir_client.decode_response_simplepir(seed, &response_bytes);
         let decode_ms = t2.elapsed().as_secs_f64() * 1000.0;
 
         anyhow::ensure!(
-            decoded.len() >= TIER1_ROW_BYTES,
-            "tier1 decoded response too short: {} bytes, expected >= {}",
-            decoded.len(),
-            TIER1_ROW_BYTES
+            decoded.len() >= expected_row_bytes,
+            "{} decoded response too short: {} bytes, expected >= {}",
+            tier_name, decoded.len(), expected_row_bytes
         );
         Ok((
-            decoded[..TIER1_ROW_BYTES].to_vec(),
-            TierTiming {
-                gen_ms,
-                upload_bytes,
-                download_bytes: response_bytes.len(),
-                rtt_ms,
-                decode_ms,
-                server_req_id,
-                server_total_ms,
-                server_validate_ms,
-                server_decode_copy_ms,
-                server_compute_ms,
-                net_queue_ms,
-                upload_to_server_ms,
-                download_from_server_ms,
-            },
-        ))
-    }
-
-    /// Send a YPIR query for a Tier 2 row and return the decrypted row bytes.
-    async fn ypir_query_tier2(&self, row_idx: usize) -> Result<(Vec<u8>, TierTiming)> {
-        anyhow::ensure!(
-            row_idx < self.tier2_scenario.num_items,
-            "tier2 row_idx {} >= num_items {}",
-            row_idx,
-            self.tier2_scenario.num_items
-        );
-        let t0 = Instant::now();
-        let ypir_client = YPIRClient::from_db_sz(
-            self.tier2_scenario.num_items as u64,
-            self.tier2_scenario.item_size_bits as u64,
-            true,
-        );
-
-        // Generate encrypted YPIR query
-        let (query, seed) = ypir_client.generate_query_simplepir(row_idx);
-        let gen_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-        // Serialize with length prefix: [8: pqr_byte_len][pqr][pub_params]
-        let pqr = query.0.as_slice();
-        let pp = query.1.as_slice();
-        let pqr_byte_len = pqr.len() * 8;
-        let mut payload = Vec::with_capacity(8 + (pqr.len() + pp.len()) * 8);
-        payload.extend_from_slice(&(pqr_byte_len as u64).to_le_bytes());
-        for &v in pqr {
-            payload.extend_from_slice(&v.to_le_bytes());
-        }
-        for &v in pp {
-            payload.extend_from_slice(&v.to_le_bytes());
-        }
-        let upload_bytes = payload.len();
-
-        // Send to server
-        let t1 = Instant::now();
-        let url = format!("{}/tier2/query", self.server_url);
-        let send_result = self.http.post(&url).body(payload).send().await;
-        let send_ms = t1.elapsed().as_secs_f64() * 1000.0;
-        let resp = match send_result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("  YPIR tier2 send error: {:?}", e);
-                return Err(e.into());
-            }
-        };
-        let server_req_id = parse_header_u64(resp.headers(), "x-pir-req-id");
-        let server_total_ms = parse_header_f64(resp.headers(), "x-pir-server-total-ms");
-        let server_validate_ms = parse_header_f64(resp.headers(), "x-pir-server-validate-ms");
-        let server_decode_copy_ms = parse_header_f64(resp.headers(), "x-pir-server-decode-copy-ms");
-        let server_compute_ms = parse_header_f64(resp.headers(), "x-pir-server-compute-ms");
-        let status = resp.status();
-        let response_bytes = resp.bytes().await?;
-        if !status.is_success() {
-            anyhow::bail!(
-                "tier2 query failed: HTTP {} body={}",
-                status,
-                String::from_utf8_lossy(&response_bytes)
-            );
-        }
-        let rtt_ms = t1.elapsed().as_secs_f64() * 1000.0;
-        let download_from_server_ms = (rtt_ms - send_ms).max(0.0);
-        let net_queue_ms = server_total_ms.map(|server_ms| (rtt_ms - server_ms).max(0.0));
-        let upload_to_server_ms = server_total_ms.map(|server_ms| {
-            // Approximate upload+request-path time as time-to-headers minus server compute.
-            (send_ms - server_ms).max(0.0)
-        });
-
-        // Decode YPIR response to get the plaintext row
-        let t2 = Instant::now();
-        let decoded = ypir_client.decode_response_simplepir(seed, &response_bytes);
-        let decode_ms = t2.elapsed().as_secs_f64() * 1000.0;
-
-        anyhow::ensure!(
-            decoded.len() >= TIER2_ROW_BYTES,
-            "tier2 decoded response too short: {} bytes, expected >= {}",
-            decoded.len(),
-            TIER2_ROW_BYTES
-        );
-        Ok((
-            decoded[..TIER2_ROW_BYTES].to_vec(),
+            decoded[..expected_row_bytes].to_vec(),
             TierTiming {
                 gen_ms,
                 upload_bytes,
