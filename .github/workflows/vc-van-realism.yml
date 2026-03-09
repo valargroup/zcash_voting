@@ -15,9 +15,13 @@ jobs:
     name: VC/VAN Real-Proof Stress
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Configure private repo access
+        run: git config --global url."https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
       - name: Install mise
         uses: jdx/mise-action@v2
       - name: Add GOBIN to PATH

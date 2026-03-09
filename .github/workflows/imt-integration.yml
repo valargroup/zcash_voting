@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'nullifier-ingest/**'
+      - 'voting-circuits/**'
       - 'orchard/**'
   pull_request:
     branches: [main]
     paths:
-      - 'nullifier-ingest/**'
+      - 'voting-circuits/**'
       - 'orchard/**'
 
 permissions:
@@ -19,23 +19,27 @@ jobs:
   test-imt-integration:
     name: IMT ZK Integration Tests
     runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Configure private repo access
+        run: git config --global url."https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust build
         uses: actions/cache@v4
         with:
           path: |
-            nullifier-ingest/imt-tree/target
+            voting-circuits/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-imt-tree-${{ hashFiles('nullifier-ingest/imt-tree/Cargo.lock') }}
+          key: ${{ runner.os }}-voting-circuits-imt-${{ hashFiles('voting-circuits/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-imt-tree-
+            ${{ runner.os }}-voting-circuits-imt-
       - name: Run IMT integration test
         run: cargo test --test imt_circuit_integration -- --nocapture
-        working-directory: nullifier-ingest/imt-tree
+        working-directory: voting-circuits
