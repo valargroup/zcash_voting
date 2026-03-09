@@ -9,7 +9,6 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use ff::PrimeField as _;
 use pasta_curves::Fp;
-use serde::{Deserialize, Serialize};
 
 use imt_tree::hasher::PoseidonHasher;
 use imt_tree::tree::{precompute_empty_hashes, TREE_DEPTH};
@@ -24,28 +23,9 @@ use pir_export::{
     PIR_DEPTH, TIER0_LAYERS, TIER1_LAYERS, TIER1_LEAVES, TIER1_ROW_BYTES, TIER2_LEAVES,
     TIER2_ROW_BYTES,
 };
+use pir_types::{RootInfo, YpirScenario};
 
 use ypir::client::YPIRClient;
-
-// ── Shared types (duplicated from pir-server to avoid feature unification) ───
-
-/// Parameters needed for a YPIR scenario. Serialized over HTTP so the client
-/// can reconstruct matching params locally.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct YpirScenario {
-    pub num_items: usize,
-    pub item_size_bits: usize,
-}
-
-/// Root and metadata returned by GET /root.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RootInfo {
-    pub root29: String,
-    pub root26: String,
-    pub num_ranges: usize,
-    pub pir_depth: usize,
-    pub height: Option<u64>,
-}
 
 // ── Timing breakdown ─────────────────────────────────────────────────────────
 
