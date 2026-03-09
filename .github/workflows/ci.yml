@@ -141,6 +141,8 @@ jobs:
     name: API Integration Tests
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -198,6 +200,8 @@ jobs:
     name: Multi-Validator E2E
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
