@@ -144,6 +144,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Configure private repo access
+        run: git config --global url."https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
       - name: Install mise
         uses: jdx/mise-action@v2
       - name: Add GOBIN to PATH
@@ -199,6 +201,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Configure private repo access
+        run: git config --global url."https://x-access-token:${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
       - name: Install mise
         uses: jdx/mise-action@v2
       - name: Add GOBIN to PATH

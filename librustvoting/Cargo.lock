@@ -1316,6 +1316,7 @@ dependencies = [
 [[package]]
 name = "imt-tree"
 version = "0.1.0"
+source = "git+ssh://git@github.com/valargroup/vote-nullifier-pir.git?branch=main#70aa58b222498153f71d3e487108fe684daf42d2"
 dependencies = [
  "anyhow",
  "ff",
@@ -1882,6 +1883,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 [[package]]
 name = "pir-client"
 version = "0.1.0"
+source = "git+ssh://git@github.com/valargroup/vote-nullifier-pir.git?branch=main#70aa58b222498153f71d3e487108fe684daf42d2"
 dependencies = [
  "anyhow",
  "ff",
@@ -1890,8 +1892,8 @@ dependencies = [
  "imt-tree",
  "pasta_curves",
  "pir-export",
+ "pir-types",
  "reqwest",
- "serde",
  "serde_json",
  "tokio",
  "ypir",
@@ -1900,6 +1902,7 @@ dependencies = [
 [[package]]
 name = "pir-export"
 version = "0.1.0"
+source = "git+ssh://git@github.com/valargroup/vote-nullifier-pir.git?branch=main#70aa58b222498153f71d3e487108fe684daf42d2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1910,6 +1913,14 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "pir-types"
+version = "0.1.0"
+source = "git+ssh://git@github.com/valargroup/vote-nullifier-pir.git?branch=main#70aa58b222498153f71d3e487108fe684daf42d2"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -3214,7 +3225,6 @@ dependencies = [
  "anyhow",
  "ff",
  "halo2_gadgets",
- "imt-tree",
  "incrementalmerkletree",
  "lazy_static",
  "libc",
