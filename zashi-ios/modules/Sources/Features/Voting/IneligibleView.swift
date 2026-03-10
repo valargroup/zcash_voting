@@ -75,7 +75,7 @@ struct IneligibleView: View {
                     .zFont(.regular, size: 15, style: Design.Text.secondary)
 
             case .balanceTooLow:
-                Text("Your shielded balance at the snapshot block was \(balanceFormatted), which is below the 0.13 ZEC minimum required to vote.")
+                Text("Your shielded balance at the snapshot block was \(balanceFormatted), which is below the 0.125 ZEC minimum required to vote.")
                     .zFont(.regular, size: 15, style: Design.Text.secondary)
             }
 
@@ -89,7 +89,7 @@ struct IneligibleView: View {
                 detailRow(label: "Notes found", value: "0")
             case .balanceTooLow:
                 detailRow(label: "Your balance", value: "\(balanceFormatted) ZEC")
-                detailRow(label: "Minimum", value: "0.13 ZEC")
+                detailRow(label: "Minimum", value: "0.125 ZEC")
                 detailRow(label: "Ballots", value: "0")
             }
         }
@@ -111,7 +111,7 @@ struct IneligibleView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(Design.Text.tertiary.color(colorScheme))
 
-            Text("To participate in future voting rounds, ensure you have at least 0.13 ZEC in shielded funds before the snapshot block.")
+            Text("To participate in future voting rounds, ensure you have at least 0.125 ZEC in shielded funds before the snapshot block.")
                 .zFont(.regular, size: 14, style: Design.Text.secondary)
         }
         .padding(14)
