@@ -1,6 +1,6 @@
 # librustvoting
 
-Client-side cryptographic library for Zcash shielded voting. Implements proof generation, vote construction, tree synchronization, and FFI bindings for the [Zally governance protocol](https://github.com/z-cale/shielded-vote-book).
+Client-side cryptographic library for Zcash shielded voting. Implements proof generation, vote construction, tree synchronization, and FFI bindings for the [Zally governance protocol](https://github.com/valargroup/shielded-vote-book).
 
 ## Workspace Crates
 
@@ -22,15 +22,15 @@ cargo build -p librustvoting   # build just the core library
 cargo build -p zcash-voting-ffi --release  # FFI for mobile (release profile)
 ```
 
-The workspace depends on the private [z-cale/voting-circuits](https://github.com/z-cale/voting-circuits) repo. The `.cargo/config.toml` enables `git-fetch-with-cli` so your local git credentials are used automatically.
+The workspace depends on the private [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits) repo. The `.cargo/config.toml` enables `git-fetch-with-cli` so your local git credentials are used automatically.
 
 ## Dependency Strategy
 
 This workspace uses `[patch.crates-io]` (in the root `Cargo.toml`) to override two dependency trees:
 
-- **orchard 0.11** — Resolved from the [z-cale/voting-circuits](https://github.com/z-cale/voting-circuits) repo, which bundles an orchard fork with public visibility for `constants`, `spec`, and a `shared_primitives::spend_authority` gadget. This ensures type compatibility between librustvoting and voting-circuits.
+- **orchard 0.11** — Resolved from the [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits) repo, which bundles an orchard fork with public visibility for `constants`, `spec`, and a `shared_primitives::spend_authority` gadget. This ensures type compatibility between librustvoting and voting-circuits.
 
-- **librustzcash crates** (pczt, zcash_keys, zcash_client_sqlite, etc.) — Resolved from [z-cale/librustzcash](https://github.com/z-cale/librustzcash) branch `valargroup/pczt-governance-extensions-0.11`, based on `maint/zcash_client_sqlite-0.19.x`. Adds public getters and methods needed for governance PCZT construction and Merkle witness generation.
+- **librustzcash crates** (pczt, zcash_keys, zcash_client_sqlite, etc.) — Resolved from [valargroup/librustzcash](https://github.com/valargroup/librustzcash) branch `valargroup/pczt-governance-extensions-0.11`, based on `maint/zcash_client_sqlite-0.19.x`. Adds public getters and methods needed for governance PCZT construction and Merkle witness generation.
 
 ## Architecture
 

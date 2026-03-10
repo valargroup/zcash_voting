@@ -18,4 +18,4 @@ libc = "0.2"
 [dev-dependencies]
 rand = "0.8"
 orchard = "0.11"
-voting-circuits = { git = "https://github.com/z-cale/voting-circuits.git" }
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git" }

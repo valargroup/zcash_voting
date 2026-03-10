@@ -57,7 +57,7 @@ git push
 echo ""
 echo "=== Creating GitHub Release ==="
 gh release create "$VERSION" "$ZIP_PATH" \
-    --repo z-cale/librustvoting \
+    --repo valargroup/librustvoting \
     --title "v$VERSION" \
     --notes "XCFramework binary for SPM consumption.
 
@@ -66,7 +66,7 @@ Platforms: ios-arm64, ios-arm64-simulator, macos-arm64"
 
 echo ""
 echo "=== Done ==="
-echo "Release: https://github.com/z-cale/librustvoting/releases/tag/$VERSION"
+echo "Release: https://github.com/valargroup/librustvoting/releases/tag/$VERSION"
 echo ""
 echo "To use in Package.swift:"
-echo '  .package(url: "https://github.com/z-cale/librustvoting.git", exact: "'"$VERSION"'")'
+echo '  .package(url: "https://github.com/valargroup/librustvoting.git", exact: "'"$VERSION"'")'
