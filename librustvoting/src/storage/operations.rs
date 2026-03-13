@@ -7,7 +7,7 @@ use crate::storage::{RoundPhase, RoundState, RoundSummary, VoteRecord, VotingDb}
 use crate::types::{
     DelegationProofResult, DelegationSubmissionData, EncryptedShare,
     GovernancePczt, NoteInfo, ProofProgressReporter, SharePayload, VoteCommitmentBundle,
-    VotingError, VotingHotkey, VotingRoundParams, WitnessData,
+    VotingError, VotingHotkey, VotingRoundParams, WireEncryptedShare, WitnessData,
 };
 
 impl VotingDb {
@@ -531,7 +531,7 @@ impl VotingDb {
     ///   known after the cast-vote TX is confirmed on chain.
     pub fn build_share_payloads(
         &self,
-        enc_shares: &[EncryptedShare],
+        enc_shares: &[WireEncryptedShare],
         commitment: &VoteCommitmentBundle,
         vote_decision: u32,
         num_options: u32,

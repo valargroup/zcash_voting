@@ -144,15 +144,22 @@ pub struct GovernancePczt {
 }
 
 /// El Gamal ciphertext of a voting share.
+///
+/// SECURITY: `plaintext_value` and `randomness` are secret client-side fields.
+/// Only `c1`, `c2`, and `share_index` may be sent to the helper server.
+/// Leaking `randomness` lets the helper recover plaintext shares via
+/// `v*G = C2 - r*pk`, breaking voter privacy. Do NOT derive `Serialize`
+/// on this struct without skipping these fields.
 #[derive(Clone, Debug)]
 pub struct EncryptedShare {
     pub c1: Vec<u8>,
     pub c2: Vec<u8>,
     pub share_index: u32,
+    /// Raw share value. SECRET — must not be sent over the network.
     pub plaintext_value: u64,
     /// El Gamal randomness `r` (32 bytes, LE pallas::Scalar repr).
     /// Deterministically derived from (sk, round_id, proposal_id, van_commitment, share_index)
-    /// so the client can re-derive it after a crash. Must NOT be sent over the network.
+    /// so the client can re-derive it after a crash. SECRET — must not be sent over the network.
     pub randomness: Vec<u8>,
 }
 
@@ -189,16 +196,45 @@ pub struct VoteCommitmentBundle {
     pub alpha_v: Vec<u8>,
 }
 
+/// Wire-safe encrypted share — contains only the public ciphertext components.
+/// Secrets (`plaintext_value`, `randomness`) are kept inside Rust and never cross the FFI boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WireEncryptedShare {
+    pub c1: Vec<u8>,
+    pub c2: Vec<u8>,
+    pub share_index: u32,
+}
+
+impl From<&EncryptedShare> for WireEncryptedShare {
+    fn from(s: &EncryptedShare) -> Self {
+        Self {
+            c1: s.c1.clone(),
+            c2: s.c2.clone(),
+            share_index: s.share_index,
+        }
+    }
+}
+
+impl From<EncryptedShare> for WireEncryptedShare {
+    fn from(s: EncryptedShare) -> Self {
+        Self {
+            c1: s.c1,
+            c2: s.c2,
+            share_index: s.share_index,
+        }
+    }
+}
+
 /// Payload sent to helper server for delegated share submission.
 #[derive(Clone, Debug)]
 pub struct SharePayload {
     pub shares_hash: Vec<u8>,
     pub proposal_id: u32,
     pub vote_decision: u32,
-    pub enc_share: EncryptedShare,
+    pub enc_share: WireEncryptedShare,
     pub tree_position: u64,
-    /// All encrypted shares (needed for enc_share lookup by the helper).
-    pub all_enc_shares: Vec<EncryptedShare>,
+    /// All encrypted shares (public components only).
+    pub all_enc_shares: Vec<WireEncryptedShare>,
     /// Pre-computed per-share Poseidon commitments (N x 32 bytes).
     /// Provided as public inputs to ZKP #3.
     pub share_comms: Vec<Vec<u8>>,
@@ -639,7 +675,7 @@ mod tests {
     }
 }
 
-pub fn validate_encrypted_shares(shares: &[EncryptedShare]) -> Result<(), VotingError> {
+pub fn validate_encrypted_shares(shares: &[WireEncryptedShare]) -> Result<(), VotingError> {
     for (i, share) in shares.iter().enumerate() {
         validate_32_bytes(&share.c1, &format!("enc_shares[{}].c1", i))?;
         validate_32_bytes(&share.c2, &format!("enc_shares[{}].c2", i))?;

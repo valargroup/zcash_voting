@@ -1,5 +1,5 @@
 use crate::types::{
-    validate_encrypted_shares, validate_vote_decision, CastVoteSignature, EncryptedShare,
+    validate_encrypted_shares, validate_vote_decision, CastVoteSignature, WireEncryptedShare,
     SharePayload, VoteCommitmentBundle, VotingError,
 };
 
@@ -16,7 +16,7 @@ use crate::types::{
 /// - `vc_tree_position`: Position of the Vote Commitment leaf in the VC tree,
 ///   known after the cast-vote TX is confirmed on chain.
 pub fn build_share_payloads(
-    enc_shares: &[EncryptedShare],
+    enc_shares: &[WireEncryptedShare],
     commitment: &VoteCommitmentBundle,
     vote_decision: u32,
     num_options: u32,
@@ -25,7 +25,7 @@ pub fn build_share_payloads(
     validate_encrypted_shares(enc_shares)?;
     validate_vote_decision(vote_decision, num_options)?;
 
-    let all_enc_shares: Vec<EncryptedShare> = enc_shares.to_vec();
+    let all_enc_shares: Vec<WireEncryptedShare> = enc_shares.to_vec();
 
     let mut payloads = Vec::with_capacity(enc_shares.len());
     for (i, share) in enc_shares.iter().enumerate() {
@@ -152,21 +152,17 @@ fn extend_padded32(out: &mut Vec<u8>, b: &[u8]) {
 mod tests {
     use super::*;
 
-    fn mock_enc_shares() -> Vec<EncryptedShare> {
+    fn mock_enc_shares() -> Vec<WireEncryptedShare> {
         vec![
-            EncryptedShare {
+            WireEncryptedShare {
                 c1: vec![0xC1; 32],
                 c2: vec![0xC2; 32],
                 share_index: 0,
-                plaintext_value: 1,
-                randomness: vec![0u8; 32],
             },
-            EncryptedShare {
+            WireEncryptedShare {
                 c1: vec![0xC1; 32],
                 c2: vec![0xC2; 32],
                 share_index: 1,
-                plaintext_value: 4,
-                randomness: vec![0u8; 32],
             },
         ]
     }
