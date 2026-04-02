@@ -826,6 +826,81 @@ impl VotingDb {
         let wallet_id = self.wallet_id();
         queries::clear_recovery_state(&conn, round_id, &wallet_id)
     }
+
+    // --- Share delegation tracking ---
+
+    /// Record a share delegation after sending to helper servers.
+    pub fn record_share_delegation(
+        &self,
+        round_id: &str,
+        bundle_index: u32,
+        proposal_id: u32,
+        share_index: u32,
+        sent_to_urls: &[String],
+        nullifier: &[u8],
+        submit_at: u64,
+    ) -> Result<(), VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        queries::record_share_delegation(
+            &conn,
+            round_id,
+            &wallet_id,
+            bundle_index,
+            proposal_id,
+            share_index,
+            sent_to_urls,
+            nullifier,
+            submit_at,
+        )
+    }
+
+    /// Load all share delegations for a round.
+    pub fn get_share_delegations(
+        &self,
+        round_id: &str,
+    ) -> Result<Vec<crate::ShareDelegationRecord>, VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        queries::get_share_delegations(&conn, round_id, &wallet_id)
+    }
+
+    /// Load only unconfirmed share delegations for a round.
+    pub fn get_unconfirmed_delegations(
+        &self,
+        round_id: &str,
+    ) -> Result<Vec<crate::ShareDelegationRecord>, VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        queries::get_unconfirmed_delegations(&conn, round_id, &wallet_id)
+    }
+
+    /// Mark a share delegation as confirmed on-chain.
+    pub fn mark_share_confirmed(
+        &self,
+        round_id: &str,
+        bundle_index: u32,
+        proposal_id: u32,
+        share_index: u32,
+    ) -> Result<(), VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        queries::mark_share_confirmed(&conn, round_id, &wallet_id, bundle_index, proposal_id, share_index)
+    }
+
+    /// Append new server URLs to a share delegation's sent_to_urls.
+    pub fn add_sent_servers(
+        &self,
+        round_id: &str,
+        bundle_index: u32,
+        proposal_id: u32,
+        share_index: u32,
+        new_urls: &[String],
+    ) -> Result<(), VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        queries::add_sent_servers(&conn, round_id, &wallet_id, bundle_index, proposal_id, share_index, new_urls)
+    }
 }
 
 #[cfg(test)]
@@ -1109,6 +1184,79 @@ mod tests {
         db.clear_round(ROUND_ID).unwrap();
         assert!(db.list_rounds().unwrap().is_empty());
         assert_eq!(db.get_bundle_count(ROUND_ID).unwrap(), 0);
+    }
+
+    /// Share delegation lifecycle: record → query → confirm → resubmit → re-record preserves confirmed.
+    #[test]
+    fn test_share_delegation_lifecycle() {
+        let db = test_db();
+        db.init_round(&test_params(), None).unwrap();
+        db.setup_bundles(
+            ROUND_ID,
+            &[NoteInfo {
+                commitment: vec![0x01; 32],
+                nullifier: vec![0x02; 32],
+                value: 13_000_000,
+                position: 0,
+                diversifier: vec![0; 11],
+                rho: vec![0; 32],
+                rseed: vec![0; 32],
+                scope: 0,
+                ufvk_str: String::new(),
+            }],
+        )
+        .unwrap();
+
+        let urls_a = vec!["https://helper-a.example".to_string()];
+        let urls_b = vec!["https://helper-b.example".to_string()];
+        let nf = vec![0xDD; 32];
+
+        // Record two share delegations (share 0 and share 1)
+        db.record_share_delegation(ROUND_ID, 0, 0, 0, &urls_a, &nf, 1000).unwrap();
+        db.record_share_delegation(ROUND_ID, 0, 0, 1, &urls_b, &nf, 2000).unwrap();
+
+        // Query all — should return both
+        let all = db.get_share_delegations(ROUND_ID).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Both unconfirmed
+        let unconfirmed = db.get_unconfirmed_delegations(ROUND_ID).unwrap();
+        assert_eq!(unconfirmed.len(), 2);
+
+        // Confirm share 0
+        db.mark_share_confirmed(ROUND_ID, 0, 0, 0).unwrap();
+
+        // Only share 1 remains unconfirmed
+        let unconfirmed = db.get_unconfirmed_delegations(ROUND_ID).unwrap();
+        assert_eq!(unconfirmed.len(), 1);
+        assert_eq!(unconfirmed[0].share_index, 1);
+
+        // Confirming again is idempotent
+        db.mark_share_confirmed(ROUND_ID, 0, 0, 0).unwrap();
+
+        // Resubmit share 1 to additional servers
+        let urls_c = vec!["https://helper-c.example".to_string()];
+        db.add_sent_servers(ROUND_ID, 0, 0, 1, &urls_c).unwrap();
+
+        // Verify URLs merged and deduplicated
+        let all = db.get_share_delegations(ROUND_ID).unwrap();
+        let share1 = all.iter().find(|s| s.share_index == 1).unwrap();
+        assert!(share1.sent_to_urls.contains(&"https://helper-b.example".to_string()));
+        assert!(share1.sent_to_urls.contains(&"https://helper-c.example".to_string()));
+        assert_eq!(share1.sent_to_urls.len(), 2);
+        // submit_at reset to 0 after resubmission
+        assert_eq!(share1.submit_at, 0);
+
+        // Re-record a confirmed share (e.g. recovery path) — confirmed must be preserved
+        db.record_share_delegation(ROUND_ID, 0, 0, 0, &urls_a, &nf, 3000).unwrap();
+        let all = db.get_share_delegations(ROUND_ID).unwrap();
+        let share0 = all.iter().find(|s| s.share_index == 0).unwrap();
+        assert!(share0.confirmed, "ON CONFLICT must preserve confirmed status");
+        assert_eq!(share0.submit_at, 3000, "submit_at should be updated");
+
+        // Confirm non-existent share — should error
+        let err = db.mark_share_confirmed(ROUND_ID, 0, 99, 0);
+        assert!(err.is_err());
     }
 
 }
