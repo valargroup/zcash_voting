@@ -1186,4 +1186,77 @@ mod tests {
         assert_eq!(db.get_bundle_count(ROUND_ID).unwrap(), 0);
     }
 
+    /// Share delegation lifecycle: record → query → confirm → resubmit → re-record preserves confirmed.
+    #[test]
+    fn test_share_delegation_lifecycle() {
+        let db = test_db();
+        db.init_round(&test_params(), None).unwrap();
+        db.setup_bundles(
+            ROUND_ID,
+            &[NoteInfo {
+                commitment: vec![0x01; 32],
+                nullifier: vec![0x02; 32],
+                value: 13_000_000,
+                position: 0,
+                diversifier: vec![0; 11],
+                rho: vec![0; 32],
+                rseed: vec![0; 32],
+                scope: 0,
+                ufvk_str: String::new(),
+            }],
+        )
+        .unwrap();
+
+        let urls_a = vec!["https://helper-a.example".to_string()];
+        let urls_b = vec!["https://helper-b.example".to_string()];
+        let nf = vec![0xDD; 32];
+
+        // Record two share delegations (share 0 and share 1)
+        db.record_share_delegation(ROUND_ID, 0, 0, 0, &urls_a, &nf, 1000).unwrap();
+        db.record_share_delegation(ROUND_ID, 0, 0, 1, &urls_b, &nf, 2000).unwrap();
+
+        // Query all — should return both
+        let all = db.get_share_delegations(ROUND_ID).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Both unconfirmed
+        let unconfirmed = db.get_unconfirmed_delegations(ROUND_ID).unwrap();
+        assert_eq!(unconfirmed.len(), 2);
+
+        // Confirm share 0
+        db.mark_share_confirmed(ROUND_ID, 0, 0, 0).unwrap();
+
+        // Only share 1 remains unconfirmed
+        let unconfirmed = db.get_unconfirmed_delegations(ROUND_ID).unwrap();
+        assert_eq!(unconfirmed.len(), 1);
+        assert_eq!(unconfirmed[0].share_index, 1);
+
+        // Confirming again is idempotent
+        db.mark_share_confirmed(ROUND_ID, 0, 0, 0).unwrap();
+
+        // Resubmit share 1 to additional servers
+        let urls_c = vec!["https://helper-c.example".to_string()];
+        db.add_sent_servers(ROUND_ID, 0, 0, 1, &urls_c).unwrap();
+
+        // Verify URLs merged and deduplicated
+        let all = db.get_share_delegations(ROUND_ID).unwrap();
+        let share1 = all.iter().find(|s| s.share_index == 1).unwrap();
+        assert!(share1.sent_to_urls.contains(&"https://helper-b.example".to_string()));
+        assert!(share1.sent_to_urls.contains(&"https://helper-c.example".to_string()));
+        assert_eq!(share1.sent_to_urls.len(), 2);
+        // submit_at reset to 0 after resubmission
+        assert_eq!(share1.submit_at, 0);
+
+        // Re-record a confirmed share (e.g. recovery path) — confirmed must be preserved
+        db.record_share_delegation(ROUND_ID, 0, 0, 0, &urls_a, &nf, 3000).unwrap();
+        let all = db.get_share_delegations(ROUND_ID).unwrap();
+        let share0 = all.iter().find(|s| s.share_index == 0).unwrap();
+        assert!(share0.confirmed, "ON CONFLICT must preserve confirmed status");
+        assert_eq!(share0.submit_at, 3000, "submit_at should be updated");
+
+        // Confirm non-existent share — should error
+        let err = db.mark_share_confirmed(ROUND_ID, 0, 99, 0);
+        assert!(err.is_err());
+    }
+
 }
