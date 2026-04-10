@@ -14,12 +14,15 @@ resolver = "2"
 #   pub visibility for constants/spec + shared_primitives gadget).
 #   This ensures type compatibility with voting-circuits.
 #
-# librustzcash crates: pczt + zcash_keys + zcash_primitives + zcash_protocol
-#   need our governance visibility changes (pub getters on PCZT types, etc.).
+# librustzcash crates: pczt + zcash_keys + zcash_primitives + zcash_protocol +
+#   zcash_client_sqlite need our governance visibility changes (pub getters on
+#   PCZT types, etc.) and wallet helpers (create_orchard_tree_tables, snapshot
+#   note queries).
 [patch.crates-io]
 orchard = { git = "https://github.com/valargroup/voting-circuits.git" }
 
-pczt              = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_keys        = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_primitives  = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
-zcash_protocol    = { git = "https://github.com/valargroup/librustzcash.git", branch = "valargroup/pczt-governance-extensions-0.11" }
+zcash_client_sqlite = { git = "https://github.com/valargroup/librustzcash.git", branch = "shielded-voting-wallet-support" }
+pczt                = { git = "https://github.com/valargroup/librustzcash.git", branch = "shielded-voting-wallet-support" }
+zcash_keys          = { git = "https://github.com/valargroup/librustzcash.git", branch = "shielded-voting-wallet-support" }
+zcash_primitives    = { git = "https://github.com/valargroup/librustzcash.git", branch = "shielded-voting-wallet-support" }
+zcash_protocol      = { git = "https://github.com/valargroup/librustzcash.git", branch = "shielded-voting-wallet-support" }
