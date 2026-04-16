@@ -10,17 +10,17 @@ resolver = "2"
 # Individual member Cargo.tomls use crates-io version strings;
 # Cargo resolves them from these overrides.
 #
-# orchard: use the copy bundled in voting-circuits repo (upstream 0.11 +
+# orchard: use the copy bundled in voting-circuits repo (upstream 0.12 +
 #   pub visibility for constants/spec + shared_primitives gadget).
 #   This ensures type compatibility with voting-circuits.
 #
 # librustzcash crates: pczt + zcash_keys + zcash_primitives + zcash_protocol
 #   need our governance visibility changes (pub getters on PCZT types, etc.).
-#   Pinned by rev to shielded-voting-wallet-support HEAD (6858db4).
+#   Pinned by rev to shielded-vote-main HEAD (d338e04).
 [patch.crates-io]
-orchard = { git = "https://github.com/valargroup/voting-circuits.git" }
+orchard = { git = "https://github.com/valargroup/voting-circuits.git", branch = "greg/orchard-0.12" }
 
-pczt                = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
-zcash_keys          = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
-zcash_primitives    = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
-zcash_protocol      = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
+pczt                = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }
+zcash_keys          = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }
+zcash_primitives    = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }
+zcash_protocol      = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }

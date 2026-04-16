@@ -37,8 +37,8 @@ thiserror = "2"
 
 # Zcash / Orchard
 subtle = "2.6"
-orchard = { version = "0.11" }
-voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git" }
+orchard = { version = "0.12" }
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git", branch = "greg/orchard-0.12" }
 zcash_keys = { version = "0.12", features = ["orchard"] }
 zcash_protocol = "0.7"
 nonempty = "0.11"
