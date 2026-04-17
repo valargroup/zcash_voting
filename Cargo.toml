@@ -24,3 +24,15 @@ pczt                = { git = "https://github.com/valargroup/librustzcash.git", 
 zcash_keys          = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }
 zcash_primitives    = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }
 zcash_protocol      = { git = "https://github.com/valargroup/librustzcash.git", rev = "1bc3a279e3c5" }
+
+[profile.release]
+lto = true
+panic = 'abort'
+codegen-units = 1
+
+[profile.test]
+# ZK proof generation/verification is prohibitively slow without optimizations.
+# This matches the librustzcash approach: opt-level 3 with debug info, but
+# without LTO/codegen-units=1 (which slow compilation without helping tests).
+opt-level = 3
+debug = true
