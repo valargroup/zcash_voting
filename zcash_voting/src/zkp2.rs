@@ -172,7 +172,7 @@ pub fn build_vote_commitment(
     let van_new = vote_bundle.instance.vote_authority_note_new.to_repr().to_vec();
     let vote_commitment = vote_bundle.instance.vote_commitment.to_repr().to_vec();
 
-    // Convert encrypted shares from builder output to librustvoting EncryptedShare format
+    // Convert encrypted shares from builder output to zcash_voting EncryptedShare format
     let enc_shares: Vec<EncryptedShare> = vote_bundle
         .encrypted_shares
         .iter()

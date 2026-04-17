@@ -686,7 +686,7 @@ mod tests {
     /// Uses 5 notes to avoid padding (no PIR server needed for padded notes).
     /// Long-running due to keygen + proof generation.
     ///
-    /// Run with: `cargo test -p librustvoting test_real_delegation_proof -- --ignored --nocapture`
+    /// Run with: `cargo test -p zcash_voting test_real_delegation_proof -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn test_real_delegation_proof() {
