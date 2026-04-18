@@ -5,13 +5,19 @@ use pasta_curves::pallas;
 use rand::RngCore;
 use subtle::CtOption;
 
-use orchard::builder::{Builder, BundleType};
-use orchard::keys::FullViewingKey;
-use orchard::note::{ExtractedNoteCommitment, RandomSeed, Rho};
-use orchard::pczt::Zip32Derivation;
-use orchard::tree::{MerkleHashOrchard, MerklePath};
-use orchard::value::NoteValue;
-use orchard::{Anchor, Address};
+// action.rs builds an orchard PCZT bundle that plugs into `PcztParts.orchard`
+// (from zcash_primitives / valar-pczt), both of which hold upstream-orchard
+// bundle types. So this file uses `orchard_upstream` throughout rather than
+// our valar-orchard alias. The governance-visibility methods on valar-orchard
+// aren't needed here — the PCZT construction uses only standard orchard APIs.
+use orchard_upstream as orchard;
+use orchard_upstream::builder::{Builder, BundleType};
+use orchard_upstream::keys::FullViewingKey;
+use orchard_upstream::note::{ExtractedNoteCommitment, RandomSeed, Rho};
+use orchard_upstream::pczt::Zip32Derivation;
+use orchard_upstream::tree::{MerkleHashOrchard, MerklePath};
+use orchard_upstream::value::NoteValue;
+use orchard_upstream::{Anchor, Address};
 use zcash_primitives::transaction::builder::PcztParts;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::{BlockHeight, BranchId, Network};
@@ -580,7 +586,7 @@ pub fn extract_spend_auth_sig(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orchard::keys::SpendingKey;
+    use orchard_upstream::keys::SpendingKey;
 
     fn mock_note() -> NoteInfo {
         NoteInfo {

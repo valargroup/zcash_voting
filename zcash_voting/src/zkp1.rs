@@ -148,9 +148,10 @@ fn reconstruct_note(
         }
     })?;
 
-    let fvk = ufvk.orchard().ok_or_else(|| VotingError::Internal {
+    let fvk_upstream = ufvk.orchard().ok_or_else(|| VotingError::Internal {
         message: "UFVK has no Orchard component".into(),
     })?;
+    let fvk = crate::orchard_compat::fvk_upstream_to_valar(fvk_upstream);
 
     let scope = match full_note.scope {
         0 => Scope::External,
@@ -703,17 +704,15 @@ mod tests {
         let usk = UnifiedSpendingKey::from_seed(&MAIN_NETWORK, &seed, account).unwrap();
         let ufvk = usk.to_unified_full_viewing_key();
         let ufvk_str = ufvk.encode(&MAIN_NETWORK);
-        let fvk = ufvk.orchard().unwrap().clone();
+        let fvk = crate::orchard_compat::fvk_upstream_to_valar(ufvk.orchard().unwrap());
 
         // 2. Hotkey (output note recipient)
         let hotkey_seed = [0x43u8; 32];
         let hotkey_usk =
             UnifiedSpendingKey::from_seed(&MAIN_NETWORK, &hotkey_seed, account).unwrap();
-        let hotkey_fvk = hotkey_usk
-            .to_unified_full_viewing_key()
-            .orchard()
-            .unwrap()
-            .clone();
+        let hotkey_fvk = crate::orchard_compat::fvk_upstream_to_valar(
+            hotkey_usk.to_unified_full_viewing_key().orchard().unwrap(),
+        );
         let hotkey_addr = hotkey_fvk.address_at(0u32, Scope::External);
         let hotkey_raw_address = hotkey_addr.to_raw_address_bytes().to_vec();
 

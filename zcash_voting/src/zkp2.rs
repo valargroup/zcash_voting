@@ -235,16 +235,10 @@ pub fn derive_spending_key(hotkey_seed: &[u8], network_id: u32) -> Result<Spendi
         message: format!("failed to derive UnifiedSpendingKey from hotkey_seed: {}", e),
     })?;
 
-    // Extract the Orchard SpendingKey from the USK.
-    // UnifiedSpendingKey internally holds the orchard SpendingKey but doesn't
-    // expose it directly. We go through the FVK + transparent derivation path.
-    // However, the vote proof builder needs the SpendingKey, not the FVK.
-    // The orchard SpendingKey can be extracted by converting via the
-    // raw bytes that UnifiedSpendingKey stores.
-    //
-    // UnifiedSpendingKey::orchard() returns &orchard::keys::SpendingKey
-    let sk: &SpendingKey = usk.orchard();
-    Ok(sk.clone())
+    // UnifiedSpendingKey::orchard() returns an upstream-orchard SpendingKey;
+    // voting-circuits takes a valar-orchard SpendingKey. Byte-round-trip
+    // convert — the wire format is identical.
+    Ok(crate::orchard_compat::sk_upstream_to_valar(usk.orchard()))
 }
 
 #[cfg(test)]

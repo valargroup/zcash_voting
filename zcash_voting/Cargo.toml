@@ -2,6 +2,10 @@
 name = "zcash_voting"
 version = "0.1.0"
 edition = "2021"
+description = "Client-side library for Zcash shielded voting: ZKP delegation and vote-commitment proofs (Halo 2), ElGamal encryption, governance PCZT construction, Merkle witness generation, and SQLite round-state persistence."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/valargroup/zcash_voting"
+readme = "README.md"
 
 [dependencies]
 # Curves (same as Orchard/Zcash)
@@ -23,11 +27,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # PIR (private nullifier exclusion proofs)
-pir-client = { git = "https://github.com/valargroup/vote-nullifier-pir.git", rev = "d976e13" }
+pir-client = "0.1.0"
 
 # Vote commitment tree (VAN witness generation)
-vote-commitment-tree = { path = "../vote-commitment-tree" }
-vote-commitment-tree-client = { path = "../vote-commitment-tree-client" }
+vote-commitment-tree = { path = "../vote-commitment-tree", version = "0.1.0" }
+vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "0.1.0" }
 
 # Storage
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -35,10 +39,23 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # Error handling
 thiserror = "2"
 
-# Zcash / Orchard
+# Zcash / Orchard — using the `valar-*` forks (valargroup maintenance forks of
+# orchard and pczt with governance-visibility changes, until those changes
+# are upstreamed to zcash/orchard and zcash/librustzcash).
+#
+# zcash_voting sits at a boundary: it consumes upstream orchard types (via
+# zcash_keys, valar-pczt internals, zcash_primitives) and produces valar-orchard
+# types (via voting-circuits). Until the valar visibility changes land upstream,
+# both crates must be namable here. `orchard` aliases valar-orchard (for
+# voting-circuits); `orchard_upstream` aliases real upstream orchard (for
+# zcash_keys / zcash_primitives / PcztParts). Byte-round-trip helpers in
+# `orchard_compat.rs` bridge the two — safe because valar-orchard is a pure
+# superset with identical wire formats. Drop `orchard_upstream` (and
+# orchard_compat.rs) when the upstream PR merges.
 subtle = "2.6"
-orchard = { version = "0.11" }
-voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git" }
+orchard = { version = "0.11.0", package = "valar-orchard" }
+orchard_upstream = { version = "0.11.0", package = "orchard" }
+voting-circuits = "0.1.0"
 zcash_keys = { version = "0.12", features = ["orchard"] }
 zcash_protocol = "0.7"
 nonempty = "0.11"
@@ -46,5 +63,5 @@ zip32 = "0.2"
 incrementalmerkletree = "0.8"
 
 # PCZT construction (governance-specific PCZT for Keystone signing)
-pczt = { version = "0.5", features = ["orchard", "io-finalizer", "signer", "zcp-builder"] }
+pczt = { version = "0.5.1", package = "valar-pczt", features = ["orchard", "io-finalizer", "signer", "zcp-builder"] }
 zcash_primitives = "0.26"
