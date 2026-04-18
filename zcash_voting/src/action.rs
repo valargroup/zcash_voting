@@ -5,12 +5,8 @@ use pasta_curves::pallas;
 use rand::RngCore;
 use subtle::CtOption;
 
-// action.rs builds an orchard PCZT bundle that plugs into `PcztParts.orchard`
-// (from zcash_primitives / valar-pczt), both of which hold upstream-orchard
-// bundle types. So this file uses `orchard_upstream` throughout rather than
-// our valar-orchard alias. The governance-visibility methods on valar-orchard
-// aren't needed here — the PCZT construction uses only standard orchard APIs.
-use orchard_upstream as orchard;
+// Uses upstream orchard (not valar-orchard): builds a bundle for PcztParts.orchard,
+// which is upstream-typed. None of the governance-visibility methods are needed here.
 use orchard_upstream::builder::{Builder, BundleType};
 use orchard_upstream::keys::FullViewingKey;
 use orchard_upstream::note::{ExtractedNoteCommitment, RandomSeed, Rho};
@@ -110,9 +106,9 @@ fn make_dummy_note(
     addr: Address,
     rho: Rho,
     rng: &mut impl RngCore,
-) -> Result<(orchard::Note, [u8; 32]), VotingError> {
+) -> Result<(orchard_upstream::Note, [u8; 32]), VotingError> {
     let (rseed, rseed_bytes) = random_rseed(rng, &rho);
-    let note = orchard::Note::from_parts(addr, NoteValue::from_raw(1), rho, rseed);
+    let note = orchard_upstream::Note::from_parts(addr, NoteValue::from_raw(1), rho, rseed);
     if !bool::from(note.is_some()) {
         return Err(VotingError::Internal {
             message: "failed to construct dummy note".to_string(),

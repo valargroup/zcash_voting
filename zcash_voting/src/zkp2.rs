@@ -235,9 +235,6 @@ pub fn derive_spending_key(hotkey_seed: &[u8], network_id: u32) -> Result<Spendi
         message: format!("failed to derive UnifiedSpendingKey from hotkey_seed: {}", e),
     })?;
 
-    // UnifiedSpendingKey::orchard() returns an upstream-orchard SpendingKey;
-    // voting-circuits takes a valar-orchard SpendingKey. Byte-round-trip
-    // convert — the wire format is identical.
     Ok(crate::orchard_compat::sk_upstream_to_valar(usk.orchard()))
 }
 
