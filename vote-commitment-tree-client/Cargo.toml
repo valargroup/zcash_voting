@@ -2,14 +2,17 @@
 name = "vote-commitment-tree-client"
 version = "0.1.0"
 edition = "2021"
-description = "Remote client CLI for syncing and verifying the vote commitment tree against a running Zally chain node"
+description = "HTTP client and CLI for syncing and verifying the vote commitment tree against a running Zcash shielded-voting chain node."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/valargroup/zcash_voting"
+readme = "README.md"
 
 [[bin]]
 name = "vote-tree-cli"
 path = "src/main.rs"
 
 [dependencies]
-vote-commitment-tree = { path = "../vote-commitment-tree" }
+vote-commitment-tree = { path = "../vote-commitment-tree", version = "0.1.0" }
 pasta_curves = "0.5"
 ff = "0.13"
 reqwest = { version = "0.12", features = ["blocking", "json"] }

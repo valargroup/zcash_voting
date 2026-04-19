@@ -242,9 +242,10 @@ pub fn derive_spending_key(hotkey_seed: &[u8], network_id: u32) -> Result<Spendi
     // The orchard SpendingKey can be extracted by converting via the
     // raw bytes that UnifiedSpendingKey stores.
     //
-    // UnifiedSpendingKey::orchard() returns &orchard::keys::SpendingKey
-    let sk: &SpendingKey = usk.orchard();
-    Ok(sk.clone())
+    // UnifiedSpendingKey::orchard() returns &orchard_upstream::keys::SpendingKey;
+    // byte-round-trip to the valar-orchard type voting-circuits expects.
+    let sk: SpendingKey = crate::orchard_compat::sk_upstream_to_valar(usk.orchard());
+    Ok(sk)
 }
 
 #[cfg(test)]

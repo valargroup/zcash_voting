@@ -5,22 +5,3 @@ members = [
     "vote-commitment-tree-client",
 ]
 resolver = "2"
-
-# All crate patches live here (workspace-level).
-# Individual member Cargo.tomls use crates-io version strings;
-# Cargo resolves them from these overrides.
-#
-# orchard: use the copy bundled in voting-circuits repo (upstream 0.11 +
-#   pub visibility for constants/spec + shared_primitives gadget).
-#   This ensures type compatibility with voting-circuits.
-#
-# librustzcash crates: pczt + zcash_keys + zcash_primitives + zcash_protocol
-#   need our governance visibility changes (pub getters on PCZT types, etc.).
-#   Pinned by rev to shielded-voting-wallet-support HEAD (6858db4).
-[patch.crates-io]
-orchard = { git = "https://github.com/valargroup/voting-circuits.git" }
-
-pczt                = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
-zcash_keys          = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
-zcash_primitives    = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
-zcash_protocol      = { git = "https://github.com/valargroup/librustzcash.git", rev = "6858db4a523de05f7474a89c7df751510c71874d" }
