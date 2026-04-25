@@ -8,9 +8,12 @@ resolver = "2"
 
 # Single-source patches for the orchard 0.13 + librustzcash zcash/main migration.
 #
-# - `orchard`: pin to the valargroup branch carrying orchard 0.13.0 + zcash/orchard
-#   PR #489 (SpendAuthG fixed-base multiplication). The same pin is used by every
-#   downstream consumer so the entire dep graph collapses to a single orchard node.
+# - `orchard`: pin to the valargroup branch carrying orchard 0.13.0 plus the
+#   cherry-picks tracked by valargroup/orchard PR #19:
+#     * zcash/orchard PR #489 — SpendAuthG fixed-base multiplication, and
+#     * zcash/orchard PR #495 — `NoteValue::ZERO` public associated constant.
+#   The same pin is used by every downstream consumer so the entire dep graph
+#   collapses to a single orchard node.
 # - `voting-circuits`: pin to the matching valargroup branch (consumes the orchard
 #   git pin above; published 0.2.0 still depends on the retired valar-orchard fork
 #   and would create a duplicate orchard node in the graph).

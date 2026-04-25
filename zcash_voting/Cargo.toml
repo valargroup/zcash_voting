@@ -42,9 +42,10 @@ thiserror = "2"
 # Single orchard node: every consumer (this crate, voting-circuits, and the
 # librustzcash crates we pin below) resolves `orchard` through the workspace's
 # `[patch.crates-io]` redirect to valargroup/orchard `valar/0.13-spend-auth-g`
-# (orchard 0.13.0 + zcash/orchard PR #489). The `unstable-voting-circuits`
-# feature is required by integration tests in `zkp1.rs` (`Note::new`,
-# `Note::dummy`, `Rho::from_nf_old`).
+# (orchard 0.13.0 + zcash/orchard #489 SpendAuthG + zcash/orchard #495
+# `NoteValue::ZERO`; tracked by valargroup/orchard PR #19). The
+# `unstable-voting-circuits` feature is required by integration tests in
+# `zkp1.rs` (`Note::new`, `Note::dummy`, `Rho::from_nf_old`).
 subtle = "2.6"
 orchard = { version = "0.13", features = ["unstable-voting-circuits"] }
 voting-circuits = { version = "0.2.0", features = ["share-reveal"] }
