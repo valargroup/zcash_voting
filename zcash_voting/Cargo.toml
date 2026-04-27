@@ -1,6 +1,6 @@
 [package]
 name = "zcash_voting"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Client-side library for Zcash shielded voting: ZKP delegation and vote-commitment proofs (Halo 2), ElGamal encryption, governance PCZT construction, Merkle witness generation, and SQLite round-state persistence."
 license = "MIT OR Apache-2.0"
@@ -30,8 +30,8 @@ serde_json = "1"
 pir-client = "0.1.0"
 
 # Vote commitment tree (VAN witness generation)
-vote-commitment-tree = { path = "../vote-commitment-tree", version = "0.1.0" }
-vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "0.1.0" }
+vote-commitment-tree = { path = "../vote-commitment-tree", version = "0.1.1" }
+vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "0.1.1" }
 
 # Storage
 rusqlite = { version = "0.37", features = ["bundled"] }

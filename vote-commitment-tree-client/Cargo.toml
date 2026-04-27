@@ -1,6 +1,6 @@
 [package]
 name = "vote-commitment-tree-client"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "HTTP client and CLI for syncing and verifying the vote commitment tree against a running Zcash shielded-voting chain node."
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ name = "vote-tree-cli"
 path = "src/main.rs"
 
 [dependencies]
-vote-commitment-tree = { path = "../vote-commitment-tree", version = "0.1.0" }
+vote-commitment-tree = { path = "../vote-commitment-tree", version = "0.1.1" }
 pasta_curves = "0.5"
 ff = "0.13"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
