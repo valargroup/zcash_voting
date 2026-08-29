@@ -9,12 +9,17 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 ### Added
 - Added `prepare_commit`, `prepare_commit_batch`, `persist_prepared_commit`,
   and `persist_prepared_commit_batch` so wallets can perform expensive ZKP #2
-  proving outside SQLite transactions, then atomically persist the prepared
-  result only if its vote-authority, ballot-intent, and current-vote state are
-  still unchanged. `prepare_commit_batch` takes a `VoteCommitBatch` for the
-  round, drafts, witness, and stage reporter.
-- Added `warm_zkp2_proving_cache` for callers that want to initialize the vote
-  proving parameters independently of the other proving caches.
+  proving outside SQLite transactions and atomically reject stale state before
+  persistence. This is required by the atomic cast-vote batch lifecycle.
+- Cast-vote batches now build an ordered vote-authority chain, prove up to three
+  ZKP #2 actions concurrently by default, sign every action over one
+  domain-separated batch digest, and persist the whole recovery set atomically.
+  The explicit `commit_atomic_vote_batch`, `prepare_atomic_vote_batch`, and
+  `recover_atomic_vote_batch` APIs return `SignedVoteBatch`, whose canonical
+  `batch_json` belongs on the chain's `cast-vote-batch` endpoint. Singleton APIs
+  remain available and cannot independently mutate members of an atomic batch.
+  `confirmation::confirm_vote_batch_submission` records the shared transaction
+  hash, ordered vote-commitment positions, and final VAN position atomically.
 
 ### Changed
 
