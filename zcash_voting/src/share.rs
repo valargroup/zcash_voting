@@ -16,6 +16,7 @@ use crate::{
 };
 use ff::PrimeField;
 use pasta_curves::pallas;
+use rusqlite::TransactionBehavior;
 
 pub use crate::types::ShareDelegationRecord as ShareRecord;
 
@@ -87,24 +88,41 @@ pub fn record(
     sent_to_urls: &[String],
     submit_at: u64,
 ) -> Result<(), VotingError> {
-    let bundle = crate::vote::recovery_bundle(db, round_id, bundle_index, proposal_id)?
-        .ok_or_else(|| VotingError::InvalidInput {
-            message: format!(
-                "vote recovery bundle not found for round={round_id}, bundle={bundle_index}, proposal={proposal_id}"
-            ),
+    // Reserve the WAL writer before deriving the share identity so a
+    // concurrent recast cannot replace recovery state between the read and
+    // the durable share write.
+    let mut conn = db.conn();
+    let wallet_id = db.wallet_id();
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| VotingError::Internal {
+            message: format!("begin recovered share transaction failed: {e}"),
         })?;
+    let bundle =
+        crate::vote::recovery_bundle_with_conn(&tx, &wallet_id, round_id, bundle_index, proposal_id)?
+            .ok_or_else(|| VotingError::InvalidInput {
+                message: format!(
+                    "vote recovery bundle not found for round={round_id}, bundle={bundle_index}, proposal={proposal_id}"
+                ),
+            })?;
+    ensure_recovery_proposal(&bundle, proposal_id)?;
     let payload = recover_payload(&bundle, share_index)?;
     let primary_blind = array32("primary_blind", payload.primary_blind.clone())?;
     let nullifier = compute_nullifier(&bundle.vote_commitment, share_index, &primary_blind)?;
-    db.record_share_delegation(
+    crate::storage::queries::record_share_delegation(
+        &tx,
         round_id,
+        &wallet_id,
         bundle_index,
         proposal_id,
         share_index,
         sent_to_urls,
         &nullifier,
         submit_at,
-    )
+    )?;
+    tx.commit().map_err(|e| VotingError::Internal {
+        message: format!("commit recovered share transaction failed: {e}"),
+    })
 }
 
 /// Lists all helper-share records for a round.
@@ -260,6 +278,15 @@ pub fn recover_wire_json(
     submit_at: u64,
 ) -> Result<String, VotingError> {
     let bundle = crate::vote::parse_recovery(commitment_bundle_json)?;
+    ensure_recovery_proposal(&bundle, proposal_id)?;
+    let payload = recover_payload(&bundle, share_index)?;
+    payload.to_wire_json(Some(vc_tree_position), submit_at)
+}
+
+fn ensure_recovery_proposal(
+    bundle: &VoteRecoveryBundle,
+    proposal_id: u32,
+) -> Result<(), VotingError> {
     if bundle.proposal_id != proposal_id {
         return Err(VotingError::InvalidInput {
             message: format!(
@@ -268,8 +295,7 @@ pub fn recover_wire_json(
             ),
         });
     }
-    let payload = recover_payload(&bundle, share_index)?;
-    payload.to_wire_json(Some(vc_tree_position), submit_at)
+    Ok(())
 }
 
 fn array32(label: &str, value: Vec<u8>) -> Result<[u8; 32], VotingError> {

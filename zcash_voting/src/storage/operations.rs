@@ -7,6 +7,7 @@ use orchard::{
     primitives::redpallas::{Signature, SpendAuth, VerificationKey},
 };
 use pasta_curves::pallas;
+use rusqlite::TransactionBehavior;
 use voting_circuits::delegation::{synthetic_padding_note_parts, ImtProofData};
 use zcash_keys::keys::UnifiedFullViewingKey;
 
@@ -441,9 +442,11 @@ impl VotingDb {
                 plan.dropped_count,
             );
         }
-        let tx = conn.transaction().map_err(|e| VotingError::Internal {
-            message: format!("failed to begin bundle setup transaction: {e}"),
-        })?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("failed to begin bundle setup transaction: {e}"),
+            })?;
         for (i, chunk) in plan.bundles.iter().enumerate() {
             queries::insert_bundle_notes(&tx, round_id, &wallet_id, i as u32, chunk)?;
         }
@@ -1045,9 +1048,11 @@ impl VotingDb {
         // inputs are checked against the PCZT fields before any partial proof
         // success state is committed.
         let mut conn = self.conn();
-        let tx = conn.transaction().map_err(|e| VotingError::Internal {
-            message: format!("failed to begin proof result transaction: {e}"),
-        })?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("failed to begin proof result transaction: {e}"),
+            })?;
         queries::store_proof(&tx, round_id, &wallet_id, bundle_index, &result.proof)?;
         queries::store_proof_result_fields_with_van_comm(
             &tx,
@@ -1347,16 +1352,24 @@ impl VotingDb {
         proposal_id: u32,
         tx_hash: &str,
     ) -> Result<(), VotingError> {
-        let conn = self.conn();
         let wallet_id = self.wallet_id();
+        let mut conn = self.conn();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("begin vote submission transaction failed: {e}"),
+            })?;
         queries::record_vote_submission(
-            &conn,
+            &tx,
             round_id,
             &wallet_id,
             bundle_index,
             proposal_id,
             tx_hash,
-        )
+        )?;
+        tx.commit().map_err(|e| VotingError::Internal {
+            message: format!("commit vote submission transaction failed: {e}"),
+        })
     }
 
     /// Atomically records a delegation transaction hash with idempotency checks.
@@ -1368,9 +1381,11 @@ impl VotingDb {
     ) -> Result<(), VotingError> {
         let wallet_id = self.wallet_id();
         let mut conn = self.conn();
-        let tx = conn.transaction().map_err(|e| VotingError::Internal {
-            message: format!("begin delegation submitted transaction failed: {e}"),
-        })?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("begin delegation submitted transaction failed: {e}"),
+            })?;
         let stored = queries::get_delegation_tx_hash(&tx, round_id, &wallet_id, bundle_index)?;
         check_text_conflict(stored.as_deref(), tx_hash, "delegation tx_hash")?;
         queries::store_delegation_tx_hash(&tx, round_id, &wallet_id, bundle_index, tx_hash)?;
@@ -1389,9 +1404,11 @@ impl VotingDb {
     ) -> Result<(), VotingError> {
         let wallet_id = self.wallet_id();
         let mut conn = self.conn();
-        let tx = conn.transaction().map_err(|e| VotingError::Internal {
-            message: format!("begin vote submitted transaction failed: {e}"),
-        })?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("begin vote submitted transaction failed: {e}"),
+            })?;
         let stored =
             queries::get_vote_tx_hash(&tx, round_id, &wallet_id, bundle_index, proposal_id)?;
         check_text_conflict(stored.as_deref(), tx_hash, "vote tx_hash")?;
@@ -1495,12 +1512,9 @@ impl VotingDb {
 
     // --- Share delegation tracking ---
 
-    /// Record a share delegation after sending to helper servers.
-    ///
-    /// This raw storage helper is crate-internal because callers must provide a
-    /// nullifier that matches the persisted vote recovery bundle. Wallet
-    /// integrations should use `share::record`, which derives that nullifier
-    /// from recovery state.
+    /// Records helper-share state for tests and integration fixtures.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_share_delegation(
         &self,
         round_id: &str,
@@ -1511,10 +1525,15 @@ impl VotingDb {
         nullifier: &[u8],
         submit_at: u64,
     ) -> Result<(), VotingError> {
-        let conn = self.conn();
         let wallet_id = self.wallet_id();
+        let mut conn = self.conn();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("begin share delegation transaction failed: {e}"),
+            })?;
         queries::record_share_delegation(
-            &conn,
+            &tx,
             round_id,
             &wallet_id,
             bundle_index,
@@ -1523,7 +1542,10 @@ impl VotingDb {
             sent_to_urls,
             nullifier,
             submit_at,
-        )
+        )?;
+        tx.commit().map_err(|e| VotingError::Internal {
+            message: format!("commit share delegation transaction failed: {e}"),
+        })
     }
 
     /// Load all share delegations for a round.
@@ -1563,16 +1585,24 @@ impl VotingDb {
         proposal_id: u32,
         share_index: u32,
     ) -> Result<(), VotingError> {
-        let conn = self.conn();
         let wallet_id = self.wallet_id();
+        let mut conn = self.conn();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("begin share confirmation transaction failed: {e}"),
+            })?;
         queries::mark_share_confirmed(
-            &conn,
+            &tx,
             round_id,
             &wallet_id,
             bundle_index,
             proposal_id,
             share_index,
-        )
+        )?;
+        tx.commit().map_err(|e| VotingError::Internal {
+            message: format!("commit share confirmation transaction failed: {e}"),
+        })
     }
 
     /// Append new server URLs to a share delegation's sent_to_urls.
@@ -1584,17 +1614,25 @@ impl VotingDb {
         share_index: u32,
         new_urls: &[String],
     ) -> Result<(), VotingError> {
-        let conn = self.conn();
         let wallet_id = self.wallet_id();
+        let mut conn = self.conn();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| VotingError::Internal {
+                message: format!("begin sent-server update transaction failed: {e}"),
+            })?;
         queries::add_sent_servers(
-            &conn,
+            &tx,
             round_id,
             &wallet_id,
             bundle_index,
             proposal_id,
             share_index,
             new_urls,
-        )
+        )?;
+        tx.commit().map_err(|e| VotingError::Internal {
+            message: format!("commit sent-server update transaction failed: {e}"),
+        })
     }
 }
 
@@ -1618,6 +1656,7 @@ fn check_text_conflict(
 mod tests {
     use super::*;
     use crate::types::VotingHotkey;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     // 64 hex chars = 32 bytes when decoded. Required because build_governance_pczt
     // hex-decodes vote_round_id and validates it as exactly 32 bytes (a Pallas field element).
@@ -1626,6 +1665,13 @@ mod tests {
     const TESTNET_NU6_SNAPSHOT_HEIGHT: u64 = 3_536_500;
     const TESTNET_NU6_BRANCH_ID: u32 = 0x4DEC_4DF0;
     const REGTEST_NU6_3_SNAPSHOT_HEIGHT: u64 = crate::types::REGTEST_NU6_3_ACTIVATION_HEIGHT as u64;
+    static SQLITE_BUSY_OBSERVED: AtomicBool = AtomicBool::new(false);
+
+    fn signal_sqlite_busy(_attempt: i32) -> bool {
+        SQLITE_BUSY_OBSERVED.store(true, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        true
+    }
 
     fn test_db() -> VotingDb {
         let db = VotingDb::open(":memory:").unwrap();
@@ -3490,6 +3536,83 @@ mod tests {
             fields,
             Some((Some(r#"{"bundle":"pending"}"#.to_string()), None))
         );
+    }
+
+    #[test]
+    fn vote_submission_waits_for_a_competing_wal_writer() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "zcash-voting-immediate-submission-{}-{unique}.sqlite",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        let db_a = VotingDb::open(&path_string).unwrap();
+        db_a.set_wallet_id(W);
+        db_a.init_round(Network::Testnet, &test_params(), None)
+            .unwrap();
+        db_a.ensure_bundles(ROUND_ID, &[identity_test_note()])
+            .unwrap();
+        db_a.insert_vote_fixture(ROUND_ID, 0, 1, 0, &[0xAA; 32])
+            .unwrap();
+
+        let db_b = VotingDb::open(&path_string).unwrap();
+        db_b.set_wallet_id(W);
+        db_a.conn().busy_handler(Some(signal_sqlite_busy)).unwrap();
+
+        let mut writer_conn = db_b.conn();
+        let writer_tx = writer_conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        writer_tx
+            .execute(
+                "UPDATE rounds SET phase = 1 WHERE round_id = ?1 AND wallet_id = ?2",
+                rusqlite::params![ROUND_ID, W],
+            )
+            .unwrap();
+
+        SQLITE_BUSY_OBSERVED.store(false, Ordering::SeqCst);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                result_tx
+                    .send(db_a.record_vote_submission(ROUND_ID, 0, 1, "vote-tx"))
+                    .unwrap();
+            });
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !SQLITE_BUSY_OBSERVED.load(Ordering::SeqCst) {
+                if let Ok(result) = result_rx.try_recv() {
+                    drop(writer_tx);
+                    panic!("vote submission completed before SQLite contention: {result:?}");
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "vote submission never reached SQLite contention"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+
+            writer_tx.commit().unwrap();
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+        });
+
+        assert_eq!(
+            db_a.get_vote_tx_hash(ROUND_ID, 0, 1).unwrap().as_deref(),
+            Some("vote-tx")
+        );
+
+        drop(writer_conn);
+        drop(db_b);
+        drop(db_a);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{path_string}-shm"));
+        let _ = std::fs::remove_file(format!("{path_string}-wal"));
     }
 
     #[test]
