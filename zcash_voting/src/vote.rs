@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use rusqlite::{named_params, OptionalExtension};
+use rusqlite::{named_params, OptionalExtension, TransactionBehavior};
 
 use crate::{
     round::VotingDb,
@@ -759,16 +759,24 @@ pub fn record_vc_position(
     proposal_id: u32,
     vc_tree_position: u64,
 ) -> Result<(), VotingError> {
-    let conn = db.conn();
     let wallet_id = db.wallet_id();
+    let mut conn = db.conn();
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| VotingError::Internal {
+            message: format!("begin vote VC position transaction failed: {e}"),
+        })?;
     record_vc_position_with_conn(
-        &conn,
+        &tx,
         &wallet_id,
         round_id,
         bundle_index,
         proposal_id,
         vc_tree_position,
-    )
+    )?;
+    tx.commit().map_err(|e| VotingError::Internal {
+        message: format!("commit vote VC position transaction failed: {e}"),
+    })
 }
 
 pub(crate) fn record_vc_position_with_conn(
@@ -866,6 +874,16 @@ pub fn recovery_bundle(
 ) -> Result<Option<VoteRecoveryBundle>, VotingError> {
     let conn = db.conn();
     let wallet_id = db.wallet_id();
+    recovery_bundle_with_conn(&conn, &wallet_id, round_id, bundle_index, proposal_id)
+}
+
+pub(crate) fn recovery_bundle_with_conn(
+    conn: &rusqlite::Connection,
+    wallet_id: &str,
+    round_id: &str,
+    bundle_index: u32,
+    proposal_id: u32,
+) -> Result<Option<VoteRecoveryBundle>, VotingError> {
     let json: Option<Option<String>> = conn
         .query_row(
             "SELECT commitment_bundle_json FROM votes
