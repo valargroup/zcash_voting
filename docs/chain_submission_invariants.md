@@ -1148,6 +1148,29 @@ reuse across restart and concurrent creation. Hotkey target validation uses the
 action spend nullifier as the output note rho, including its encoded address
 sign, and the same real-PCZT tests exercise that binding.
 
+## Version 21 to version 22
+
+Legacy bundles without an original PCZT are reconciled in the migration
+transaction. Any submission row for the same wallet, round, and bundle blocks
+all reconciliation, including hashless, recovering, and rejected rows. Domain
+transaction hashes, VAN positions, imported bundles, votes, and helper-share
+records also preserve their delegation setup unchanged.
+
+For the remaining local legacy bundles, successful proofs are demoted while
+retaining their bytes and setup. Invalid or mismatched signatures are removed;
+valid signatures are retained. Setup is cleared only if neither proof bytes nor
+a signature remain. The migration cannot reconstruct a lost PCZT for preserved
+proof-bearing state, and does not authorize deleting that state or resubmitting
+it. Software proving may reuse the preserved setup; a new Keystone request
+still requires explicit reconciliation when the original PCZT is unavailable.
+
+`migrate_v21_repairs_legacy_setup_proofs_and_signatures` covers local cleanup,
+valid signature retention, proof preservation, and rebuilding cleared setup.
+`migration_preserves_every_submission_state_and_nonlocal_bundle` covers all six
+submission states with and without proof bytes, imported and completed bundles,
+and current PCZT storage. The launch migration regression preserves existing
+helper-share evidence and its associated delegation secrets.
+
 ## Removed legacy APIs
 
 The public API does not expose:

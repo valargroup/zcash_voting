@@ -68,7 +68,7 @@ fn v16_schema() -> String {
     without_helper_share_plans(&without_chain_submissions(&v20_schema()))
 }
 
-fn v17_schema() -> String {
+pub(super) fn v17_schema() -> String {
     without_chain_submissions(&v20_schema())
 }
 
@@ -134,9 +134,9 @@ fn launch_schema() -> String {
 
 /// A canonical 32-byte Pallas round id, so fixtures form real lifecycle
 /// identities exactly as a released version-17 database does.
-const ROUND: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+pub(super) const ROUND: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
-fn test_params() -> VotingRoundParams {
+pub(super) fn test_params() -> VotingRoundParams {
     VotingRoundParams {
         vote_round_id: ROUND.to_string(),
         snapshot_height: 1000,
@@ -572,7 +572,7 @@ fn is_constraint_violation(error: &rusqlite::Error) -> bool {
 }
 
 /// Serializes every row of one table so before/after images can be compared.
-fn dump_table(conn: &Connection, table: &str) -> Vec<Vec<String>> {
+pub(super) fn dump_table(conn: &Connection, table: &str) -> Vec<Vec<String>> {
     let mut statement = conn.prepare(&format!("SELECT * FROM {table}")).unwrap();
     let column_count = statement.column_count();
     statement
@@ -757,8 +757,13 @@ fn v17_projectionless_proved_delegation_remains_fresh_work() {
     );
     assert_eq!(
         db.delegation_phase(ROUND, 0).unwrap(),
-        crate::phases::DelegationPhase::Proved
+        crate::phases::DelegationPhase::PcztBuilt
     );
+    let (proof, success): (Vec<u8>, bool) = db.conn().query_row(
+        "SELECT proof, success FROM proofs WHERE round_id=?1 AND wallet_id='wallet' AND bundle_index=0",
+        [ROUND], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+    assert_eq!(proof, vec![0x10; 96]);
+    assert!(!success);
     let plan = crate::session::resume_plan(&db, ROUND, &[1]).unwrap();
     assert!(plan
         .next_steps
@@ -1349,7 +1354,7 @@ fn test_bundle_data_columns_exist() {
     assert_eq!(tx1_effects, vec![0x44]);
 }
 
-fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
+pub(super) fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
     conn.prepare(&format!("PRAGMA table_info({table})"))
         .unwrap()
         .query_map([], |row| row.get(1))

@@ -2,7 +2,9 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use crate::VotingError;
 
-const CURRENT_VERSION: u32 = 21;
+mod legacy_delegation;
+
+const CURRENT_VERSION: u32 = 22;
 
 /// Schema version that `001_init.sql` produces, and the oldest version that can
 /// be upgraded in place.
@@ -136,6 +138,7 @@ END;",
         include_str!("migrations/004_round_immediate_share.sql"),
     ),
     (20, "ALTER TABLE bundles ADD COLUMN delegation_pczt BLOB;"),
+    (21, "-- Reconcile legacy local delegation evidence in Rust."),
 ];
 
 const RESET_SQL: &str = "DROP TABLE IF EXISTS pir_proof_cache;
@@ -205,6 +208,9 @@ pub fn migrate(conn: &mut Connection) -> Result<(), VotingError> {
                     &e,
                 )
             })?;
+            if *from == 21 {
+                legacy_delegation::reconcile(&tx)?;
+            }
             upgraded = from + 1;
         }
         if upgraded != CURRENT_VERSION {
@@ -294,3 +300,6 @@ fn migration_error(error: rusqlite::Error) -> VotingError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod legacy_delegation_tests;

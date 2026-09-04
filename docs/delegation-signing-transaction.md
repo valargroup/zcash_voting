@@ -560,3 +560,10 @@ integrity” in section 4.18.4 of the NU6.3 proposal snapshot
 Regression coverage lives in `delegate/tests/keystone.rs`: request reuse after
 setup and restart, concurrent request creation, legacy rejection without
 rebuilding, and changed-note, changed-target, and corrupt-PCZT rejection.
+
+Schema 22 reconciles legacy local bundles without original PCZT bytes. It
+preserves any submission or downstream vote evidence. Invalid local signatures
+are removed, successful legacy proofs are demoted with their bytes retained,
+and only unsigned proofless setup is cleared. Preserved proof-bearing or signed
+Keystone setup still needs explicit reconciliation if its original PCZT was
+lost; migration does not invent a replacement transaction.

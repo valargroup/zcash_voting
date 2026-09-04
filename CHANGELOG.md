@@ -16,7 +16,10 @@ This release is `zcash_voting` 4.0.0.
   nullable PCZT storage without changing existing state; legacy requests
   without the original PCZT return `DelegationReconciliationRequired`.
   Target validation reconstructs the output note with the action spend
-  nullifier, matching the transaction builder.
+  nullifier, matching the transaction builder. Schema 22 reconciles legacy
+  local setup without an original PCZT. It preserves submission records,
+  downstream vote evidence, proof bytes, and valid signatures; only unbound
+  proofless setup is cleared for rebuilding.
 
 - `RoundExecutor` executes any planner `NextStep` for a bound round: it
   proves and signs delegations through a `DelegationDriver`, re-signs and
