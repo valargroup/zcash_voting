@@ -10,6 +10,14 @@ This release is `zcash_voting` 4.0.0.
 
 ### Added
 
+- Persist exact delegation PCZTs for Keystone ZKP1 warmup and signing after
+  restart. Repeated signing requests reuse the original transaction and
+  validate its notes, target, sighash, and randomized key. Schema 21 adds
+  nullable PCZT storage without changing existing state; legacy requests
+  without the original PCZT return `DelegationReconciliationRequired`.
+  Target validation reconstructs the output note with the action spend
+  nullifier, matching the transaction builder.
+
 - `RoundExecutor` executes any planner `NextStep` for a bound round: it
   proves and signs delegations through a `DelegationDriver`, re-signs and
   advances in-flight delegations, casts every draft of a bundle (tree sync,

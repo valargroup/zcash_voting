@@ -93,10 +93,11 @@ fn seed_wallet(db: &VotingDb, wallet_id: &str, proof_byte: u8) {
     )
     .unwrap();
     let rho_signed = pallas::Base::from(7).to_repr();
+    let nf_signed = pallas::Base::from(u64::from(proof_byte) + 1).to_repr();
     let rseed_output = [0x44; 32];
     let cmx_new = crate::action::derive_governance_output_cmx(
         &delegation_keys.hotkey_raw_address,
-        &rho_signed,
+        &nf_signed,
         &rseed_output,
         Network::Testnet,
         params.snapshot_height,
@@ -114,7 +115,7 @@ fn seed_wallet(db: &VotingDb, wallet_id: &str, proof_byte: u8) {
         &[],
         &rho_signed,
         &[],
-        &[proof_byte.wrapping_add(1); 32],
+        &nf_signed,
         &cmx_new,
         &[0x42; 32],
         &[0x43; 32],
@@ -136,7 +137,7 @@ fn seed_wallet(db: &VotingDb, wallet_id: &str, proof_byte: u8) {
         0,
         &[proof_byte.wrapping_add(4); 32],
         &gov_nullifiers,
-        &[proof_byte.wrapping_add(1); 32],
+        &nf_signed,
         &cmx_new,
         &gov_comm,
     )

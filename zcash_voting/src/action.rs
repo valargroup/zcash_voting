@@ -121,7 +121,7 @@ pub fn derive_hotkey_x_coords_from_raw_address(
 /// including its y-coordinate sign bit.
 pub(crate) fn derive_governance_output_cmx(
     hotkey_raw_address: &[u8; 43],
-    rho_signed: &[u8; 32],
+    nf_signed: &[u8; 32],
     rseed_output: &[u8; 32],
     network: VotingNetwork,
     snapshot_height: u64,
@@ -131,15 +131,16 @@ pub(crate) fn derive_governance_output_cmx(
         .ok_or_else(|| VotingError::InvalidInput {
             message: "hotkey_raw_address is not a valid Orchard address".to_string(),
         })?;
-    let rho = Rho::from_bytes(rho_signed)
+    // The output rho is the nullifier of the spend in this same action.
+    let rho = Rho::from_bytes(nf_signed)
         .into_option()
         .ok_or_else(|| VotingError::Internal {
-            message: "stored rho_signed is not a valid Orchard Rho".to_string(),
+            message: "stored nf_signed is not a valid Orchard Rho".to_string(),
         })?;
     let rseed = RandomSeed::from_bytes(*rseed_output, &rho)
         .into_option()
         .ok_or_else(|| VotingError::Internal {
-            message: "stored rseed_output is not valid for rho_signed".to_string(),
+            message: "stored rseed_output is not valid for nf_signed".to_string(),
         })?;
     let consensus_branch_id = crate::lwd::branch_id_for_height(network, snapshot_height)?;
     let branch_id =
@@ -775,6 +776,37 @@ pub fn extract_pczt_sighash(pczt_bytes: &[u8]) -> Result<[u8; 32], VotingError> 
         message: format!("Failed to create Signer from PCZT: {:?}", e),
     })?;
     Ok(signer.shielded_sighash())
+}
+
+/// Locate the persisted governance action bound to `expected_rk`.
+pub(crate) fn delegation_pczt_action_index(
+    pczt_bytes: &[u8],
+    expected_rk: &[u8; 32],
+) -> Result<usize, VotingError> {
+    let pczt = pczt::Pczt::parse(pczt_bytes).map_err(|e| VotingError::Internal {
+        message: format!("failed to parse persisted delegation PCZT: {e:?}"),
+    })?;
+    let (actions, protocol) = signed_pczt_actions(&pczt)?;
+    let matches = actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| {
+            let rk = *action.spend().rk();
+            (rk == *expected_rk).then_some(index)
+        })
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(VotingError::Internal {
+            message: format!("persisted delegation PCZT has no matching {protocol} rk"),
+        }),
+        _ => Err(VotingError::Internal {
+            message: format!(
+                "persisted delegation PCZT has multiple matching {protocol} rk values"
+            ),
+        }),
+    }
 }
 
 /// Extract the spend_auth_sig from a signed PCZT.

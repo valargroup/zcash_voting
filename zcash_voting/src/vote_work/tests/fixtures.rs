@@ -400,10 +400,14 @@ pub(super) fn executor_ready_to_cast_with_hotkey_and_control(
             pallas::Base::from(9u64).to_repr(),
         )
     };
+    let nf_signed = {
+        use crate::backend::pasta_curves::{group::ff::PrimeField, pallas};
+        pallas::Base::from(6u64).to_repr()
+    };
     let rseed_output = [0x47u8; 32];
     let cmx_new = crate::action::derive_governance_output_cmx(
         target.raw_orchard_address(),
-        &rho_signed,
+        &nf_signed,
         &rseed_output,
         network,
         round_params.snapshot_height,
@@ -431,7 +435,7 @@ pub(super) fn executor_ready_to_cast_with_hotkey_and_control(
         &[],
         &rho_signed,
         &[],
-        &[0x43; 32],
+        &nf_signed,
         &cmx_new,
         &[0x45; 32],
         &[0x46; 32],

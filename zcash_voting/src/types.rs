@@ -41,6 +41,8 @@ pub enum DelegationSetupField {
     PaddedNoteSecrets,
     PcztSighash,
     Tx1Effects,
+    /// Exact serialized PCZT for a later external signing request.
+    DelegationPczt,
 }
 
 impl DelegationSetupField {
@@ -50,6 +52,7 @@ impl DelegationSetupField {
             Self::PaddedNoteSecrets => "padded_note_secrets",
             Self::PcztSighash => "pczt_sighash",
             Self::Tx1Effects => "tx1_effects",
+            Self::DelegationPczt => "delegation_pczt",
         }
     }
 }
@@ -77,6 +80,7 @@ pub enum VotingErrorKind {
     InsufficientEligibility,
     NoSpendableNotes,
     SetupAlreadyPersisted,
+    DelegationReconciliationRequired,
     DbBusy,
     PirUnavailable,
 }
@@ -104,6 +108,9 @@ fn pir_endpoint_suffix(endpoint: &Option<String>) -> String {
 
 #[derive(Debug, Error)]
 pub enum VotingError {
+    /// Legacy setup cannot produce the exact original Keystone signing request.
+    #[error("delegation for round={round_id}, bundle={bundle_index} needs reconciliation before a new Keystone signing request can be created")]
+    DelegationReconciliationRequired { round_id: String, bundle_index: u32 },
     #[error("Invalid input: {message}")]
     InvalidInput { message: String },
     #[error("Keystone signature conflict for bundle {bundle_index}")]
@@ -172,6 +179,9 @@ impl VotingError {
             Self::InsufficientEligibility { .. } => VotingErrorKind::InsufficientEligibility,
             Self::NoSpendableNotes { .. } => VotingErrorKind::NoSpendableNotes,
             Self::SetupAlreadyPersisted { .. } => VotingErrorKind::SetupAlreadyPersisted,
+            Self::DelegationReconciliationRequired { .. } => {
+                VotingErrorKind::DelegationReconciliationRequired
+            }
             Self::DbBusy { .. } => VotingErrorKind::DbBusy,
             Self::PirUnavailable { .. } => VotingErrorKind::PirUnavailable,
         }

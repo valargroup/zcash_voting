@@ -1132,6 +1132,22 @@ re-derives once it exists
 `the_designation_is_voided_with_its_undispatched_generation_but_not_by_confirmation`,
 `a_persisted_immediate_designation_survives_its_proposal_leaving_the_roster`).
 
+## Version 20 to version 21
+
+Version 21 adds nullable `bundles.delegation_pczt`. Existing rows are preserved;
+only newly prepared delegation setups persist the exact finalized PCZT.
+Keystone signing requests reload it and validate it against the durable signing
+fields. The PCZT is not added to the semantic generation digest and does not
+become submission authority. Legacy software signing and chain reconciliation
+continue using their existing authoritative fields. A missing original PCZT
+prevents creating a new Keystone request, rather than authorizing a reset.
+
+Fresh and migrated schemas match, and the existing domain-evidence preservation
+test includes the new null column. `delegate/tests/keystone.rs` covers request
+reuse across restart and concurrent creation. Hotkey target validation uses the
+action spend nullifier as the output note rho, including its encoded address
+sign, and the same real-PCZT tests exercise that binding.
+
 ## Removed legacy APIs
 
 The public API does not expose:

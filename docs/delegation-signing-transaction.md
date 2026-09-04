@@ -542,3 +542,21 @@ The complete caller-oriented flows are implemented in
 
 [prepared]: ../zcash_voting/src/delegate.rs
 [example]: ../wallet-example/src/example_delegation.rs
+
+## Durable Keystone requests
+
+Setup stores the exact finalized PCZT atomically with its signing fields.
+Keystone request creation reloads those bytes, including after background ZKP1
+or restart, and validates the selected notes, hotkey target, sighash, and unique
+matching randomized key. It never substitutes newly randomized bytes for an
+existing setup. Schema 21 adds this nullable field; legacy rows without the
+original transaction fail with `DelegationReconciliationRequired`.
+
+Output target validation uses the action spend nullifier as the output note's
+rho, as the transaction builder does. This follows “New note commitment
+integrity” in section 4.18.4 of the NU6.3 proposal snapshot
+`v2026.7.0-187-ge753a6` ([pinned source](https://github.com/zcash/zips/blob/e753a6a301912cf77202db8f0d840f4796f5cca1/protocol/protocol.tex#L8104-L8110)).
+
+Regression coverage lives in `delegate/tests/keystone.rs`: request reuse after
+setup and restart, concurrent request creation, legacy rejection without
+rebuilding, and changed-note, changed-target, and corrupt-PCZT rejection.

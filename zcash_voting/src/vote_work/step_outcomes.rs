@@ -103,7 +103,9 @@ impl<T: ChainTransport> RoundExecutor<T> {
         ledger: &StepLedger,
     ) -> RoundStepFailure {
         let kind = match error.kind() {
-            VotingErrorKind::InvalidInput | VotingErrorKind::SetupAlreadyPersisted => {
+            VotingErrorKind::InvalidInput
+            | VotingErrorKind::SetupAlreadyPersisted
+            | VotingErrorKind::DelegationReconciliationRequired => {
                 RoundStepFailureKind::InvalidInput
             }
             VotingErrorKind::InsufficientEligibility => {
