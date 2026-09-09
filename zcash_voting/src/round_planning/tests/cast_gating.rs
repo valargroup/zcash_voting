@@ -113,24 +113,27 @@ fn only_a_cast_that_signs_its_own_delegation_owes_the_voter_key() {
     // place that decides it. A fresh combined cast signs its delegation; an
     // already-confirmed one has nothing left to sign; and an imported
     // capability is on the chain already while this wallet holds no delegation
-    // key to offer, whether or not the plan also carries a step to advance it.
-    let snapshot = snapshot()
+    // key to offer.
+    let local = snapshot()
         .bundle(0, DelegationPhase::Proved)
         .bundle(1, DelegationPhase::Confirmed)
-        .imported_bundle(2, DelegationPhase::Submitted)
+        .intent(1, Decision::Choice(0))
+        .build();
+    let imported = snapshot()
+        .imported_bundle(2, DelegationPhase::Confirmed)
         .imported_bundle(3, DelegationPhase::Confirmed)
         .intent(1, Decision::Choice(0))
         .build();
-    let obligations = classify_round(&snapshot, &[1]).unwrap().obligations;
 
-    let signing = obligations
-        .iter()
+    let signing = [local, imported]
+        .into_iter()
+        .flat_map(|snapshot| classify_round(&snapshot, &[1]).unwrap().obligations)
         .filter_map(|obligation| match obligation {
             Obligation::Cast {
                 bundle_index,
                 signs_delegation,
                 ..
-            } => Some((*bundle_index, *signs_delegation)),
+            } => Some((bundle_index, signs_delegation)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -139,6 +142,55 @@ fn only_a_cast_that_signs_its_own_delegation_owes_the_voter_key() {
         vec![(0, true), (1, false), (2, false), (3, false)],
         "only the fresh locally prepared delegation is signed by its cast"
     );
+}
+
+#[test]
+fn an_imported_round_withholds_every_cast_until_every_delegation_confirms() {
+    let waiting = snapshot()
+        .bundle(0, DelegationPhase::Prepared)
+        .imported_bundle(1, DelegationPhase::Submitted)
+        .intent(1, Decision::Choice(0))
+        .build();
+    let obligations = classify_round(&waiting, &[1]).unwrap();
+
+    assert!(
+        !obligations
+            .obligations
+            .iter()
+            .any(|obligation| matches!(obligation, Obligation::Cast { .. })),
+        "{:?}",
+        obligations.obligations
+    );
+    assert_eq!(obligations.withheld_casts, [1].into());
+    assert!(obligations
+        .obligations
+        .iter()
+        .any(|obligation| matches!(obligation, Obligation::Delegate { bundle_index: 0 })));
+    assert!(obligations.obligations.iter().any(|obligation| matches!(
+        obligation,
+        Obligation::AdvanceDelegation {
+            bundle_index: 1,
+            imported: true,
+            ..
+        }
+    )));
+
+    let confirmed = snapshot()
+        .bundle(0, DelegationPhase::Confirmed)
+        .imported_bundle(1, DelegationPhase::Confirmed)
+        .intent(1, Decision::Choice(0))
+        .build();
+    let obligations = classify_round(&confirmed, &[1]).unwrap();
+    let cast_bundles = obligations
+        .obligations
+        .iter()
+        .filter_map(|obligation| match obligation {
+            Obligation::Cast { bundle_index, .. } => Some(*bundle_index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cast_bundles, vec![0, 1]);
+    assert!(obligations.withheld_casts.is_empty());
 }
 
 #[test]

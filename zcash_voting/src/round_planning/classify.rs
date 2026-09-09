@@ -147,7 +147,8 @@ pub(crate) struct RoundObligations {
     pub(crate) needs_bundle_setup: bool,
     /// Rostered proposals that still owe a cast this pass could not plan:
     /// the ballot is not yet terminal, the bundle is held by a vote already
-    /// on the wire, the round has no bundle rows at all, or the proposal's
+    /// on the wire, an imported capability round still has an unconfirmed
+    /// delegation, the round has no bundle rows at all, or the proposal's
     /// undispatched batch is waiting on a member the ballot has not decided.
     ///
     /// They own no obligation, so nothing else names them. A progress measure
@@ -208,6 +209,17 @@ pub(crate) fn classify(
     // for a proposal outside the authenticated roster. The durable intents
     // must exactly match the roster before a cast is planned.
     let roster_is_terminal = open_proposals.is_empty() && unrostered_intents.is_empty();
+    // Importing one capability makes delegation confirmation a round-wide
+    // vote-creation prerequisite. The storage boundary enforces the same rule,
+    // so classification must not expose a cast that can only fail there while
+    // another bundle is still being confirmed.
+    let imported_round_waits_for_delegations = snapshot
+        .bundles
+        .values()
+        .any(|bundle| bundle.capability_imported)
+        && delegation
+            .values()
+            .any(|phase| *phase != DelegationPhase::Confirmed);
 
     let stale_vote_keys: BTreeSet<(u32, u32)> = snapshot
         .votes
@@ -380,9 +392,15 @@ pub(crate) fn classify(
                     withheld_casts.insert(proposal_id);
                     continue;
                 }
+                // Delegation preparation remains independently useful while
+                // the round-wide import barrier withholds vote creation.
+                bundles_needing_delegation.insert(bundle_index);
+                if imported_round_waits_for_delegations {
+                    withheld_casts.insert(proposal_id);
+                    continue;
+                }
                 // Delegation is a prerequisite either way, so it is still
                 // planned while the voter decides the rest of the roster.
-                bundles_needing_delegation.insert(bundle_index);
                 if roster_is_terminal {
                     drafts.entry(bundle_index).or_default().push(CastDraft {
                         proposal_id,
