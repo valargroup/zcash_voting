@@ -16,8 +16,8 @@ pub(super) use crate::{
     },
     session::{Decision, NextStep},
     BallotIntent, ChainAdvancePolicy, ChainSubmissionClientConfig, ChainSubmissionControl,
-    HelperClient, HelperFuture, HelperHealth, HelperResponse, HelperTransport, HyperTransport,
-    Network, ProposalRosterEntry, RoundBinding, RoundExecutor, RoundHostContext,
+    ChainTransport, HelperClient, HelperFuture, HelperHealth, HelperResponse, HelperTransport,
+    HyperTransport, Network, ProposalRosterEntry, RoundBinding, RoundExecutor, RoundHostContext,
 };
 
 pub(super) const WALLET_ID: &str = "wallet";
@@ -572,31 +572,45 @@ pub(super) fn executor_over_unreachable_chain(
 /// The transaction hash the imported delegation below is adopted from.
 pub(super) const IMPORTED_TX_HASH: &str =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+pub(super) const SECOND_IMPORTED_TX_HASH: &str =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 /// A sidecar whose single bundle carries an already-broadcast delegation, so
 /// the plan lists `AdvanceImportedDelegation` and nothing else.
 pub(super) fn database_with_imported_delegation() -> Arc<crate::round::VotingDb> {
+    database_with_imported_delegations(&[IMPORTED_TX_HASH])
+}
+
+/// A sidecar with two independently confirmable imported delegations.
+pub(super) fn database_with_two_imported_delegations() -> Arc<crate::round::VotingDb> {
+    database_with_imported_delegations(&[IMPORTED_TX_HASH, SECOND_IMPORTED_TX_HASH])
+}
+
+fn database_with_imported_delegations(transaction_hashes: &[&str]) -> Arc<crate::round::VotingDb> {
     let database = Arc::new(crate::round::VotingDb::open_in_memory().unwrap());
     database.set_wallet_id(WALLET_ID);
     database
         .create_round(Network::Testnet, &round_params(), None)
         .unwrap();
-    database
-        .conn()
-        .execute(
-            "INSERT INTO bundles
+    for (bundle_index, transaction_hash) in transaction_hashes.iter().enumerate() {
+        database
+            .conn()
+            .execute(
+                "INSERT INTO bundles
              (round_id, wallet_id, bundle_index, van_comm_rand, gov_comm,
               total_note_value, address_index, delegation_tx_hash)
-             VALUES (:round, :wallet, 0, :randomizer, :commitment, 100000000, 0, :hash)",
-            rusqlite::named_params! {
-                ":round": ROUND_ID,
-                ":wallet": WALLET_ID,
-                ":randomizer": vec![0x21_u8; 32],
-                ":commitment": vec![0x31_u8; 32],
-                ":hash": IMPORTED_TX_HASH,
-            },
-        )
-        .unwrap();
+             VALUES (:round, :wallet, :bundle, :randomizer, :commitment, 100000000, 0, :hash)",
+                rusqlite::named_params! {
+                    ":round": ROUND_ID,
+                    ":wallet": WALLET_ID,
+                    ":bundle": bundle_index as i64,
+                    ":randomizer": vec![0x21_u8 + bundle_index as u8; 32],
+                    ":commitment": vec![0x31_u8 + bundle_index as u8; 32],
+                    ":hash": transaction_hash,
+                },
+            )
+            .unwrap();
+    }
     database
 }
 
@@ -605,6 +619,14 @@ pub(super) fn executor_over_chain(
     database: Arc<crate::round::VotingDb>,
     chain: Arc<ScriptedChain>,
 ) -> RoundExecutor<Arc<ScriptedChain>> {
+    executor_over_imported_chain(database, chain)
+}
+
+/// An executor over imported delegation state and a caller-supplied chain.
+pub(super) fn executor_over_imported_chain<T: ChainTransport>(
+    database: Arc<crate::round::VotingDb>,
+    chain: T,
+) -> RoundExecutor<T> {
     let helper_client = HelperClient::new(Arc::new(HyperTransport::new()), HelperHealth::default());
     RoundExecutor::with_transport(
         database,

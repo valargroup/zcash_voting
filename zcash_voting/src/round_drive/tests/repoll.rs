@@ -4,6 +4,57 @@ use super::fixtures::*;
 
 use crate::round_drive::run_loop::{repoll_delay, sleep_until_interrupted};
 
+#[derive(Default)]
+struct StaggeredImportedChain {
+    polls: Mutex<[usize; 2]>,
+}
+
+impl StaggeredImportedChain {
+    fn confirmed(position: u64) -> crate::ChainHttpResponse {
+        crate::ChainHttpResponse::json(
+            200,
+            format!(
+                r#"{{"height":"42","code":0,"log":"","events":[{{"type":"delegate_vote","attributes":[{{"key":"vote_round_id","value":"{ROUND_ID}","index":true}},{{"key":"leaf_index","value":"{position}","index":true}}]}}]}}"#
+            )
+            .into_bytes(),
+        )
+    }
+}
+
+impl crate::ChainTransport for Arc<StaggeredImportedChain> {
+    fn chain_get<'a>(
+        &'a self,
+        request: crate::ChainHttpRequest,
+    ) -> crate::ChainTransportFuture<'a> {
+        let mut polls = self.polls.lock().unwrap();
+        let response = if request.url().contains(IMPORTED_TX_HASH) {
+            polls[0] += 1;
+            StaggeredImportedChain::confirmed(7)
+        } else {
+            assert!(
+                request.url().contains(SECOND_IMPORTED_TX_HASH),
+                "unexpected imported transaction URL: {}",
+                request.url()
+            );
+            polls[1] += 1;
+            if polls[1] == 1 {
+                crate::ChainHttpResponse::json(404, br#"{"error":"tx not found"}"#.to_vec())
+            } else {
+                StaggeredImportedChain::confirmed(8)
+            }
+        };
+        Box::pin(async move { Ok(response) })
+    }
+
+    fn chain_post_json<'a>(
+        &'a self,
+        _request: crate::ChainHttpRequest,
+        _json: Vec<u8>,
+    ) -> crate::ChainTransportFuture<'a> {
+        Box::pin(async move { panic!("imported delegation recovery never posts") })
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_deadline_expiring_after_selection_wakes_the_idle_driver() {
     let selected_at = tokio::time::Instant::now();
@@ -188,6 +239,68 @@ async fn a_tracking_submission_is_polled_again_after_the_repoll_wait() {
         report.quiescence
     );
     assert!(report.failures.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn staggered_imported_confirmations_withhold_casts_until_the_round_is_ready() {
+    let database = database_with_two_imported_delegations();
+    let chain = Arc::new(StaggeredImportedChain::default());
+    let executor = executor_over_imported_chain(Arc::clone(&database), Arc::clone(&chain));
+    executor
+        .set_ballot_intents(&[BallotIntent {
+            proposal_id: 1,
+            decision: Decision::Choice(0),
+        }])
+        .unwrap();
+
+    let control = ChainSubmissionControl::new(1);
+    let events = RecordingReporter::default();
+    let report = RoundDriver::new(&executor)
+        .with_policy(RoundDrivePolicy {
+            max_dispatches: 3,
+            ..RoundDrivePolicy::default()
+        })
+        .run(&SinglePassHost, &control, &events)
+        .await;
+
+    let selected = events
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            RoundDriveEvent::StepSelected { step } => Some(step.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected,
+        vec![
+            NextStep::AdvanceImportedDelegation { bundle_index: 0 },
+            NextStep::AdvanceImportedDelegation { bundle_index: 1 },
+            NextStep::AdvanceImportedDelegation { bundle_index: 1 },
+        ],
+        "bundle zero's cast must wait while bundle one's delegation is unconfirmed"
+    );
+    assert_eq!(*chain.polls.lock().unwrap(), [1, 2]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(report.skipped_bundles.is_empty());
+    assert_eq!(
+        report.plan.unwrap().next_steps,
+        vec![
+            NextStep::CastVote {
+                bundle_index: 0,
+                proposal_id: 1,
+                choice: 0,
+            },
+            NextStep::CastVote {
+                bundle_index: 1,
+                proposal_id: 1,
+                choice: 0,
+            },
+        ],
+        "both casts become eligible together after the final delegation confirms"
+    );
 }
 
 #[tokio::test(start_paused = true)]

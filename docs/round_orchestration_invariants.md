@@ -185,6 +185,15 @@ holder resolves. On a free bundle the cast is `Cast` when the ballot is
 **terminal** (no open proposal and no unrostered intent to clear) and
 otherwise `Blocked` with the reason.
 
+If any bundle came from an imported capability, fresh vote creation has one
+additional round-wide prerequisite: every delegation must be confirmed.
+Pending delegation work remains independently executable, but every otherwise
+due cast is a `withheld_cast` until the final delegation confirms. This keeps
+rolling bundle admission from dispatching a cast whose storage precondition
+cannot yet pass
+(`an_imported_round_withholds_every_cast_until_every_delegation_confirms`,
+`staggered_imported_confirmations_withhold_casts_until_the_round_is_ready`).
+
 `Blocked` is never projected as a `NextStep`; the plan reports it through
 `open_proposals`, `unrostered_intents` and the absence of a cast step.
 
@@ -854,6 +863,8 @@ Conformance is demonstrated by behavior. Tests cover:
 - a cast is `Blocked` while a proposal is open or an unrostered intent is
   clearable, and plans nothing while the bundle is held by a live committed,
   on-wire or hashless unit or a managed or terminal delegation;
+- an imported capability round withholds every fresh cast until every
+  delegation confirms, while continuing to plan each pending delegation;
 - mixed-phase batches, a vote claimed by two batches, a missing batch member,
   and conflicting batch hashes are invariant violations with the existing
   messages;
@@ -950,7 +961,10 @@ Conformance is demonstrated by behavior. Tests cover:
   (`a_submission_that_never_confirms_stops_at_the_dispatch_budget`); confirmed
   chain work awaiting ambiguous helper attempts is replanned rather than
   reported as stalled recovery
-  (`confirmed_chain_work_pending_on_helpers_is_replanned_not_stalled`);
+  (`confirmed_chain_work_pending_on_helpers_is_replanned_not_stalled`); when
+  two imported bundles confirm at different times, no cast is admitted between
+  those confirmations and both casts become eligible after the second
+  (`staggered_imported_confirmations_withhold_casts_until_the_round_is_ready`);
 - selection takes plan order, passes over an isolated bundle entirely, and
   prefers the step a re-poll named while the plan still lists it
   (`round_drive::tests::selection`);
