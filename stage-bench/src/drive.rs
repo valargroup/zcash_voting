@@ -256,6 +256,17 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
     // survive only a successful run cannot explain an unsuccessful one.
     save_snapshot(&config.run_dir, "round.observability.json", snapshot);
 
+    // Resolved for every mode, not just `immediate`: the report states how much
+    // of the round preceded this share, which is the whole point of dispatching
+    // it first.
+    let immediate_share = designated_share(&database, config);
+    if let Some(share) = immediate_share {
+        eprintln!(
+            "bench: the round's immediate share is bundle {}, proposal {}, share {}",
+            share.bundle_index, share.proposal_id, share.share_index
+        );
+    }
+
     let mut tracking = Vec::new();
     let tracking_started = Instant::now();
     let budget = Duration::from_secs(config.tracking_budget_seconds);
@@ -319,6 +330,7 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
         notes: selected.notes.len(),
         bundles: layout.bundle_count,
         proposals: config.ballot.len(),
+        immediate_share,
         completed_proposals: report.tally.completed_proposals as usize,
         tracking,
         round_drive_seconds,
@@ -512,6 +524,28 @@ fn placed_shares(database: &Arc<VotingDb>, round_id: &str) -> usize {
 ///
 /// A round with no designation — nothing delivered, or it is already confirmed
 /// — is reported rather than treated as a failure.
+/// The round's designated immediate share, from the executor's plan projection.
+///
+/// Read from the durable designation rather than recalculated over the ballot:
+/// `submit_at == 0` alone does not identify it.
+fn designated_share(
+    database: &Arc<VotingDb>,
+    config: &BenchRunConfig,
+) -> Option<crate::run_config::ShareIdentity> {
+    let plan = zcash_voting::session::resume_plan(
+        database,
+        &config.round_id,
+        &config.ballot.proposal_ids(),
+    )
+    .ok()?;
+    let key = plan.immediate_share_key?;
+    Some(crate::run_config::ShareIdentity {
+        bundle_index: key.bundle_index,
+        proposal_id: key.proposal_id,
+        share_index: key.share_index,
+    })
+}
+
 async fn confirm_immediate(
     database: &Arc<VotingDb>,
     config: &BenchRunConfig,

@@ -108,6 +108,26 @@ pub fn render(manifest: &Manifest, metrics: &Metrics) -> String {
         let _ = writeln!(out, "  POST statuses    {}", statuses.join(" "));
     }
 
+    if let Some(immediate) = &metrics.immediate_dispatch {
+        let _ = writeln!(
+            out,
+            "\n-- immediate share (bundle {}, proposal {}, share {}) --",
+            immediate.bundle_index, immediate.proposal_id, immediate.share_index
+        );
+        let _ = writeln!(
+            out,
+            "  {} of {} shares dispatched before it{}, {:.2}s after the first",
+            immediate.shares_dispatched_before,
+            immediate.shares_total,
+            if immediate.shares_dispatched_before == 0 {
+                "  <- first, as intended"
+            } else {
+                ""
+            },
+            immediate.dispatched_after_first_seconds,
+        );
+    }
+
     let _ = writeln!(out, "\n-- phases, by wall time --");
     let _ = writeln!(
         out,

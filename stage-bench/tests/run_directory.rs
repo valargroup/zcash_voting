@@ -61,6 +61,11 @@ fn outcome() -> BenchOutcome {
         notes: 11,
         bundles: 3,
         proposals: 37,
+        immediate_share: Some(stage_bench::run_config::ShareIdentity {
+            bundle_index: 2,
+            proposal_id: 1,
+            share_index: 0,
+        }),
         completed_proposals: 37,
         tracking: vec![TrackingSummary {
             quiescence: "NothingToTrack".to_string(),
@@ -347,6 +352,62 @@ fn the_default_confirmation_mode_is_the_wallets_and_is_named_in_the_report() {
     assert!(table.contains("concurrent"));
 
     let _ = std::fs::remove_dir_all(&run_dir);
+}
+
+/// The report states how much of the round preceded the share a voter waits on.
+///
+/// This is the falsifiable check on immediate-share dispatch: the designated
+/// share should be first, and a run where it is not should say so in numbers
+/// rather than leaving it to be recomputed by hand.
+#[test]
+fn the_report_ranks_the_designated_share_against_the_rest_of_the_round() {
+    let record = |id: u64, bundle: u32, proposal: u32, share: u32, start: u64| {
+        serde_json::json!({
+            "id": id, "parent_id": null, "stage": "helper::active_delivery",
+            "attribution": {
+                "bundle_index": bundle, "proposal_id": proposal, "share_index": share
+            },
+            "started_after_us": start, "elapsed_us": 1_000, "outcome": "succeeded",
+            "error_kind": null, "http_status": null, "endpoint_index": 0, "attempt": null
+        })
+    };
+    let snapshot = |records: Vec<serde_json::Value>| stage_bench::CapturedSnapshot {
+        source: "round.observability.json".to_string(),
+        snapshot: serde_json::from_value(serde_json::json!({
+            "operation": "run", "started_at_unix_us": 0u64, "round_id": "r",
+            "elapsed_us": 10_000u64, "outcome": "succeeded", "records": records,
+            "summaries": [], "records_dropped": 0,
+            "summary_updates_dropped": 0, "active_stages_dropped": 0
+        }))
+        .expect("a decodable snapshot"),
+    };
+
+    // The designated share dispatched first: nothing preceded it.
+    let first = snapshot(vec![
+        record(1, 2, 1, 0, 0),
+        record(2, 0, 1, 0, 100),
+        record(3, 1, 1, 0, 200),
+    ]);
+    let metrics = Metrics::derive_for(&[first], &[], Some((2, 1, 0)));
+    let ranked = metrics.immediate_dispatch.expect("a ranked designation");
+    assert_eq!(ranked.shares_dispatched_before, 0);
+    assert_eq!(ranked.shares_total, 3);
+    assert!(ranked.dispatched_after_first_seconds.abs() < f64::EPSILON);
+
+    // Dispatched last, as it was before delivery ordered it.
+    let last = snapshot(vec![
+        record(1, 0, 1, 0, 0),
+        record(2, 1, 1, 0, 100),
+        record(3, 2, 1, 0, 500_000),
+    ]);
+    let metrics = Metrics::derive_for(&[last], &[], Some((2, 1, 0)));
+    let ranked = metrics.immediate_dispatch.expect("a ranked designation");
+    assert_eq!(ranked.shares_dispatched_before, 2);
+    assert!((ranked.dispatched_after_first_seconds - 0.5).abs() < 1e-9);
+
+    // A run that recorded no designation ranks nothing rather than guessing.
+    let metrics = Metrics::derive_for(&[snapshot(vec![record(1, 0, 1, 0, 0)])], &[], None);
+    assert!(metrics.immediate_dispatch.is_none());
 }
 
 /// A run whose worker died before writing an outcome still has a directory.

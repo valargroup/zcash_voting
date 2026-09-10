@@ -116,8 +116,32 @@ pub struct Metrics {
     pub bundles: Vec<BundleMetrics>,
     /// Helper delivery concurrency and outcome counts.
     pub delivery: DeliveryMetrics,
+    /// Where the round's designated immediate share sat in the dispatch order.
+    ///
+    /// Absent when the run recorded no designation, or when its records were not
+    /// captured.
+    pub immediate_dispatch: Option<ImmediateDispatch>,
     /// Wall span of the whole run, first record start to last record end.
     pub wall_span_us: u64,
+}
+
+/// The dispatch position of the round's designated immediate share.
+///
+/// The share a voter waits on should be first. It is not, by construction,
+/// unless delivery is made to put it there: the designation names the highest
+/// eligible bundle, which is the last to reach the chain, so every bundle that
+/// confirmed earlier would otherwise deliver ahead of it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ImmediateDispatch {
+    pub bundle_index: u32,
+    pub proposal_id: u32,
+    pub share_index: u32,
+    /// Shares whose delivery started before this one. Zero is the goal.
+    pub shares_dispatched_before: usize,
+    /// Shares in the run, for reading `shares_dispatched_before` as a share.
+    pub shares_total: usize,
+    /// Seconds from the first share's dispatch to this one's.
+    pub dispatched_after_first_seconds: f64,
 }
 
 /// One reported invocation's own totals.
@@ -231,6 +255,15 @@ impl Metrics {
     /// invocation carries its own wall-clock anchor, which covers the same gap
     /// with a finer clock.
     pub fn derive(captured: &[CapturedSnapshot], events: &[PhaseEvent]) -> Self {
+        Self::derive_for(captured, events, None)
+    }
+
+    /// Derives every metric, and where `immediate` sat in the dispatch order.
+    pub fn derive_for(
+        captured: &[CapturedSnapshot],
+        events: &[PhaseEvent],
+        immediate: Option<(u32, u32, u32)>,
+    ) -> Self {
         let _ = events;
 
         let mut incomplete = Vec::new();
@@ -318,6 +351,7 @@ impl Metrics {
             initial_http_samples,
             recovery_http_attempts,
         );
+        let immediate_dispatch = immediate.and_then(|key| immediate_dispatch(&placed, key));
         let wall_span_us = placed
             .iter()
             .map(Placed::end_us)
@@ -333,6 +367,7 @@ impl Metrics {
             proposals,
             bundles,
             delivery,
+            immediate_dispatch,
             wall_span_us,
         }
     }
@@ -341,6 +376,37 @@ impl Metrics {
     pub fn stage(&self, stage: &str) -> Option<&StageMetrics> {
         self.stages.iter().find(|entry| entry.stage == stage)
     }
+}
+
+/// Where the designated share sat among the run's share deliveries.
+///
+/// Counted over `helper::active_delivery`, which is one record per share
+/// workflow, so the rank is shares rather than HTTP attempts.
+fn immediate_dispatch(
+    placed: &[Placed<'_>],
+    (bundle_index, proposal_id, share_index): (u32, u32, u32),
+) -> Option<ImmediateDispatch> {
+    let deliveries: Vec<&Placed<'_>> = placed
+        .iter()
+        .filter(|entry| &*entry.record.stage == INITIAL_DELIVERY_STAGE)
+        .collect();
+    let designated = deliveries.iter().find(|entry| {
+        entry.record.attribution.bundle_index == Some(bundle_index)
+            && entry.record.attribution.proposal_id == Some(proposal_id)
+            && entry.record.attribution.share_index == Some(share_index)
+    })?;
+    let first = deliveries.iter().map(|entry| entry.start_us).min()?;
+    Some(ImmediateDispatch {
+        bundle_index,
+        proposal_id,
+        share_index,
+        shares_dispatched_before: deliveries
+            .iter()
+            .filter(|entry| entry.start_us < designated.start_us)
+            .count(),
+        shares_total: deliveries.len(),
+        dispatched_after_first_seconds: designated.start_us.saturating_sub(first) as f64 / 1e6,
+    })
 }
 
 /// Whether an HTTP attempt was a first placement or a repair.
