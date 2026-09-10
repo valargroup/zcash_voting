@@ -53,7 +53,7 @@ inside a workflow.
 | ZKP2 | Vote preparation and proof generation, including atomic-batch workers |
 | Persistence and recovery | Workflow persistence and recovery boundaries |
 | Chain | Advancement, POST attempts, status attempts, exact-tree recovery requests |
-| Helper shares | Submission, status polling, recovery, HTTP attempts and retry waits |
+| Helper shares | Submission, status polling, recovery, HTTP attempts and retry waits, and the immediate-share gate wait (`helper::immediate_gate_wait`; `Pending` means the wait expired rather than being released) |
 | Round execution | Run and per-step outcomes, blocking work including vote-tree sync |
 
 `has_persisted_proof`, signature extraction, witness/selection utilities, and

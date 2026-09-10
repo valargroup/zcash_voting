@@ -126,6 +126,17 @@ static RELEASED: LazyLock<Mutex<(HashMap<GateKey, ()>, VecDeque<GateKey>)>> =
 /// Released rounds remembered before the oldest is evicted.
 const RELEASED_ROUNDS: usize = 64;
 
+/// Whether this round has already been released.
+///
+/// Read while the caller holds the gate registry, so that observing "not
+/// released" and creating a closed gate cannot straddle a release.
+fn is_released(key: &GateKey) -> bool {
+    RELEASED
+        .lock()
+        .map(|released| released.0.contains_key(key))
+        .unwrap_or(false)
+}
+
 /// One round's barrier.
 pub(super) struct ImmediateGate {
     opened: Mutex<bool>,
@@ -156,15 +167,6 @@ impl ImmediateGate {
     /// refused.
     pub(super) fn for_round(sidecar_id: u64, wallet_id: &str, round_id: &str) -> Arc<Self> {
         let key = (sidecar_id, wallet_id.to_string(), round_id.to_string());
-        if RELEASED
-            .lock()
-            .map(|released| released.0.contains_key(&key))
-            .unwrap_or(false)
-        {
-            let gate = Self::new();
-            gate.open();
-            return Arc::new(gate);
-        }
         let mut gates = match GATES.lock() {
             Ok(gates) => gates,
             // A poisoned registry must not stop delivery: an unshared gate makes
@@ -175,6 +177,16 @@ impl ImmediateGate {
         gates.retain(|_, gate| gate.strong_count() > 0);
         if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
             return gate;
+        }
+        // Checked under the registry lock, not before it. A holder that opens,
+        // records its release, and drops its last reference between an earlier
+        // check and this one would otherwise leave this caller waiting on a
+        // freshly created closed gate for a round already released — and a
+        // refusal records no acceptance to fall back on.
+        if is_released(&key) {
+            let gate = Self::new();
+            gate.open();
+            return Arc::new(gate);
         }
         let gate = Arc::new(Self::keyed(key.clone()));
         gates.insert(key, Arc::downgrade(&gate));

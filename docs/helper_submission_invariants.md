@@ -358,6 +358,18 @@ Regression coverage:
    3. the wait budget expired, so a round whose designated bundle has not
       confirmed never stalls the bundles that are ready.
 
+   Condition 2 covers a designated share this call cannot dispatch at all — one
+   whose preparation failed — as well as one the helpers refused. Holder identity
+   is resolved from the durable designation against the call's votes rather than
+   from its job list, because a failed preparation contributes no job and would
+   otherwise read as another call's responsibility, leaving this call's own
+   siblings waiting for a share already in front of them.
+
+   A wait is recorded as `helper::immediate_gate_wait`, with `Pending` marking
+   one that expired. Every share's `helper::delivery_queue_wait` is already open
+   when the gate wait begins, so without its own record an expired wait would be
+   charged to generic queue time and read as delivery contention.
+
    Cancellation while waiting leaves the shares pending, as any cancelled
    admission does.
 
@@ -403,7 +415,9 @@ Regression coverage:
    `the_gate_expires_so_a_round_whose_designated_bundle_is_unconfirmed_still_delivers`,
    `cancellation_while_waiting_on_the_gate_leaves_shares_pending`,
    `a_pass_after_the_immediate_share_is_accepted_does_not_wait`, and
-   `a_later_pass_does_not_wait_again_after_the_designated_share_was_refused`.
+   `a_later_pass_does_not_wait_again_after_the_designated_share_was_refused`,
+   `a_designated_share_that_cannot_be_prepared_releases_the_round`, and
+   `an_expired_gate_wait_is_recorded_separately_from_queue_time`.
 
 Enforcement:
 [`round_immediate_share_key`](../zcash_voting/src/share_policy/initial_placement.rs)

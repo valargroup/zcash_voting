@@ -298,3 +298,94 @@ async fn a_later_pass_does_not_wait_again_after_the_designated_share_was_refused
         before.elapsed()
     );
 }
+
+/// A designated share this call cannot dispatch must release the round now.
+///
+/// Preparation failure leaves the designated proposal with no job, so a holder
+/// identified from the job list alone would read as "someone else has it" and
+/// leave this call's own siblings waiting out the budget for a share that is
+/// already resolved and sitting in front of them.
+#[tokio::test(start_paused = true)]
+async fn a_designated_share_that_cannot_be_prepared_releases_the_round() {
+    let fixture = Fixture::new(3);
+    let designated = designated_wire_identity(&fixture);
+
+    // Remove the designated proposal's durable plan so its preparation fails.
+    fixture
+        .db
+        .conn()
+        .execute(
+            "DELETE FROM helper_share_plans WHERE proposal_id = ?1",
+            [designated.0],
+        )
+        .unwrap();
+
+    let transport = ScriptedTransport::new(|_| ReplyPlan::default());
+    let before = tokio::time::Instant::now();
+    let reports = fixture.deliver(transport.clone(), &uncancelled).await;
+
+    assert!(
+        before.elapsed() < Duration::from_secs(1),
+        "siblings must not wait for a designated share this call cannot send: {:?}",
+        before.elapsed()
+    );
+    // The designated proposal fails; the other two still deliver in full.
+    let delivered = reports
+        .iter()
+        .filter(|report| {
+            report
+                .as_ref()
+                .is_ok_and(|r| r.deliveries.len() == SHARE_COUNT)
+        })
+        .count();
+    assert_eq!(delivered, 2);
+}
+
+/// A gate wait is recorded, so its cost is not read as delivery contention.
+///
+/// Every share's `helper::delivery_queue_wait` stage is already open when the
+/// gate wait begins, so without its own record an expired wait would be charged
+/// to generic queue time and misattributed in a bottleneck table.
+#[tokio::test(start_paused = true)]
+async fn an_expired_gate_wait_is_recorded_separately_from_queue_time() {
+    let fixture = Fixture::new(3);
+    let designated = designated_wire_identity(&fixture);
+    let others: Vec<_> = fixture
+        .votes
+        .iter()
+        .filter(|vote| vote.vote().proposal_id() != designated.0)
+        .cloned()
+        .collect();
+
+    let transport = ScriptedTransport::new(|_| ReplyPlan::default());
+    let invocation =
+        crate::ObservationScope::new(Some(crate::ObservabilityOptions::default())).invocation();
+    let client =
+        HelperClient::new(transport, HelperHealth::default()).observing(invocation.scope());
+    let _ = crate::vote::submit_confirmed_vote_shares(
+        &others,
+        &fixture.db,
+        &client,
+        ShareDeliverySubmissionParams {
+            configured_server_urls: &fixture.configured,
+            now_seconds: SUBMIT_AT,
+        },
+        &uncancelled,
+        &mut |_, _| {},
+    )
+    .await;
+    let diagnostics = invocation
+        .complete("delivery", crate::ObservationOutcome::Succeeded, ())
+        .observability
+        .expect("observability was requested");
+    let gate = diagnostics
+        .records
+        .iter()
+        .find(|record| &*record.stage == "helper::immediate_gate_wait")
+        .expect("the gate wait is recorded");
+    assert_eq!(
+        gate.outcome,
+        crate::ObservationOutcome::Pending,
+        "an expired wait is distinguishable from one that was released"
+    );
+}

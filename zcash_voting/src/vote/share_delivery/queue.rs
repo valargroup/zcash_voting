@@ -2,7 +2,7 @@
 
 use super::{
     capacity,
-    immediate_gate::ImmediateGate,
+    immediate_gate::{GateWait, ImmediateGate},
     preparation::{self, PreparedVoteDelivery},
     reports::{ProposalDelivery, ShareResult},
     VoteDeliveryResult,
@@ -166,33 +166,38 @@ pub(in crate::vote) async fn submit_votes<'a>(
     // See `immediate_gate` for why the barrier spans calls, why every wait is
     // bounded, and why it stops at ordering inside one call.
     let mut jobs = jobs.into_iter().collect::<Vec<_>>();
-    let round_id = jobs
+    let round_id = proposals
         .first()
-        .map(|job| job.prepared.vote.round_id().to_string());
-    let gate = round_gate(db, &scope, &jobs);
+        .map(|proposal| proposal.vote.round_id().to_string());
+    let gate = round_gate(db, &scope, round_id.as_deref());
     let mut designated = None;
     if let Some(gate) = &gate {
-        match designated_position(&jobs) {
-            Some(position) => {
+        // Holder identity comes from the durable designation against this
+        // call's votes, not from the job list. A designated proposal whose
+        // preparation failed contributes no job, and treating that as "someone
+        // else holds it" would make this call's own siblings wait out the budget
+        // for a share that is already resolved and in front of them.
+        match designated_position(db, &scope, round_id.as_deref(), &proposals, &jobs) {
+            Holder::Dispatching(position) => {
                 let job = jobs.remove(position);
                 designated = Some((job.proposal_position, job.payload_position));
                 jobs.insert(0, job);
             }
-            // Another call holds the designated share. Wait for it to reach a
-            // helper, then deliver with no further restriction.
-            //
-            // A cancelled wait falls through rather than returning: every job
-            // observes cancellation at admission and completes without touching
-            // storage, which is the path an ordinary cancellation already takes
-            // and the one that finalizes each proposal's report.
+            // Held here, but it will never be dispatched. Release at once: a
+            // share this call cannot send will not arrive by being waited for.
+            Holder::Undeliverable => gate.open(),
             // Read once, before waiting: this answers whether an earlier pass
             // or a run before a restart already placed the share, which cannot
             // change while this call waits. A share accepted *now* is accepted
             // by a sibling call in this process, which signals through the gate.
-            None if !designated_share_accepted(db, &scope, round_id.as_deref()) => {
-                let _ = gate.wait(cancel).await;
+            Holder::Elsewhere if !designated_share_accepted(db, &scope, round_id.as_deref()) => {
+                let waited = client
+                    .observation_scope()
+                    .stage("helper::immediate_gate_wait");
+                let outcome = gate.wait(cancel).await;
+                waited.finish(gate_outcome(outcome), None);
             }
-            None => {}
+            Holder::Elsewhere => {}
         }
     }
 
@@ -251,47 +256,77 @@ async fn run_job(
 }
 
 /// The round's barrier, or `None` when there is nothing to order.
-///
-/// A call with no jobs has nothing to prioritise or wait for. The round id comes
-/// from the jobs themselves rather than from the parameters, because every job
-/// in one call belongs to the same round and an empty call has no round at all.
 fn round_gate(
     db: &VotingDb,
     scope: &ShareOperationScope,
-    jobs: &[ShareJob<'_>],
+    round_id: Option<&str>,
 ) -> Option<Arc<ImmediateGate>> {
-    let round_id = jobs.first()?.prepared.vote.round_id();
     Some(ImmediateGate::for_round(
         db.sidecar_id(),
         scope.wallet_id(),
-        round_id,
+        round_id?,
     ))
 }
 
-/// Position of the round's designated immediate share in `jobs`, if this call
-/// holds it.
-///
-/// The flag is the persisted plan's own, written when the designated vote's plan
-/// was first prepared. At most one share in a round carries it, which
-/// `validate_round_immediate_plans` enforces, so the first match is the only one.
-fn designated_position(jobs: &[ShareJob<'_>]) -> Option<usize> {
-    jobs.iter()
-        .position(|job| job.prepared.plan.share_plans[job.payload_position].immediate)
+/// This call's relationship to the round's designated share.
+enum Holder {
+    /// Held here, with a job to dispatch. The position is into `jobs`.
+    Dispatching(usize),
+    /// Held here, but no job will carry it — its preparation failed, so it has
+    /// already reached a terminal non-acceptance in this call.
+    Undeliverable,
+    /// Not this call's to send.
+    Elsewhere,
 }
 
-/// Records one finished share against its proposal and finalizes the report
-/// when that proposal has no work left.
-fn record_completion(
-    proposals: &mut [ProposalDelivery<'_>],
-    completion: ShareJobCompletion,
-    cancel: &(dyn Fn() -> bool + Send + Sync),
-    on_report: &mut (dyn FnMut(&CommittedVote, &ShareBatchDeliveryReport) + Send),
-) {
-    let proposal = &mut proposals[completion.proposal_position];
-    proposal.record(completion.payload_position, completion.delivery);
-    let vote = proposal.vote;
-    if let Some(report) = proposal.finish(cancel()) {
-        on_report(vote, report);
+/// Where the round's designated share sits relative to this call.
+///
+/// Resolved against the durable designation and this call's votes rather than
+/// against the job list alone: a designated proposal whose preparation failed
+/// contributes no job, and it must still be recognised as held here so the gate
+/// is released instead of leaving this call's own siblings waiting.
+fn designated_position(
+    db: &VotingDb,
+    scope: &ShareOperationScope,
+    round_id: Option<&str>,
+    proposals: &[ProposalDelivery<'_>],
+    jobs: &[ShareJob<'_>],
+) -> Holder {
+    if let Some(position) = jobs
+        .iter()
+        .position(|job| job.prepared.plan.share_plans[job.payload_position].immediate)
+    {
+        return Holder::Dispatching(position);
+    }
+    let Some(round_id) = round_id else {
+        return Holder::Elsewhere;
+    };
+    let designation = {
+        let conn = db.conn();
+        crate::share_tracking::round_immediate_share(&conn, round_id, scope.wallet_id())
+    };
+    let Ok(Some(key)) = designation else {
+        return Holder::Elsewhere;
+    };
+    if proposals.iter().any(|proposal| {
+        proposal.vote.bundle_index() == key.bundle_index
+            && proposal.vote.proposal_id() == key.proposal_id
+    }) {
+        return Holder::Undeliverable;
+    }
+    Holder::Elsewhere
+}
+
+/// Names a gate outcome for observability.
+///
+/// An expired wait is `Pending`, not `Failed`: the round proceeded exactly as
+/// specified, and what the record exists to say is that the delay was the gate
+/// rather than delivery capacity.
+fn gate_outcome(outcome: GateWait) -> crate::ObservationOutcome {
+    match outcome {
+        GateWait::AlreadyAccepted | GateWait::Accepted => crate::ObservationOutcome::Succeeded,
+        GateWait::Expired => crate::ObservationOutcome::Pending,
+        GateWait::Cancelled => crate::ObservationOutcome::Cancelled,
     }
 }
 
@@ -334,4 +369,20 @@ fn designated_share_accepted(
         ),
         Ok(Some(share)) if !share.sent_to_urls.is_empty()
     )
+}
+
+/// Records one finished share against its proposal and finalizes the report
+/// when that proposal has no work left.
+fn record_completion(
+    proposals: &mut [ProposalDelivery<'_>],
+    completion: ShareJobCompletion,
+    cancel: &(dyn Fn() -> bool + Send + Sync),
+    on_report: &mut (dyn FnMut(&CommittedVote, &ShareBatchDeliveryReport) + Send),
+) {
+    let proposal = &mut proposals[completion.proposal_position];
+    proposal.record(completion.payload_position, completion.delivery);
+    let vote = proposal.vote;
+    if let Some(report) = proposal.finish(cancel()) {
+        on_report(vote, report);
+    }
 }
