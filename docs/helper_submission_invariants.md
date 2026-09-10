@@ -353,12 +353,14 @@ Regression coverage:
    Cancellation while waiting leaves the shares pending, as any cancelled
    admission does.
 
-   The durable acceptance is the authority, not the in-process signal. A share
-   planned to several helpers finishes its workflow only once the slowest of them
-   answers or times out, so waiting on the workflow would hold the round for a
-   helper irrelevant to the acknowledgement already recorded. Reading the row
-   also means a later pass, or anything after a restart, sees the acceptance and
-   does not wait, with no state carried between calls.
+   The durable acceptance is the authority, not the in-process signal, so a later
+   pass or anything after a restart sees the acceptance and does not wait, with
+   no state carried between calls. Within one share's fan-out the boundary is the
+   completion of its wave: the executor resolves a wave's outcomes only after all
+   of its POSTs return, deliberately and serially, so that a stale generation
+   aborts before a later write can mask it. That ordering is not changed here;
+   the difference it costs is at most one wave's slowest reply, is bounded by the
+   wait budget regardless, and is zero for a single-target placement.
 
    It deliberately stops at ordering *inside* one call: holding a call's own
    shares behind its designated one would break the no-proposal-barrier property
@@ -377,8 +379,7 @@ Regression coverage:
    `the_immediate_share_is_posted_before_every_other_share`,
    `other_bundles_wait_for_the_immediate_ack_then_deliver_without_limits`,
    `the_gate_expires_so_a_round_whose_designated_bundle_is_unconfirmed_still_delivers`,
-   `cancellation_while_waiting_on_the_gate_leaves_shares_pending`,
-   `the_wait_ends_at_the_first_acceptance_not_the_whole_fanout`, and
+   `cancellation_while_waiting_on_the_gate_leaves_shares_pending`, and
    `a_pass_after_the_immediate_share_is_accepted_does_not_wait`.
 
 Enforcement:

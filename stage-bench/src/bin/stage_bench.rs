@@ -316,10 +316,19 @@ fn analyze(run_dir: &std::path::Path) -> Result<()> {
     let manifest = Manifest::read(run_dir).context("reading the run manifest")?;
     let snapshots = stage_bench::read_snapshots(run_dir)?;
     let events = EventLog::read(run_dir).unwrap_or_default();
-    let immediate = BenchOutcome::read(&BenchOutcome::path_in(run_dir))
-        .ok()
-        .and_then(|outcome| outcome.immediate_share)
-        .map(|share| (share.bundle_index, share.proposal_id, share.share_index));
+    // An absent outcome is a run that never got that far, which analyses fine.
+    // A present but unreadable one is a corrupted run, and reporting it as "no
+    // designation" would drop the dispatch measurement while still printing a
+    // complete-looking analysis.
+    let outcome_path = BenchOutcome::path_in(run_dir);
+    let immediate = if outcome_path.exists() {
+        BenchOutcome::read(&outcome_path)
+            .context("reading the run outcome")?
+            .immediate_share
+            .map(|share| (share.bundle_index, share.proposal_id, share.share_index))
+    } else {
+        None
+    };
     let metrics = Metrics::derive_for(&snapshots, &events, immediate);
     write_metrics(run_dir, &metrics)?;
     print!("{}", render(&manifest, &metrics));

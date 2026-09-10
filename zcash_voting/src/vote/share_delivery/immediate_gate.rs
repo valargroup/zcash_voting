@@ -43,6 +43,15 @@
 //! the immediate share first when its bundle confirms after the wait budget, and
 //! it is not intended to.
 //!
+//! # What the wait actually turns on
+//!
+//! A definite acceptance recorded against the designated share. For a share's
+//! first wave that is when the wave completes, because the executor resolves a
+//! wave's outcomes only after all of its POSTs return — see [`ACCEPTANCE_CHECK`]
+//! for why that ordering is left alone. The practical effect is a wait that ends
+//! as soon as the round has evidence the helper holds the share, and never later
+//! than [`WAIT_BUDGET`].
+//!
 //! # Why an acknowledgement is the right signal
 //!
 //! The helper answers a share POST only once the row is durably in its queue.
@@ -78,13 +87,19 @@ pub(super) const WAIT_BUDGET: Duration = Duration::from_secs(10);
 
 /// How often a waiter re-reads whether the designated share has been accepted.
 ///
-/// The durable row is the authority, and consulting it is what makes the wait
-/// end at the first acceptance rather than at the end of the designated share's
-/// whole fan-out: one helper can acknowledge immediately while another stalls to
-/// the delivery deadline, and there is no reason for the rest of the round to
-/// wait on the second. It also means a delivery pass that finds the share
-/// already accepted — a later retry, or anything after a restart — never waits
-/// at all, with no state kept between calls.
+/// The durable row is the authority. Reading it is what lets a delivery pass
+/// that finds the share already accepted — a later retry, or anything after a
+/// restart — proceed without waiting at all, with no state kept between calls.
+///
+/// It does **not** move the boundary earlier within one share's fan-out. The
+/// executor dispatches a wave of planned helpers concurrently and then resolves
+/// their outcomes serially, deliberately, so that a stale generation aborts
+/// before a later write can mask it. No acceptance is durable until its wave has
+/// finished, so a helper that stalls holds the whole wave. Reordering those
+/// writes to publish each acceptance as it arrives would trade that
+/// stale-generation ordering for at most the difference between one wave's
+/// slowest and fastest reply — bounded by [`WAIT_BUDGET`] regardless, and zero
+/// for a single-target placement. The boundary is stated rather than moved.
 ///
 /// This is also the tick on which host cancellation is observed, so a caller
 /// that cancels never waits out the whole budget.

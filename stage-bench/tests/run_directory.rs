@@ -419,3 +419,50 @@ fn snapshots_absent_from_a_directory_are_not_an_error() {
         .is_empty());
     let _ = std::fs::remove_dir_all(&run_dir);
 }
+
+/// A corrupted run must not analyse as a valid one.
+///
+/// An absent outcome is a run that never got that far and analyses fine. A
+/// present but unreadable outcome is different: reporting it as "no designation"
+/// would drop the dispatch measurement while still printing a complete-looking
+/// analysis, which is the failure this crate exists to avoid.
+#[test]
+fn a_malformed_outcome_is_reported_rather_than_read_as_no_designation() {
+    let run_dir = scratch("malformed");
+    let manifest = Manifest::build(&config(&run_dir), &outcome(), 1_700_000_000, 21_600);
+    manifest.write(&run_dir).expect("writing the manifest");
+
+    // Absent: analysable.
+    assert!(!BenchOutcome::path_in(&run_dir).exists());
+    assert!(BenchOutcome::read(&BenchOutcome::path_in(&run_dir)).is_err());
+
+    // Truncated mid-object, as an interrupted write leaves it.
+    std::fs::write(
+        BenchOutcome::path_in(&run_dir),
+        b"{\"quiescence\": \"NoWorkL",
+    )
+    .expect("writing a truncated outcome");
+    let read = BenchOutcome::read(&BenchOutcome::path_in(&run_dir));
+    assert!(
+        read.is_err(),
+        "a truncated outcome must not deserialize into a default"
+    );
+
+    // A complete outcome from before the field existed still reads, through the
+    // field's serde default, and reports no designation rather than failing.
+    std::fs::write(
+        BenchOutcome::path_in(&run_dir),
+        serde_json::to_vec(&serde_json::json!({
+            "quiescence": "NoWorkLeft", "quiescence_kind": "NoWorkLeft",
+            "failures": [], "notes": 11, "bundles": 3, "proposals": 37,
+            "completed_proposals": 37, "tracking": [],
+            "round_drive_seconds": 1.0, "tracking_seconds": 1.0
+        }))
+        .expect("encoding an older outcome"),
+    )
+    .expect("writing an older outcome");
+    let older = BenchOutcome::read(&BenchOutcome::path_in(&run_dir)).expect("an older outcome");
+    assert!(older.immediate_share.is_none());
+
+    let _ = std::fs::remove_dir_all(&run_dir);
+}
