@@ -70,6 +70,10 @@ This release is `zcash_voting` 4.0.0.
   bundle and proposal, including failures, without inheriting a triggering
   share's identity or changing the parent step's attribution.
 
+- Default `stage-bench` to both real staging helpers. `--helpers 1` retains
+  primary-only comparisons; synthetic primary-backed fan-out now requires
+  `--synthetic-helpers N` instead of `--helpers N`.
+
 - Keep expired round re-poll deadlines runnable so expiry between selection and
   waiting cannot leave the driver asleep until host cancellation.
 - Raise the continuous helper queue to up to 32 process-wide active share deliveries,

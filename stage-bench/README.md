@@ -64,7 +64,8 @@ the benchmark before.
 | `--proposals N` | 37 | Ballot width. 1 to 50, the SDK's own bound. |
 | `--option-widths 2,3,4` | `2,3,4` | Cycled across the ballot; each 2 to 8. |
 | `--ballot <path>` | — | Replay a vote manager's round export instead. Conflicts with the two above. |
-| `--helpers N` | 1 | 1 is the real staging primary; 2 to 10 build a synthetic fleet routed onto it. |
+| `--helpers N` | 2 | Real helpers in published order: 1 uses primary only; 2 uses primary and secondary. |
+| `--synthetic-helpers N` | off | Explicit fan-out experiment with 2 to 10 identities routed to primary. Conflicts with `--helpers`. |
 | `--bundle-concurrency N` | 3 | Bundles advanced at once; the SDK's own default. Use 1 for a cold-PIR run. |
 | `--proof-concurrency N` | 3 | Vote-commitment proofs built at once in a bundle; 1–15. |
 | `--chain-repoll-ms <ms>` | 2000 | Poll interval while a chain submission is tracking. |
@@ -285,8 +286,27 @@ Hold these fixed across runs you intend to compare; the manifest records each.
 - **Bundle concurrency.** Staging serves PIR from a single endpoint that stops
   answering under roughly fifteen concurrent queries. The default of one is not
   timidity; raising it is an experiment about that endpoint.
-- **The fleet.** More helpers means more placements per share, which is a bigger
-  workload rather than the same workload measured differently.
+- **The fleet.** The default uses both real staging vote servers as helpers,
+  without synthetic URL rewriting. `--helpers 1` reproduces primary-only runs.
+  One and two helpers both require one initial acceptance per share, so the
+  37-question, three-bundle workload still has 1,776 initial placements. With
+  two helpers the SDK distributes those placements and requires two matching
+  helper responses for confirmation. Larger fleets can increase placements
+  per share and therefore the workload.
+
+### Migrating older benchmark commands
+
+Previously, the default was primary-only and `--helpers 2` through `10` created
+synthetic identities backed by that same primary. Use `--synthetic-helpers N`
+to reproduce those fan-out experiments. `--helpers 2` now means two real hosts;
+larger values are rejected rather than silently selecting synthetic routing.
+The run prints the selected URLs and mode before provisioning and persists
+them in `run-config.json`; `preflight` accepts the same helper flags and reports
+the selection without provisioning. The
+`manifest.json` retains the helper count and synthetic
+flag. A missing or duplicate second endpoint fails before provisioning, rather
+than silently measuring one helper. Historical reports remain primary-only
+unless their recorded configuration says otherwise.
 
 ## Prerequisites
 

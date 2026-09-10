@@ -9,9 +9,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use recovery_conformance::helper_fleet::{HelperFleetPlan, SYNTHETIC_HELPER_URLS};
-use recovery_conformance::round_run::{endpoints_from, endpoints_with_fleet, helper_backend};
 use stage_bench::ballot::{Ballot, DEFAULT_OPTION_WIDTHS};
+use stage_bench::helper_fleet::{HelperFleetArgs, SelectedHelpers};
 
 /// The SDK's ceiling on concurrent batch proofs (`MAX_BATCH_PROOF_CONCURRENCY`).
 ///
@@ -83,6 +82,9 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 struct PreflightArgs {
+    #[command(flatten)]
+    helper_fleet: HelperFleetArgs,
+
     /// Proposals the ballot would have.
     #[arg(long, default_value_t = 37)]
     proposals: usize,
@@ -110,10 +112,8 @@ struct RunArgs {
     #[arg(long, conflicts_with_all = ["proposals", "option_widths"])]
     ballot: Option<PathBuf>,
 
-    /// Helpers to configure. One uses the real staging primary; more build a
-    /// synthetic fleet whose members all route to it.
-    #[arg(long, default_value_t = 1)]
-    helpers: usize,
+    #[command(flatten)]
+    helper_fleet: HelperFleetArgs,
 
     /// Bundles the driver advances at once. Defaults to the SDK's own three, so
     /// a plain run measures what a host gets. Lower it to 1 for a cold-PIR run:
@@ -198,6 +198,7 @@ async fn preflight_only(args: PreflightArgs) -> Result<()> {
         None => Ballot::synthetic(args.proposals, &args.option_widths)?,
     };
     let resolved = preflight::resolve().await?;
+    let helpers = args.helper_fleet.resolve(&resolved.deployment)?;
 
     println!("ballot            {} proposals", ballot.len());
     println!(
@@ -225,18 +226,17 @@ async fn preflight_only(args: PreflightArgs) -> Result<()> {
         resolved.deployment.vote_server_urls()
     );
     println!("PIR endpoints     {:?}", resolved.deployment.pir_urls());
+    println!("helper endpoints  {:?}", helpers.endpoints.helper_urls);
+    println!(
+        "synthetic fleet   {}",
+        !helpers.fleet.configured_urls().is_empty()
+    );
     println!("\nready: `stage-bench run` would provision a round on the staging vote chain.");
     Ok(())
 }
 
 async fn run(args: RunArgs) -> Result<()> {
     let ballot = resolve_ballot(&args)?;
-    anyhow::ensure!(
-        args.helpers >= 1 && args.helpers <= SYNTHETIC_HELPER_URLS.len(),
-        "the synthetic fleet has {} helper names, so --helpers takes 1 to {}",
-        SYNTHETIC_HELPER_URLS.len(),
-        SYNTHETIC_HELPER_URLS.len()
-    );
     anyhow::ensure!(
         args.bundle_concurrency >= 1,
         "--bundle-concurrency must be at least 1"
@@ -266,6 +266,7 @@ async fn run(args: RunArgs) -> Result<()> {
 
     let started_at_unix = now_unix();
     let preflight = preflight::resolve().await?;
+    let helpers = args.helper_fleet.resolve(&preflight.deployment)?;
     if args.bundle_concurrency > 1 && (args.no_warm_pir || preflight.warm_pir.is_none()) {
         // Not refused, because a deliberate cold run at width is a legitimate
         // experiment about the PIR endpoint. Named, because the failure it
@@ -281,8 +282,17 @@ async fn run(args: RunArgs) -> Result<()> {
     eprintln!(
         "bench: ballot of {} proposals, {} helpers, bundle concurrency {}",
         ballot.len(),
-        args.helpers,
+        helpers.endpoints.helper_urls.len(),
         args.bundle_concurrency
+    );
+    eprintln!(
+        "bench: {} helper fleet: {:?}",
+        if helpers.fleet.configured_urls().is_empty() {
+            "real"
+        } else {
+            "synthetic (all routed to primary)"
+        },
+        helpers.endpoints.helper_urls
     );
 
     eprintln!("bench: provisioning a round on staging");
@@ -296,7 +306,7 @@ async fn run(args: RunArgs) -> Result<()> {
     ));
     std::fs::create_dir_all(&run_dir).context("creating the run directory")?;
 
-    let config = build_config(&args, &preflight, &ballot, &round, &run_dir)?;
+    let config = build_config(&args, &preflight, &ballot, &round, &run_dir, helpers)?;
     report_submission_window(&config)?;
     let config_path = BenchRunConfig::path_in(&run_dir);
     config.write(&config_path)?;
@@ -414,21 +424,8 @@ fn build_config(
     ballot: &Ballot,
     round: &stage_bench::provision::ProvisionedRound,
     run_dir: &std::path::Path,
+    helpers: SelectedHelpers,
 ) -> Result<BenchRunConfig> {
-    // One helper is the real primary; more are synthetic names the route
-    // rewrites onto it, which is the only way to exercise fan-out against a
-    // staging deployment where a single host answers the share endpoint.
-    let fleet = if args.helpers > 1 {
-        HelperFleetPlan::all_answering(helper_backend(&preflight.deployment), args.helpers)
-    } else {
-        HelperFleetPlan::none()
-    };
-    let endpoints = if args.helpers > 1 {
-        endpoints_with_fleet(&preflight.deployment, &fleet)
-    } else {
-        endpoints_from(&preflight.deployment)
-    };
-
     Ok(BenchRunConfig {
         sidecar: run_dir.join("sidecar.db"),
         wallet_db: preflight.wallet_db.clone(),
@@ -437,9 +434,9 @@ fn build_config(
             .flatten(),
         round_id: round.round_id.clone(),
         account_uuid: preflight.account_uuid.clone(),
-        endpoints,
+        endpoints: helpers.endpoints,
         ballot: ballot.clone(),
-        fleet,
+        fleet: helpers.fleet,
         ceremony_start_time_seconds: round.ceremony_start_time_seconds,
         vote_end_time_seconds: round.vote_end_time_seconds,
         bundle_concurrency: args.bundle_concurrency,
