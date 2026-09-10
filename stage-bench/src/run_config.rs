@@ -41,6 +41,12 @@ pub struct BenchRunConfig {
     /// The synthetic helper fleet, if any. Empty means the real staging primary.
     #[serde(default)]
     pub fleet: HelperFleetPlan,
+    /// Unix time when this benchmark began provisioning the ceremony.
+    ///
+    /// Vizor receives the corresponding authenticated `ceremony_phase_start`
+    /// from voting config. The SDK needs both this value and the vote end to
+    /// derive the passive helper-submission window.
+    pub ceremony_start_time_seconds: u64,
     /// Unix vote-end the round was provisioned with.
     ///
     /// Share timing derives its retry, overdue, and last-moment windows from
@@ -159,6 +165,37 @@ pub struct ShareIdentity {
     pub share_index: u32,
 }
 
+/// Distribution of helper submission times planned for one benchmark round.
+///
+/// Initial wallet-to-helper delivery still happens in the foreground. A
+/// passive share is one whose helper was instructed to wait until `submit_at`
+/// before revealing it to the chain.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShareScheduleSummary {
+    /// Wall clock used to classify future submissions.
+    pub observed_at_seconds: u64,
+    /// Every durable share row created for the round.
+    pub total_shares: usize,
+    /// The immutable round designation, not merely a `submit_at == 0` row.
+    pub designated_immediate_shares: usize,
+    /// Rows whose helper submission time is zero.
+    pub submit_at_zero_shares: usize,
+    /// Rows carrying a nonzero scheduled submission time.
+    pub passive_shares: usize,
+    /// Passive rows whose scheduled time had not arrived when inspected.
+    pub future_shares: usize,
+    /// Passive rows due inside the benchmark's confirmation observation budget.
+    pub due_within_tracking_budget: usize,
+    /// Earliest nonzero helper submission timestamp.
+    pub earliest_submit_at_seconds: Option<u64>,
+    /// Median passive delay from durable share creation.
+    pub p50_delay_seconds: u64,
+    /// 95th-percentile passive delay from durable share creation.
+    pub p95_delay_seconds: u64,
+    /// Longest passive delay from durable share creation.
+    pub max_delay_seconds: u64,
+}
+
 /// What one background share-tracking invocation did.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TrackingSummary {
@@ -196,6 +233,9 @@ pub struct BenchOutcome {
     /// voter actually waits on. Absent when no vote has been planned yet.
     #[serde(default)]
     pub immediate_share: Option<ShareIdentity>,
+    /// Helper submission schedule created during vote planning.
+    #[serde(default)]
+    pub share_schedule: ShareScheduleSummary,
     /// Proposals the driver reported complete, out of the ballot.
     pub completed_proposals: usize,
     pub tracking: Vec<TrackingSummary>,

@@ -147,7 +147,7 @@ stage-bench: stage-bench-worker ## Run the staging benchmark (network, slow); se
 stage-bench-unit: ## Run hermetic benchmark tests (no staging)
 	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" \
 		cargo nextest run -P $(NEXTEST_PROFILE) $(STAGE_BENCH_PACKAGE) --locked \
-		--test ballot --test metrics --test run_directory
+		--test ballot --test metrics --test run_directory --test share_schedule
 
 .PHONY: recovery-conformance-unit
 recovery-conformance-unit: ## Run hermetic crash-recovery harness tests (no staging)

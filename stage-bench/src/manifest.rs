@@ -63,6 +63,12 @@ pub struct Manifest {
     pub confirm_concurrency: usize,
     pub max_dispatches: usize,
     pub max_records: usize,
+    /// Benchmark-owned equivalent of Vizor's authenticated ceremony start.
+    #[serde(default)]
+    pub ceremony_start_time_seconds: u64,
+    /// Vote end paired with `ceremony_start_time_seconds` for SDK timing.
+    #[serde(default)]
+    pub vote_end_time_seconds: u64,
     /// Seconds between provisioning and the round's vote end.
     ///
     /// Not cosmetic: the SDK's last-moment window is a fraction of the round,
@@ -70,6 +76,10 @@ pub struct Manifest {
     /// their delivery numbers are not comparable.
     pub vote_window_seconds: u64,
     pub warm_pir: bool,
+
+    /// Durable helper submission schedule produced by the SDK.
+    #[serde(default)]
+    pub share_schedule: crate::run_config::ShareScheduleSummary,
 
     pub vote_servers: Vec<String>,
     pub pir_urls: Vec<String>,
@@ -116,8 +126,11 @@ impl Manifest {
             confirm_concurrency: config.confirm_concurrency,
             max_dispatches: config.max_dispatches,
             max_records: config.max_records,
+            ceremony_start_time_seconds: config.ceremony_start_time_seconds,
+            vote_end_time_seconds: config.vote_end_time_seconds,
             vote_window_seconds,
             warm_pir: config.warm_pir_from.is_some(),
+            share_schedule: outcome.share_schedule.clone(),
             vote_servers: config.endpoints.vote_servers.clone(),
             pir_urls: config.endpoints.pir_urls.clone(),
             lightwalletd: config.endpoints.lightwalletd.clone(),

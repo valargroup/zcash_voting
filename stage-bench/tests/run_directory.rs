@@ -40,6 +40,7 @@ fn config(run_dir: &std::path::Path) -> BenchRunConfig {
         },
         ballot: Ballot::synthetic(37, &[2, 3, 4]).expect("a benchmark ballot"),
         fleet: HelperFleetPlan::none(),
+        ceremony_start_time_seconds: 1_799_978_400,
         vote_end_time_seconds: 1_800_000_000,
         bundle_concurrency: 3,
         proof_concurrency: 3,
@@ -66,6 +67,19 @@ fn outcome() -> BenchOutcome {
             proposal_id: 1,
             share_index: 0,
         }),
+        share_schedule: stage_bench::run_config::ShareScheduleSummary {
+            observed_at_seconds: 1_799_978_500,
+            total_shares: 1_776,
+            designated_immediate_shares: 1,
+            submit_at_zero_shares: 1,
+            passive_shares: 1_775,
+            future_shares: 1_774,
+            due_within_tracking_budget: 211,
+            earliest_submit_at_seconds: Some(1_799_978_500),
+            p50_delay_seconds: 6_480,
+            p95_delay_seconds: 12_312,
+            max_delay_seconds: 12_959,
+        },
         completed_proposals: 37,
         tracking: vec![TrackingSummary {
             quiescence: "NothingToTrack".to_string(),
@@ -92,6 +106,10 @@ fn a_run_configuration_survives_the_file_it_is_passed_through() {
     assert_eq!(read.ballot.len(), 37);
     assert_eq!(read.endpoints.vote_servers, original.endpoints.vote_servers);
     assert_eq!(read.vote_end_time_seconds, original.vote_end_time_seconds);
+    assert_eq!(
+        read.ceremony_start_time_seconds,
+        original.ceremony_start_time_seconds
+    );
     assert_eq!(read.max_records, original.max_records);
 
     let _ = std::fs::remove_dir_all(&run_dir);
@@ -165,6 +183,10 @@ fn a_manifest_records_the_workload_beside_the_numbers() {
     assert_eq!(read.configured_helpers, 1);
     assert!(!read.synthetic_fleet);
     assert_eq!(read.vote_window_seconds, 21_600);
+    assert_eq!(read.ceremony_start_time_seconds, 1_799_978_400);
+    assert_eq!(read.vote_end_time_seconds, 1_800_000_000);
+    assert_eq!(read.share_schedule.submit_at_zero_shares, 1);
+    assert_eq!(read.share_schedule.passive_shares, 1_775);
     assert!(read.warm_pir);
     assert_eq!(read.quiescence_kind, "BackgroundShareWorkOnly");
     assert_eq!(read.completed_proposals, 37);

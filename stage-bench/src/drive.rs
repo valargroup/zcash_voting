@@ -210,6 +210,7 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
     let host = Host {
         helper_urls: config.endpoints.helper_urls.clone(),
         vote_tree_urls: config.endpoints.vote_servers.clone(),
+        ceremony_start_time_seconds: config.ceremony_start_time_seconds,
         vote_end_time_seconds: config.vote_end_time_seconds,
         delegation: Some(DelegationStepInputs {
             driver: Arc::new(pipeline),
@@ -241,17 +242,6 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
         .into_parts();
     let round_drive_seconds = started.elapsed().as_secs_f64();
     events.record(PhaseEvent::phase("round::drive_finished"));
-    // Announced here, not only in the final table. Delivery is the phase a host
-    // actually waits on; everything after it is background work the product
-    // spreads across the voting window, and a terminal that went quiet at this
-    // point looked to a reader exactly like a hang.
-    eprintln!(
-        "bench: delivery finished in {round_drive_seconds:.1}s — {} of {} proposals, \
-         {} shares placed. Confirmation follows and is background work.",
-        report.tally.completed_proposals,
-        report.tally.total_proposals,
-        placed_shares(&database, &config.round_id),
-    );
     // Written before anything can fail on the domain result: diagnostics that
     // survive only a successful run cannot explain an unsuccessful one.
     save_snapshot(&config.run_dir, "round.observability.json", snapshot);
@@ -266,6 +256,28 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
             share.bundle_index, share.proposal_id, share.share_index
         );
     }
+    let schedule_observed_at = now_seconds();
+    let shares = zcash_voting::share::list(&database, &config.round_id).map_err(voting_error)?;
+    let share_schedule = crate::share_schedule::validate_vizor_schedule(
+        &shares,
+        immediate_share,
+        schedule_observed_at,
+        config.tracking_budget_seconds,
+    )
+    .context("the helper submission plan does not match Vizor")?;
+
+    // Announced here, not only in the final table. The foreground delivers all
+    // encrypted payloads to helpers; the helpers reveal only the designated
+    // share immediately and retain the passive tail until each `submit_at`.
+    eprintln!(
+        "bench: helper delivery finished in {round_drive_seconds:.1}s — {} of {} proposals, \
+         {} payloads placed; helper submission schedule is {} immediate and {} passive",
+        report.tally.completed_proposals,
+        report.tally.total_proposals,
+        share_schedule.total_shares,
+        share_schedule.submit_at_zero_shares,
+        share_schedule.passive_shares,
+    );
 
     let mut tracking = Vec::new();
     let tracking_started = Instant::now();
@@ -331,6 +343,7 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
         bundles: layout.bundle_count,
         proposals: config.ballot.len(),
         immediate_share,
+        share_schedule,
         completed_proposals: report.tally.completed_proposals as usize,
         tracking,
         round_drive_seconds,
@@ -369,6 +382,7 @@ fn policy(config: &BenchRunConfig) -> RoundDrivePolicy {
 struct Host {
     helper_urls: Vec<String>,
     vote_tree_urls: Vec<String>,
+    ceremony_start_time_seconds: u64,
     vote_end_time_seconds: u64,
     delegation: Option<DelegationStepInputs>,
     max_proof_concurrency: usize,
@@ -380,11 +394,10 @@ impl RoundHostSource for Host {
         RoundHostContext {
             configured_helper_urls: self.helper_urls.clone(),
             now_seconds: now_seconds(),
-            ceremony_start_seconds: None,
-            // Supplied, unlike the conformance suite's host: share scheduling
-            // derives its overdue and last-moment windows from the distance to
-            // vote end, and a benchmark that withheld it would measure a
-            // schedule no real host runs.
+            // Vizor supplies both authenticated timing boundaries. The
+            // benchmark created this one-off round itself and preserves the
+            // equivalent provisioning boundary in its run configuration.
+            ceremony_start_seconds: Some(self.ceremony_start_time_seconds),
             vote_end_time_seconds: Some(self.vote_end_time_seconds),
             vote_tree_node_urls: self.vote_tree_urls.clone(),
             delegation: self.delegation.clone(),
@@ -503,17 +516,6 @@ async fn track_shares(
         },
         snapshot,
     ))
-}
-
-/// Shares the round has durably placed, for the delivery announcement.
-///
-/// Read from durable state rather than counted from the report: the report's
-/// deliveries describe what this run dispatched, and a resumed round's earlier
-/// placements are just as real.
-fn placed_shares(database: &Arc<VotingDb>, round_id: &str) -> usize {
-    zcash_voting::share::list(database, round_id)
-        .map(|shares| shares.len())
-        .unwrap_or_default()
 }
 
 /// The round's designated immediate share, from the executor's plan projection.

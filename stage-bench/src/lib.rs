@@ -38,6 +38,7 @@ pub mod metrics;
 pub mod preflight;
 pub mod provision;
 pub mod run_config;
+pub mod share_schedule;
 pub mod supervise;
 
 pub use ballot::Ballot;
