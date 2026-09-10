@@ -345,22 +345,36 @@ Regression coverage:
    them concurrent.
 
    The guarantee is best-effort and bounded on both sides. A call holding the
-   designation dispatches it first. A call without it waits until the designated
-   share has a **definite acceptance recorded against it** — an acknowledged
-   enqueue, not a chain confirmation, and a duplicate answer counts — and
-   **always proceeds** once the wait budget expires, so a round whose designated
-   bundle has not confirmed never stalls the bundles that are ready.
+   designation dispatches it first. A call without it proceeds on **any** of
+   three conditions, and never waits past the last of them:
+
+   1. the designated share already has a definite acceptance recorded against it
+      — an acknowledged enqueue, not a chain confirmation, and a duplicate answer
+      counts;
+   2. the call holding the designated share finished with it, **including with a
+      refusal or any other non-acceptance outcome** — a share no helper took will
+      not arrive by being waited for, so the round is released rather than made to
+      spend its budget discovering that; or
+   3. the wait budget expired, so a round whose designated bundle has not
+      confirmed never stalls the bundles that are ready.
+
    Cancellation while waiting leaves the shares pending, as any cancelled
    admission does.
 
-   The durable acceptance is the authority, not the in-process signal, so a later
-   pass or anything after a restart sees the acceptance and does not wait, with
-   no state carried between calls. Within one share's fan-out the boundary is the
-   completion of its wave: the executor resolves a wave's outcomes only after all
-   of its POSTs return, deliberately and serially, so that a stale generation
-   aborts before a later write can mask it. That ordering is not changed here;
-   the difference it costs is at most one wave's slowest reply, is bounded by the
-   wait budget regardless, and is zero for a single-target placement.
+   Condition 1 is read from durable state once, before waiting, which is what
+   lets a later pass or anything after a restart proceed with no state carried
+   between calls. It is not re-read while waiting: a durable read takes the
+   sidecar connection that delivery is using continuously, and re-reading it on
+   every tick could block a bounded wait past its own deadline. Nothing is lost,
+   because a share accepted while this call waits is being accepted by a sibling
+   call in the same process, which is condition 2.
+
+   Within one share's fan-out the boundary is the completion of its wave: the
+   executor resolves a wave's outcomes only after all of its POSTs return,
+   deliberately and serially, so that a stale generation aborts before a later
+   write can mask it. That ordering is not changed here; the difference it costs
+   is at most one wave's slowest reply, is bounded by the wait budget regardless,
+   and is zero for a single-target placement.
 
    It deliberately stops at ordering *inside* one call: holding a call's own
    shares behind its designated one would break the no-proposal-barrier property

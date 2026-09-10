@@ -45,12 +45,19 @@
 //!
 //! # What the wait actually turns on
 //!
-//! A definite acceptance recorded against the designated share. For a share's
-//! first wave that is when the wave completes, because the executor resolves a
-//! wave's outcomes only after all of its POSTs return — see [`ACCEPTANCE_CHECK`]
-//! for why that ordering is left alone. The practical effect is a wait that ends
-//! as soon as the round has evidence the helper holds the share, and never later
-//! than [`WAIT_BUDGET`].
+//! Three things release a waiting delivery: the designated share was already
+//! accepted before it started waiting, the call holding that share finished with
+//! it, or the budget expired. "Finished with it" includes a refusal — a share no
+//! helper took will not arrive by being waited for.
+//!
+//! The already-accepted case is read from durable state once, before waiting,
+//! and is what lets a later pass or a restart proceed with no state carried
+//! between calls. Within one share's fan-out the boundary is its wave
+//! completing: the executor resolves a wave's outcomes only after all of its
+//! POSTs return, deliberately and serially, so that a stale generation aborts
+//! before a later write can mask it. That ordering is not changed here; what it
+//! costs is at most one wave's slowest reply, is bounded by [`WAIT_BUDGET`]
+//! regardless, and is zero for a single-target placement.
 //!
 //! # Why an acknowledgement is the right signal
 //!
@@ -85,25 +92,11 @@ use tokio::sync::Notify;
 /// a failure.
 pub(super) const WAIT_BUDGET: Duration = Duration::from_secs(10);
 
-/// How often a waiter re-reads whether the designated share has been accepted.
+/// How often a waiter observes host cancellation while the gate is closed.
 ///
-/// The durable row is the authority. Reading it is what lets a delivery pass
-/// that finds the share already accepted — a later retry, or anything after a
-/// restart — proceed without waiting at all, with no state kept between calls.
-///
-/// It does **not** move the boundary earlier within one share's fan-out. The
-/// executor dispatches a wave of planned helpers concurrently and then resolves
-/// their outcomes serially, deliberately, so that a stale generation aborts
-/// before a later write can mask it. No acceptance is durable until its wave has
-/// finished, so a helper that stalls holds the whole wave. Reordering those
-/// writes to publish each acceptance as it arrives would trade that
-/// stale-generation ordering for at most the difference between one wave's
-/// slowest and fastest reply — bounded by [`WAIT_BUDGET`] regardless, and zero
-/// for a single-target placement. The boundary is stated rather than moved.
-///
-/// This is also the tick on which host cancellation is observed, so a caller
-/// that cancels never waits out the whole budget.
-const ACCEPTANCE_CHECK: Duration = Duration::from_millis(100);
+/// Matches the delivery admission tick in [`super::capacity`], for the same
+/// reason: a caller that cancels must not wait out the whole budget first.
+const CANCEL_CHECK: Duration = Duration::from_millis(50);
 
 /// `(sidecar connection, wallet id, round id)`. The connection id keeps two
 /// independently opened sidecars sharing a wallet from gating each other.
@@ -179,28 +172,26 @@ impl ImmediateGate {
     /// Waits for the designated share to reach a helper, bounded by
     /// [`WAIT_BUDGET`].
     ///
-    /// `accepted` reports the durable fact — a definite acceptance recorded
-    /// against the designated share — and is the authority. The in-process
-    /// notification is only a fast path for the common case where the call
-    /// holding the share is running alongside this one; a waiter that has no
-    /// such sibling, because the share was delivered by an earlier pass or
-    /// before a restart, still resolves through `accepted`.
+    /// The caller establishes whether the share is *already* accepted before
+    /// calling; this only waits. Nothing inside the loop touches storage, so the
+    /// budget and the cancellation tick are the only things that end it and both
+    /// are genuinely bounded — a durable read takes the sidecar connection, which
+    /// delivery is using continuously, and re-reading it on every tick could
+    /// block the task past its own deadline.
+    ///
+    /// That costs nothing in practice. The durable read answers "was this
+    /// accepted by an earlier pass, or before a restart", which cannot change
+    /// while this call waits. A share being accepted *now* is being accepted by a
+    /// sibling call in this process, which signals through the notification.
     ///
     /// Registers for notification before testing, so an `open` racing this call
     /// is observed rather than missed.
-    pub(super) async fn wait(
-        &self,
-        accepted: &(dyn Fn() -> bool + Send + Sync),
-        cancel: &(dyn Fn() -> bool + Send + Sync),
-    ) -> GateWait {
-        if accepted() {
-            return GateWait::AlreadyAccepted;
-        }
+    pub(super) async fn wait(&self, cancel: &(dyn Fn() -> bool + Send + Sync)) -> GateWait {
         let deadline = tokio::time::Instant::now() + WAIT_BUDGET;
         loop {
             let woken = self.woken.notified();
             tokio::pin!(woken);
-            if self.is_open() || accepted() {
+            if self.is_open() {
                 return GateWait::Accepted;
             }
             if cancel() {
@@ -212,12 +203,12 @@ impl ImmediateGate {
             tokio::select! {
                 biased;
                 _ = &mut woken => {
-                    if self.is_open() || accepted() {
+                    if self.is_open() {
                         return GateWait::Accepted;
                     }
                 }
                 _ = tokio::time::sleep_until(deadline) => return GateWait::Expired,
-                _ = tokio::time::sleep(ACCEPTANCE_CHECK) => {}
+                _ = tokio::time::sleep(CANCEL_CHECK) => {}
             }
         }
     }

@@ -361,17 +361,27 @@ fn the_default_confirmation_mode_is_the_wallets_and_is_named_in_the_report() {
 /// rather than leaving it to be recomputed by hand.
 #[test]
 fn the_report_ranks_the_designated_share_against_the_rest_of_the_round() {
-    let record = |id: u64, bundle: u32, proposal: u32, share: u32, start: u64| {
-        serde_json::json!({
-            "id": id, "parent_id": null, "stage": "helper::active_delivery",
-            "attribution": {
-                "bundle_index": bundle, "proposal_id": proposal, "share_index": share
-            },
-            "started_after_us": start, "elapsed_us": 1_000, "outcome": "succeeded",
-            "error_kind": null, "http_status": null, "endpoint_index": 0, "attempt": null
-        })
+    // A share is ranked by the POST it actually made, under its workflow.
+    let share = |id: u64, bundle: u32, proposal: u32, index: u32, start: u64| {
+        let attribution = serde_json::json!({
+            "bundle_index": bundle, "proposal_id": proposal, "share_index": index
+        });
+        vec![
+            serde_json::json!({
+                "id": id, "parent_id": null, "stage": "helper::active_delivery",
+                "attribution": attribution, "started_after_us": start,
+                "elapsed_us": 1_000, "outcome": "succeeded", "error_kind": null,
+                "http_status": null, "endpoint_index": 0, "attempt": null
+            }),
+            serde_json::json!({
+                "id": id + 1_000, "parent_id": id, "stage": "helper.http.post_json",
+                "attribution": attribution, "started_after_us": start,
+                "elapsed_us": 500, "outcome": "succeeded", "error_kind": null,
+                "http_status": 200, "endpoint_index": 0, "attempt": 1
+            }),
+        ]
     };
-    let snapshot = |records: Vec<serde_json::Value>| stage_bench::CapturedSnapshot {
+    let captured = |records: Vec<serde_json::Value>| stage_bench::CapturedSnapshot {
         source: "round.observability.json".to_string(),
         snapshot: serde_json::from_value(serde_json::json!({
             "operation": "run", "started_at_unix_us": 0u64, "round_id": "r",
@@ -382,31 +392,27 @@ fn the_report_ranks_the_designated_share_against_the_rest_of_the_round() {
         .expect("a decodable snapshot"),
     };
 
-    // The designated share dispatched first: nothing preceded it.
-    let first = snapshot(vec![
-        record(1, 2, 1, 0, 0),
-        record(2, 0, 1, 0, 100),
-        record(3, 1, 1, 0, 200),
-    ]);
-    let metrics = Metrics::derive_for(&[first], &[], Some((2, 1, 0)));
+    // Designated first: nothing preceded it.
+    let mut records = share(1, 2, 1, 0, 0);
+    records.extend(share(2, 0, 1, 0, 100));
+    records.extend(share(3, 1, 1, 0, 200));
+    let metrics = Metrics::derive_for(&[captured(records)], &[], Some((2, 1, 0)));
     let ranked = metrics.immediate_dispatch.expect("a ranked designation");
     assert_eq!(ranked.shares_dispatched_before, 0);
     assert_eq!(ranked.shares_total, 3);
     assert!(ranked.dispatched_after_first_seconds.abs() < f64::EPSILON);
 
     // Dispatched last, as it was before delivery ordered it.
-    let last = snapshot(vec![
-        record(1, 0, 1, 0, 0),
-        record(2, 1, 1, 0, 100),
-        record(3, 2, 1, 0, 500_000),
-    ]);
-    let metrics = Metrics::derive_for(&[last], &[], Some((2, 1, 0)));
+    let mut records = share(1, 0, 1, 0, 0);
+    records.extend(share(2, 1, 1, 0, 100));
+    records.extend(share(3, 2, 1, 0, 500_000));
+    let metrics = Metrics::derive_for(&[captured(records)], &[], Some((2, 1, 0)));
     let ranked = metrics.immediate_dispatch.expect("a ranked designation");
     assert_eq!(ranked.shares_dispatched_before, 2);
     assert!((ranked.dispatched_after_first_seconds - 0.5).abs() < 1e-9);
 
     // A run that recorded no designation ranks nothing rather than guessing.
-    let metrics = Metrics::derive_for(&[snapshot(vec![record(1, 0, 1, 0, 0)])], &[], None);
+    let metrics = Metrics::derive_for(&[captured(share(1, 0, 1, 0, 0))], &[], None);
     assert!(metrics.immediate_dispatch.is_none());
 }
 
@@ -465,4 +471,75 @@ fn a_malformed_outcome_is_reported_rather_than_read_as_no_designation() {
     assert!(older.immediate_share.is_none());
 
     let _ = std::fs::remove_dir_all(&run_dir);
+}
+
+/// A share that never reached the transport is not a dispatch.
+///
+/// A delivery workflow opens its stage before it POSTs, so ranking admitted
+/// workflows would count a share that emitted no request — and could rank the
+/// designated share first when it was never sent, which is precisely the claim
+/// the metric exists to make.
+#[test]
+fn the_rank_counts_only_shares_that_actually_posted() {
+    let workflow = |id: u64, bundle: u32, proposal: u32, share: u32, start: u64| {
+        serde_json::json!({
+            "id": id, "parent_id": null, "stage": "helper::active_delivery",
+            "attribution": {
+                "bundle_index": bundle, "proposal_id": proposal, "share_index": share
+            },
+            "started_after_us": start, "elapsed_us": 10, "outcome": "succeeded",
+            "error_kind": null, "http_status": null, "endpoint_index": 0, "attempt": null
+        })
+    };
+    let post = |id: u64, parent: u64, bundle: u32, proposal: u32, share: u32, start: u64| {
+        serde_json::json!({
+            "id": id, "parent_id": parent, "stage": "helper.http.post_json",
+            "attribution": {
+                "bundle_index": bundle, "proposal_id": proposal, "share_index": share
+            },
+            "started_after_us": start, "elapsed_us": 5, "outcome": "succeeded",
+            "error_kind": null, "http_status": 200, "endpoint_index": 0, "attempt": 1
+        })
+    };
+    let captured = |records: Vec<serde_json::Value>| stage_bench::CapturedSnapshot {
+        source: "round.observability.json".to_string(),
+        snapshot: serde_json::from_value(serde_json::json!({
+            "operation": "run", "started_at_unix_us": 0u64, "round_id": "r",
+            "elapsed_us": 1_000u64, "outcome": "succeeded", "records": records,
+            "summaries": [], "records_dropped": 0,
+            "summary_updates_dropped": 0, "active_stages_dropped": 0
+        }))
+        .expect("a decodable snapshot"),
+    };
+
+    // The designated workflow is admitted first but never POSTs; two others do.
+    let never_sent = captured(vec![
+        workflow(1, 2, 1, 0, 0),
+        workflow(2, 0, 1, 0, 100),
+        post(3, 2, 0, 1, 0, 110),
+        workflow(4, 1, 1, 0, 200),
+        post(5, 4, 1, 1, 0, 210),
+    ]);
+    let metrics = Metrics::derive_for(&[never_sent], &[], Some((2, 1, 0)));
+    assert!(
+        metrics.immediate_dispatch.is_none(),
+        "a designated share that never POSTed must not be ranked first"
+    );
+
+    // With its own POST it ranks, and only POSTing shares are counted.
+    let sent = captured(vec![
+        workflow(1, 2, 1, 0, 0),
+        post(2, 1, 2, 1, 0, 10),
+        workflow(3, 0, 1, 0, 100),
+        post(4, 3, 0, 1, 0, 110),
+        // Admitted, never sent: excluded from the total.
+        workflow(5, 1, 1, 0, 200),
+    ]);
+    let metrics = Metrics::derive_for(&[sent], &[], Some((2, 1, 0)));
+    let ranked = metrics.immediate_dispatch.expect("a ranked designation");
+    assert_eq!(ranked.shares_dispatched_before, 0);
+    assert_eq!(
+        ranked.shares_total, 2,
+        "only shares that POSTed are counted"
+    );
 }

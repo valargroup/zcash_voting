@@ -34,7 +34,7 @@ pub use table::render;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use zcash_voting::{ObservationOutcome, ObservationRecord};
+use zcash_voting::{ObservationAttribution, ObservationOutcome, ObservationRecord};
 
 use crate::CapturedSnapshot;
 
@@ -136,11 +136,11 @@ pub struct ImmediateDispatch {
     pub bundle_index: u32,
     pub proposal_id: u32,
     pub share_index: u32,
-    /// Shares whose delivery started before this one. Zero is the goal.
+    /// Shares POSTed before this one. Zero is the goal.
     pub shares_dispatched_before: usize,
-    /// Shares in the run, for reading `shares_dispatched_before` as a share.
+    /// Shares that actually POSTed, for reading the rank as a share.
     pub shares_total: usize,
-    /// Seconds from the first share's dispatch to this one's.
+    /// Seconds from the first share's POST to this one's.
     pub dispatched_after_first_seconds: f64,
 }
 
@@ -272,6 +272,13 @@ impl Metrics {
         // Ancestry is per snapshot: record ids are invocation-local, so a
         // parent id from one snapshot names a different record in another.
         let mut initial_http: Vec<Interval> = Vec::new();
+        // Each share's earliest initial-delivery POST. Ranking uses this rather
+        // than the admitted workflow: a workflow opens its stage before it
+        // reaches the transport, so one that never POSTs — a resumed share
+        // already at target, or a pre-dispatch failure — would otherwise be
+        // counted as a dispatch and could even rank the designated share first
+        // when it was never sent.
+        let mut first_post: BTreeMap<ObservationAttribution, u64> = BTreeMap::new();
         let mut initial_http_samples: Vec<u64> = Vec::new();
         let mut recovery_http_attempts = 0usize;
 
@@ -326,10 +333,15 @@ impl Metrics {
                 }
                 match delivery_kind(record, &by_id) {
                     DeliveryKind::Initial => {
+                        let start_us = snapshot
+                            .started_at_unix_us
+                            .saturating_add(record.started_after_us);
+                        first_post
+                            .entry(record.attribution)
+                            .and_modify(|earliest| *earliest = (*earliest).min(start_us))
+                            .or_insert(start_us);
                         initial_http.push(Interval {
-                            start_us: snapshot
-                                .started_at_unix_us
-                                .saturating_add(record.started_after_us),
+                            start_us,
                             elapsed_us: record.elapsed_us,
                         });
                         if is_finished(record.outcome) {
@@ -351,7 +363,7 @@ impl Metrics {
             initial_http_samples,
             recovery_http_attempts,
         );
-        let immediate_dispatch = immediate.and_then(|key| immediate_dispatch(&placed, key));
+        let immediate_dispatch = immediate.and_then(|key| immediate_dispatch(&first_post, key));
         let wall_span_us = placed
             .iter()
             .map(Placed::end_us)
@@ -378,34 +390,33 @@ impl Metrics {
     }
 }
 
-/// Where the designated share sat among the run's share deliveries.
+/// Where the designated share sat among the run's initial-delivery POSTs.
 ///
-/// Counted over `helper::active_delivery`, which is one record per share
-/// workflow, so the rank is shares rather than HTTP attempts.
+/// Ranked over each share's first actual POST, not over admitted workflows: a
+/// workflow opens its stage before reaching the transport, so a share that never
+/// POSTs would otherwise count as a dispatch. A designated share with no POST of
+/// its own yields no rank at all rather than an unearned first place.
 fn immediate_dispatch(
-    placed: &[Placed<'_>],
+    first_post: &BTreeMap<ObservationAttribution, u64>,
     (bundle_index, proposal_id, share_index): (u32, u32, u32),
 ) -> Option<ImmediateDispatch> {
-    let deliveries: Vec<&Placed<'_>> = placed
-        .iter()
-        .filter(|entry| &*entry.record.stage == INITIAL_DELIVERY_STAGE)
-        .collect();
-    let designated = deliveries.iter().find(|entry| {
-        entry.record.attribution.bundle_index == Some(bundle_index)
-            && entry.record.attribution.proposal_id == Some(proposal_id)
-            && entry.record.attribution.share_index == Some(share_index)
-    })?;
-    let first = deliveries.iter().map(|entry| entry.start_us).min()?;
+    let designated = ObservationAttribution {
+        bundle_index: Some(bundle_index),
+        proposal_id: Some(proposal_id),
+        share_index: Some(share_index),
+    };
+    let dispatched_at = *first_post.get(&designated)?;
+    let first = *first_post.values().min()?;
     Some(ImmediateDispatch {
         bundle_index,
         proposal_id,
         share_index,
-        shares_dispatched_before: deliveries
-            .iter()
-            .filter(|entry| entry.start_us < designated.start_us)
+        shares_dispatched_before: first_post
+            .values()
+            .filter(|start| **start < dispatched_at)
             .count(),
-        shares_total: deliveries.len(),
-        dispatched_after_first_seconds: designated.start_us.saturating_sub(first) as f64 / 1e6,
+        shares_total: first_post.len(),
+        dispatched_after_first_seconds: dispatched_at.saturating_sub(first) as f64 / 1e6,
     })
 }
 

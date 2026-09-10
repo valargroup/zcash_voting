@@ -185,10 +185,14 @@ pub(in crate::vote) async fn submit_votes<'a>(
             // observes cancellation at admission and completes without touching
             // storage, which is the path an ordinary cancellation already takes
             // and the one that finalizes each proposal's report.
-            None => {
-                let accepted = || designated_share_accepted(db, &scope, round_id.as_deref());
-                let _ = gate.wait(&accepted, cancel).await;
+            // Read once, before waiting: this answers whether an earlier pass
+            // or a run before a restart already placed the share, which cannot
+            // change while this call waits. A share accepted *now* is accepted
+            // by a sibling call in this process, which signals through the gate.
+            None if !designated_share_accepted(db, &scope, round_id.as_deref()) => {
+                let _ = gate.wait(cancel).await;
             }
+            None => {}
         }
     }
 
