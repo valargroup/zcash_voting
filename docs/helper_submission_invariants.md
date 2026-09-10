@@ -381,9 +381,12 @@ Regression coverage:
    a restart, after which condition 1 still covers an accepted share and a refused
    one pays a single wait once.
 
-   Condition 1 is read from durable state once, before waiting, which is what
-   lets a later pass or anything after a restart proceed with no state carried
-   between calls. It is not re-read while waiting: a durable read takes the
+   Condition 1 is read from durable state once, beside the plan loads the call
+   has already performed, which is what lets a later pass or anything after a
+   restart proceed with no state carried between calls. The wait budget bounds
+   the **wait**; it does not bound that read, and could not — a blocking
+   connection acquisition is not preemptible by a timer, and this path performs
+   one such read per proposal before the gate is reached at all. It is not re-read while waiting: a durable read takes the
    sidecar connection that delivery is using continuously, and re-reading it on
    every tick could block a bounded wait past its own deadline. Nothing is lost,
    because a share accepted while this call waits is being accepted by a sibling

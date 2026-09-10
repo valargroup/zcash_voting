@@ -415,6 +415,34 @@ fn the_report_ranks_the_designated_share_against_the_rest_of_the_round() {
     let metrics = Metrics::derive_for(&[captured(share(1, 0, 1, 0, 0))], &[], None);
     assert!(metrics.immediate_dispatch.is_none());
 
+    // A truncated capture may simply be missing the POST that came first, so no
+    // ordering verdict is printed from it.
+    let mut records = share(1, 2, 1, 0, 0);
+    records.extend(share(2, 0, 1, 0, 100));
+    let truncated = stage_bench::CapturedSnapshot {
+        source: "round.observability.json".to_string(),
+        snapshot: serde_json::from_value(serde_json::json!({
+            "operation": "run", "started_at_unix_us": 0u64, "round_id": "r",
+            "elapsed_us": 10_000u64, "outcome": "succeeded", "records": records,
+            "summaries": [], "records_dropped": 12,
+            "summary_updates_dropped": 0, "active_stages_dropped": 0
+        }))
+        .expect("a decodable snapshot"),
+    };
+    let metrics = Metrics::derive_for(&[truncated], &[], Some((2, 1, 0)));
+    assert!(!metrics.complete);
+    let ranked = metrics.immediate_dispatch.expect("a ranked designation");
+    assert_eq!(ranked.shares_dispatched_before, 0);
+    let run_dir = scratch("indeterminate");
+    let manifest = Manifest::build(&config(&run_dir), &outcome(), 1_700_000_000, 21_600);
+    let table = render(&manifest, &metrics);
+    assert!(
+        table.contains("INDETERMINATE: capture incomplete"),
+        "a truncated capture must not yield an ordering verdict"
+    );
+    assert!(!table.contains("first, as intended"));
+    let _ = std::fs::remove_dir_all(&run_dir);
+
     // Two POSTs in the same truncated microsecond are not evidence of order.
     // Nothing "preceded" the designated share, but claiming it went first would
     // assert a sequence the data does not contain.

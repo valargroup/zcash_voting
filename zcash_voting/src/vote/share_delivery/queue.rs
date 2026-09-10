@@ -169,6 +169,13 @@ pub(in crate::vote) async fn submit_votes<'a>(
     let round_id = proposals
         .first()
         .map(|proposal| proposal.vote.round_id().to_string());
+    // Read here, beside the plan loads this call has already done, rather than
+    // inside the gate. It answers whether an earlier pass or a run before a
+    // restart already placed the share, which cannot change while this call
+    // waits, and it is an ordinary synchronous storage read like every other
+    // one on this path. `WAIT_BUDGET` bounds the wait; it does not and cannot
+    // bound a blocking connection acquisition, which no timer can preempt.
+    let already_accepted = designated_share_accepted(db, &scope, round_id.as_deref());
     let gate = round_gate(db, &scope, round_id.as_deref());
     let mut designated = None;
     if let Some(gate) = &gate {
@@ -186,11 +193,9 @@ pub(in crate::vote) async fn submit_votes<'a>(
             // Held here, but it will never be dispatched. Release at once: a
             // share this call cannot send will not arrive by being waited for.
             Holder::Undeliverable => gate.open(),
-            // Read once, before waiting: this answers whether an earlier pass
-            // or a run before a restart already placed the share, which cannot
-            // change while this call waits. A share accepted *now* is accepted
-            // by a sibling call in this process, which signals through the gate.
-            Holder::Elsewhere if !designated_share_accepted(db, &scope, round_id.as_deref()) => {
+            // A share accepted *now* is accepted by a sibling call in this
+            // process, which signals through the gate rather than the row.
+            Holder::Elsewhere if !already_accepted => {
                 let waited = client
                     .observation_scope()
                     .stage("helper::immediate_gate_wait");
