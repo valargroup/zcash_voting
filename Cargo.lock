@@ -816,7 +816,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2418,7 +2418,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2831,7 +2831,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3295,15 +3295,8 @@ dependencies = [
 
 [[package]]
 name = "voting-circuits"
-<<<<<<< HEAD
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc41d4731d5ec65e6b78b38e7db7c8c3c823dd241447be8d4128ba2b91784a78"
-=======
-version = "0.12.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c90a84e2c6f13abd29427b131290faf9f2bb66dacc0441952866f8aef91943fe"
->>>>>>> 04b29e6 (chore: prepare 4.0.0 dependency stack (#319))
+version = "0.11.3"
+source = "git+https://github.com/valargroup/voting-circuits.git?rev=39386cab9f0037b42bbccaaadf3c65f51112d0b1#39386cab9f0037b42bbccaaadf3c65f51112d0b1"
 dependencies = [
  "blake2b_simd",
  "incrementalmerkletree",
@@ -3315,8 +3308,7 @@ dependencies = [
 [[package]]
 name = "voting-crypto-deps"
 version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7093c43ce71cde30f4d9c1154fa6f0b69c6866a4efb9cb582055a81dcf438a6e"
+source = "git+https://github.com/valargroup/voting-circuits.git?rev=39386cab9f0037b42bbccaaadf3c65f51112d0b1#39386cab9f0037b42bbccaaadf3c65f51112d0b1"
 dependencies = [
  "halo2_gadgets",
  "halo2_poseidon",
@@ -4283,7 +4275,7 @@ dependencies = [
 
 [[package]]
 name = "zcash_voting"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "anyhow",
  "base64",

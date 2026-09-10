@@ -15,14 +15,15 @@ default-members = [
 resolver = "2"
 
 [workspace.dependencies]
-<<<<<<< HEAD
-voting-circuits = { version = "=0.11.2", default-features = false }
-voting-crypto-deps = { version = "=0.2.2", default-features = false }
-=======
-voting-circuits = { version = "=0.12.0-rc.2", default-features = false }
+voting-circuits = { version = "=0.11.3", default-features = false }
 voting-crypto-deps = { version = "=0.2.3", default-features = false }
->>>>>>> 04b29e6 (chore: prepare 4.0.0 dependency stack (#319))
 zcash_protocol = { version = "0.10.4" }
+
+# Temporary stacked-PR overrides; remove after voting-circuits 0.11.3 is
+# published.
+[patch.crates-io]
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git", rev = "39386cab9f0037b42bbccaaadf3c65f51112d0b1" }
+voting-crypto-deps = { git = "https://github.com/valargroup/voting-circuits.git", rev = "39386cab9f0037b42bbccaaadf3c65f51112d0b1" }
 
 [profile.test.package.imt-tree]
 opt-level = 3

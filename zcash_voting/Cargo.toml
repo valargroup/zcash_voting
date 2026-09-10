@@ -1,6 +1,6 @@
 [package]
 name = "zcash_voting"
-version = "3.1.0"
+version = "3.1.1"
 edition = "2021"
 rust-version = "1.91"
 description = "Client-side library for Zcash shielded voting: ZKP delegation and vote-commitment proofs (Halo 2), ElGamal encryption, governance PCZT construction, Merkle witness generation, and SQLite round-state persistence."
@@ -79,7 +79,7 @@ zip32 = "0.2"
 incrementalmerkletree = "0.8"
 
 zcash_protocol = { workspace = true }
-zakura-wallet-lib = { version = "=0.1.0-rc5", default-features = false }
+zakura-wallet-lib = { version = "0.1.0-rc5", default-features = false }
 uuid = "1.23.1"
 
 [dev-dependencies]
