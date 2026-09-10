@@ -138,6 +138,14 @@ pub struct ImmediateDispatch {
     pub share_index: u32,
     /// Shares POSTed before this one. Zero is the goal.
     pub shares_dispatched_before: usize,
+    /// Shares whose first POST carries the *same* microsecond as this one.
+    ///
+    /// Start times are truncated to microseconds, so a tie is not evidence of
+    /// order in either direction. Counted rather than broken arbitrarily: a
+    /// tie-break on record id would invent a sequence the data does not contain,
+    /// and "first" is only an honest claim when nothing preceded this share and
+    /// nothing shares its instant.
+    pub shares_dispatched_same_microsecond: usize,
     /// Shares that actually POSTed, for reading the rank as a share.
     pub shares_total: usize,
     /// Seconds from the first share's POST to this one's.
@@ -414,6 +422,10 @@ fn immediate_dispatch(
         shares_dispatched_before: first_post
             .values()
             .filter(|start| **start < dispatched_at)
+            .count(),
+        shares_dispatched_same_microsecond: first_post
+            .iter()
+            .filter(|(attribution, start)| **start == dispatched_at && **attribution != designated)
             .count(),
         shares_total: first_post.len(),
         dispatched_after_first_seconds: dispatched_at.saturating_sub(first) as f64 / 1e6,

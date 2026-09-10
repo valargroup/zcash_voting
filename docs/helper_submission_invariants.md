@@ -361,6 +361,14 @@ Regression coverage:
    Cancellation while waiting leaves the shares pending, as any cancelled
    admission does.
 
+   Conditions 1 and 2 both persist for the round within a process: a release is
+   remembered, so a later pass does not wait again for a designated share that
+   has already been dealt with. That matters most for a refusal, which records no
+   acceptance and would otherwise send every later pass into the full budget
+   waiting for a share no helper took. The memory is bounded and does not survive
+   a restart, after which condition 1 still covers an accepted share and a refused
+   one pays a single wait once.
+
    Condition 1 is read from durable state once, before waiting, which is what
    lets a later pass or anything after a restart proceed with no state carried
    between calls. It is not re-read while waiting: a durable read takes the
@@ -393,8 +401,9 @@ Regression coverage:
    `the_immediate_share_is_posted_before_every_other_share`,
    `other_bundles_wait_for_the_immediate_ack_then_deliver_without_limits`,
    `the_gate_expires_so_a_round_whose_designated_bundle_is_unconfirmed_still_delivers`,
-   `cancellation_while_waiting_on_the_gate_leaves_shares_pending`, and
-   `a_pass_after_the_immediate_share_is_accepted_does_not_wait`.
+   `cancellation_while_waiting_on_the_gate_leaves_shares_pending`,
+   `a_pass_after_the_immediate_share_is_accepted_does_not_wait`, and
+   `a_later_pass_does_not_wait_again_after_the_designated_share_was_refused`.
 
 Enforcement:
 [`round_immediate_share_key`](../zcash_voting/src/share_policy/initial_placement.rs)

@@ -414,6 +414,20 @@ fn the_report_ranks_the_designated_share_against_the_rest_of_the_round() {
     // A run that recorded no designation ranks nothing rather than guessing.
     let metrics = Metrics::derive_for(&[captured(share(1, 0, 1, 0, 0))], &[], None);
     assert!(metrics.immediate_dispatch.is_none());
+
+    // Two POSTs in the same truncated microsecond are not evidence of order.
+    // Nothing "preceded" the designated share, but claiming it went first would
+    // assert a sequence the data does not contain.
+    let mut records = share(1, 2, 1, 0, 400);
+    records.extend(share(2, 0, 1, 0, 400));
+    records.extend(share(3, 1, 1, 0, 900));
+    let metrics = Metrics::derive_for(&[captured(records)], &[], Some((2, 1, 0)));
+    let ranked = metrics.immediate_dispatch.expect("a ranked designation");
+    assert_eq!(ranked.shares_dispatched_before, 0);
+    assert_eq!(
+        ranked.shares_dispatched_same_microsecond, 1,
+        "a tie is reported rather than broken"
+    );
 }
 
 /// A run whose worker died before writing an outcome still has a directory.

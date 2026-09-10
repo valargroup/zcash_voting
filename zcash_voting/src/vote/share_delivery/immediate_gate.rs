@@ -76,7 +76,7 @@
 //! an arbitrary choice among ready shares is very likely to be it. Ordering on
 //! the helper side strengthens this; it is not a precondition for it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
@@ -106,10 +106,32 @@ type GateKey = (u64, String, String);
 static GATES: LazyLock<Mutex<HashMap<GateKey, Weak<ImmediateGate>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Rounds already released, so a later call does not wait again.
+///
+/// A gate lives only as long as the deliveries holding it, which is right for
+/// the gate itself but loses the one fact a later pass needs: this round has
+/// been released. Durable state answers that when the designated share was
+/// *accepted*, but not when it was **refused** — a definite failure records no
+/// acceptance, so an acceptance-only predicate would send every later pass back
+/// into the full budget waiting for a share no helper took.
+///
+/// Bounded rather than unbounded: a process drives few rounds at once, and the
+/// oldest entry is evicted past [`RELEASED_ROUNDS`]. Losing an entry costs one
+/// avoidable wait, never correctness. The set does not survive a restart, where
+/// the durable acceptance check covers the accepted case and a refused round
+/// pays one wait once.
+static RELEASED: LazyLock<Mutex<(HashMap<GateKey, ()>, VecDeque<GateKey>)>> =
+    LazyLock::new(|| Mutex::new((HashMap::new(), VecDeque::new())));
+
+/// Released rounds remembered before the oldest is evicted.
+const RELEASED_ROUNDS: usize = 64;
+
 /// One round's barrier.
 pub(super) struct ImmediateGate {
     opened: Mutex<bool>,
     woken: Notify,
+    /// Recorded on open, so a later delivery for this round starts released.
+    key: Option<GateKey>,
 }
 
 /// Why a waiter stopped waiting. Recorded so a report can distinguish a gate
@@ -128,8 +150,21 @@ pub(super) enum GateWait {
 
 impl ImmediateGate {
     /// The gate for one round, creating it if this is the first delivery.
+    ///
+    /// A round already released comes back open, so a later pass does not wait
+    /// again for a designated share that has been dealt with — accepted or
+    /// refused.
     pub(super) fn for_round(sidecar_id: u64, wallet_id: &str, round_id: &str) -> Arc<Self> {
         let key = (sidecar_id, wallet_id.to_string(), round_id.to_string());
+        if RELEASED
+            .lock()
+            .map(|released| released.0.contains_key(&key))
+            .unwrap_or(false)
+        {
+            let gate = Self::new();
+            gate.open();
+            return Arc::new(gate);
+        }
         let mut gates = match GATES.lock() {
             Ok(gates) => gates,
             // A poisoned registry must not stop delivery: an unshared gate makes
@@ -141,7 +176,7 @@ impl ImmediateGate {
         if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
             return gate;
         }
-        let gate = Arc::new(Self::new());
+        let gate = Arc::new(Self::keyed(key.clone()));
         gates.insert(key, Arc::downgrade(&gate));
         gate
     }
@@ -150,6 +185,15 @@ impl ImmediateGate {
         Self {
             opened: Mutex::new(false),
             woken: Notify::new(),
+            key: None,
+        }
+    }
+
+    fn keyed(key: GateKey) -> Self {
+        Self {
+            opened: Mutex::new(false),
+            woken: Notify::new(),
+            key: Some(key),
         }
     }
 
@@ -161,6 +205,17 @@ impl ImmediateGate {
     pub(super) fn open(&self) {
         if let Ok(mut opened) = self.opened.lock() {
             *opened = true;
+        }
+        if let (Some(key), Ok(mut released)) = (self.key.clone(), RELEASED.lock()) {
+            let (seen, order) = &mut *released;
+            if seen.insert(key.clone(), ()).is_none() {
+                order.push_back(key);
+                while order.len() > RELEASED_ROUNDS {
+                    if let Some(evicted) = order.pop_front() {
+                        seen.remove(&evicted);
+                    }
+                }
+            }
         }
         self.woken.notify_waiters();
     }

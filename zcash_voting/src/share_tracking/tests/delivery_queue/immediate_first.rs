@@ -241,3 +241,60 @@ async fn a_pass_after_the_immediate_share_is_accepted_does_not_wait() {
         before.elapsed()
     );
 }
+
+/// A refused designated share must release the round for good.
+///
+/// Refusal releases the waiters that exist, but a definite failure records no
+/// acceptance, so an acceptance-only test would send every later pass back into
+/// the full budget waiting for a share no helper is going to take.
+#[tokio::test(start_paused = true)]
+async fn a_later_pass_does_not_wait_again_after_the_designated_share_was_refused() {
+    let fixture = Fixture::new(3);
+    let designated = designated_wire_identity(&fixture);
+
+    // Every helper refuses the designated share; the rest succeed.
+    let transport = ScriptedTransport::new(move |wire| ReplyPlan {
+        status: if (wire.proposal_id, wire.share_index) == designated {
+            500
+        } else {
+            200
+        },
+        ..Default::default()
+    });
+    let _ = fixture.deliver(transport.clone(), &uncancelled).await;
+
+    // Nothing durable records an acceptance for it.
+    let persisted = share::list(&fixture.db, ROUND_ID).unwrap();
+    assert!(persisted
+        .iter()
+        .any(|share| share.proposal_id == designated.0
+            && share.share_index == designated.1
+            && share.sent_to_urls.is_empty()));
+
+    // A later pass over the other proposals must not wait out the budget.
+    let others: Vec<_> = fixture
+        .votes
+        .iter()
+        .filter(|vote| vote.vote().proposal_id() != designated.0)
+        .cloned()
+        .collect();
+    let before = tokio::time::Instant::now();
+    let reports = crate::vote::submit_confirmed_vote_shares(
+        &others,
+        &fixture.db,
+        &HelperClient::new(transport, HelperHealth::default()),
+        ShareDeliverySubmissionParams {
+            configured_server_urls: &fixture.configured,
+            now_seconds: SUBMIT_AT,
+        },
+        &uncancelled,
+        &mut |_, _| {},
+    )
+    .await;
+    assert_eq!(reports.len(), 2);
+    assert!(
+        before.elapsed() < Duration::from_secs(1),
+        "a refused designation must not make later passes wait: {:?}",
+        before.elapsed()
+    );
+}

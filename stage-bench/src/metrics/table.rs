@@ -114,16 +114,23 @@ pub fn render(manifest: &Manifest, metrics: &Metrics) -> String {
             "\n-- immediate share (bundle {}, proposal {}, share {}) --",
             immediate.bundle_index, immediate.proposal_id, immediate.share_index
         );
+        // "First" is claimed only when nothing preceded it and nothing shares
+        // its microsecond: start times are truncated, so a tie is not evidence
+        // of order in either direction.
+        let verdict = match (
+            immediate.shares_dispatched_before,
+            immediate.shares_dispatched_same_microsecond,
+        ) {
+            (0, 0) => "  <- first, as intended".to_string(),
+            (0, tied) => format!("  <- tied with {tied} at the same microsecond, order unknown"),
+            _ => String::new(),
+        };
         let _ = writeln!(
             out,
             "  {} of {} shares dispatched before it{}, {:.2}s after the first",
             immediate.shares_dispatched_before,
             immediate.shares_total,
-            if immediate.shares_dispatched_before == 0 {
-                "  <- first, as intended"
-            } else {
-                ""
-            },
+            verdict,
             immediate.dispatched_after_first_seconds,
         );
     }
