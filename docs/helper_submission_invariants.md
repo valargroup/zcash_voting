@@ -1097,6 +1097,21 @@ Jobs retain one immutable validated plan per proposal and the wallet scope
 captured before the queue's asynchronous work; the per-share executor still
 revalidates the exact generation before durable preparation and dispatch.
 
+Preparation runs on a blocking worker with owned handles and the captured
+wallet scope. It reads the requested plans inside one deferred read transaction,
+sharing a successful authoritative-generation and immediate-designation audit
+per round within that transaction only. Every member still validates its exact
+handle generation and complete plan. The connection is released before complete
+payload wire validation; confirmation is re-read and matched to that generation.
+The read-only worker cannot write or POST if its awaiting caller is dropped.
+No audit is cached across calls, and dispatch retains its generation checks,
+reservation and cancellation boundaries. `preparation_connection_wait_does_not_block_sibling_futures`,
+`a_later_delivery_reaudits_round_immediate_plans`, and
+`wallet_switch_during_preparation_does_not_redirect_the_snapshot` cover the
+worker and snapshot scope. `cancellation_during_preparation_leaves_every_share_pending`
+covers cancellation across the worker handoff. The queue observability test requires one round
+audit and one full payload-validation pass per member.
+
 A proposal-local plan or payload validation error prevents every POST for that
 proposal while other valid proposals continue. A share execution error does
 not abort sibling futures or stop independent proposals. Cancellation or an
@@ -1333,6 +1348,25 @@ generation-qualified persistence, and reuse of an existing confirmation.
 Validated-fleet endpoint ordinals retain configured order through health sorting
 and retries. Background driver waits are measured without changing cadence.
 No diagnostic grants placement, confirmation, or permission to retry.
+
+`helper::prepare_delivery_queue` times complete-plan and payload validation
+before queue residence begins. It does not admit shares before validation.
+`helper::load_delivery_snapshot`, `helper::audit_delivery_round`, and
+`helper::validate_delivery_payloads` distinguish the consistent database read,
+its shared round audit, and each proposal's subsequent payload validation.
+Round-audit spans clear inherited bundle, proposal, and share identity without
+changing the parent scope or losing the round identity. An audit failure can
+originate in a proposal other than the one being submitted;
+`round_audit_spans_clear_caller_identity_including_failures` covers that case
+and successful audits with both unattributed and share-attributed callers.
+Each payload-validation span names the current vote's bundle and proposal,
+including failed validations, and clears any inherited share index because it
+covers the whole proposal. Attributing a member never changes its parent scope.
+`payload_validation_spans_identify_each_vote_including_failures` covers singleton
+and multi-member calls, mismatched parent identities, and a malformed payload
+that prevents only its proposal's POSTs.
+`queue_residence_precedes_admission_and_active_delivery_includes_journaling`
+also checks that successful queue preparation precedes every share's enqueue.
 
 These boundaries are covered by
 `queue_residence_precedes_admission_and_active_delivery_includes_journaling`,

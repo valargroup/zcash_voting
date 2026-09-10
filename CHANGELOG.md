@@ -63,6 +63,13 @@ This release is `zcash_voting` 4.0.0.
 
 ### Fixed
 
+- Keep shared helper-delivery round-audit diagnostics round-scoped, including
+  failures caused by other proposals, instead of blaming the triggering share.
+
+- Attribute helper delivery payload-validation diagnostics to each vote's
+  bundle and proposal, including failures, without inheriting a triggering
+  share's identity or changing the parent step's attribution.
+
 - Keep expired round re-poll deadlines runnable so expiry between selection and
   waiting cannot leave the driver asleep until host cancellation.
 - Raise the continuous helper queue to up to 32 process-wide active share deliveries,

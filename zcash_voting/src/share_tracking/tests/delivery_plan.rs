@@ -1388,7 +1388,14 @@ async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pendin
     let queued_cancel = &queued_cancel_check;
     let queued_submission = {
         let queued_finished = queued_finished.clone();
+        let transport = transport.clone();
         async move {
+            // Preparation is asynchronous: a smaller queued commitment can
+            // otherwise finish first and occupy the slots this test means to
+            // saturate with the two full commitments.
+            while transport.call_count("/shares") < 32 {
+                tokio::task::yield_now().await;
+            }
             let result = queued_vote
                 .submit_prepared_shares_unchecked(
                     queued_db_ref,
