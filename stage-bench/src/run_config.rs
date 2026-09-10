@@ -75,12 +75,9 @@ pub struct BenchRunConfig {
     /// the whole voting window. When it expires the run reports the tail as
     /// explicitly incomplete rather than pretending the round settled.
     pub tracking_budget_seconds: u64,
-    /// Focused confirmations driven at once, or 1 for the shipped tracker.
-    ///
-    /// Above one this replaces `ShareTrackingDriver` with concurrent
-    /// `confirm_pending_share` calls — an experiment measuring what the serial
-    /// walk costs, not a measurement of shipped behaviour. See
-    /// [`crate::confirm`].
+    /// Which shares the run confirms after delivery.
+    pub confirm_mode: ConfirmMode,
+    /// Focused confirmations driven at once, for [`ConfirmMode::Concurrent`].
     pub confirm_concurrency: usize,
     /// Detailed records retained per reported invocation.
     ///
@@ -103,6 +100,42 @@ impl BenchRunConfig {
 
     pub fn read(path: &Path) -> std::io::Result<Self> {
         Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    }
+}
+
+/// What a run confirms once every share has been delivered.
+///
+/// A round designates one immediate helper share, and confirming it is what
+/// decides whether a vote reads as cast. The other two modes chase the whole
+/// tail, which no wallet waits on.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmMode {
+    /// Confirm only `RoundPlan::immediate_share_key`, as a wallet does.
+    #[default]
+    Immediate,
+    /// Run the shipped background tracker over every unconfirmed share.
+    All,
+    /// Drive concurrent focused confirmations over every unconfirmed share.
+    Concurrent,
+}
+
+impl ConfirmMode {
+    /// Whether this mode measures shipped wallet behaviour.
+    ///
+    /// Only [`Immediate`](Self::Immediate) does. The other two are deliberate
+    /// experiments about the confirmation tail, and every report carrying their
+    /// numbers says so.
+    pub fn is_shipped_behaviour(self) -> bool {
+        matches!(self, Self::Immediate)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Immediate => "immediate",
+            Self::All => "all",
+            Self::Concurrent => "concurrent",
+        }
     }
 }
 

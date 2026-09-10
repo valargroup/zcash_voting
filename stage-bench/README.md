@@ -69,7 +69,8 @@ the benchmark before.
 | `--chain-repoll-ms <ms>` | 2000 | Poll interval while a chain submission is tracking. |
 | `--vote-window <s>` | 21600 | Seconds until the round's vote end. |
 | `--tracking-budget <s>` | 1800 | Seconds the confirmation phase may run. |
-| `--confirm-concurrency N` | 1 | 1 = shipped tracker. Above 1 = concurrent focused confirmation, an experiment. |
+| `--confirm <mode>` | `immediate` | `immediate` = the wallet's behaviour. `all` / `concurrent` chase the whole tail. |
+| `--confirm-concurrency N` | 8 | Width for `--confirm concurrent`. |
 | `--budget <s>` | derived | Worker wall bound. |
 | `--max-records N` | 262144 | Detailed records per reported invocation. |
 | `--no-warm-pir` | off | Skip the cached proof template. |
@@ -128,12 +129,18 @@ Re-run with a larger `--max-records`.
 The two phases are not comparable and the tool keeps them apart.
 
 **Delivery** — placing every share on its helpers — is what a wallet waits on,
-and what PR #315's 238.76 s → 18.67 s measured. It is reported as the headline
+and what PR #315's 238.76 s to 18.67 s measured. It is reported as the headline
 and announced on stderr the moment it completes.
 
-**Confirmation** — observing each share's reveal nullifier as confirmed on chain
-— is background work a wallet spreads across the whole voting window. It is
-inherently slow here for two reasons that are not defects:
+**Confirmation** is where the SDK's rule matters: a round designates **one**
+immediate helper share, `RoundPlan::immediate_share_key`. A wallet confirms that
+share, shows the vote as cast, and leaves the remaining shares to background
+tracking across the rest of the voting window. `--confirm immediate`, the
+default, does exactly that and reports the latency a voter actually sees.
+
+`--confirm all` and `--confirm concurrent` instead chase every share. They are
+experiments about the tail, labelled as such in the manifest and at the top of
+the printed table, and they are slow for two reasons that are not defects:
 
 - a share cannot confirm until its reveal transaction lands, so early passes
   return `pending` and the tracker sleeps `ready_poll_interval_seconds` (15 s)
@@ -144,12 +151,17 @@ inherently slow here for two reasons that are not defects:
   helpers for one share*, not across shares, so a one-helper fleet polls at a
   strict concurrency of one.
 
-A three-proposal round showed exactly that: `helper::share_status` n=767,
-**peak=1**, and `helper::tracking_wait` 18 × 15 s = 270 s of the 391 s tail.
+Measured: a 1,776-share round costs about **4.7 minutes of serial polling per
+sweep** (1776 × 0.16 s), so no share gets a second look inside five minutes. A
+60-second tracking budget completed 374 polls over 374 distinct shares — a fifth
+of one sweep. Over fifteen minutes, 637 of 1,776 confirmed. At 144 shares a
+sweep is 23 s and the 15 s cadence dominates instead, so this is a scale effect
+that only bites on wide ballots.
 
-`--tracking-budget` bounds the tail. When it expires the run says so and reports
-the confirmation figures as incomplete rather than pretending the round settled.
+`--tracking-budget` bounds whichever mode runs. When it expires the run says so
+and reports the confirmation figures as incomplete.
 
+### Measuring what the serial walk costs
 ### Measuring what the serial walk costs
 
 `--confirm-concurrency N` replaces the tracker with N concurrent

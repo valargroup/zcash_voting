@@ -1,39 +1,37 @@
-//! Confirming a round's shares concurrently, as an explicit experiment.
+//! Confirming shares after delivery: what a wallet does, and two experiments.
 //!
-//! # Why this is a separate mode
+//! # What a wallet does
 //!
-//! The shipped path is `ShareTrackingDriver`, and its pass walks a round's
-//! unconfirmed shares **one at a time**
-//! (`zcash_voting::share_tracking::walk_pending_shares`). The four-way
-//! `SHARE_STATUS_MAX_CONCURRENT_POLLS` inside it parallelises the quorum search
-//! *across helpers for one share*, not across shares, so a one-helper fleet
-//! polls at a strict concurrency of one — which a 1,776-share round pays for
-//! one network round trip at a time.
+//! A round designates **one** immediate helper share,
+//! [`RoundPlan::immediate_share_key`]. A wallet confirms that share through the
+//! focused `confirm_pending_share` path, shows the vote as cast, and leaves the
+//! remaining shares to background tracking across the rest of the voting
+//! window. It does not wait for them, and neither does this benchmark by
+//! default: [`confirm_immediate_share`] is the shipped-behaviour measurement.
 //!
-//! Making that walk concurrent is a change to helper-share behaviour, which
-//! `AGENTS.md` gates behind `docs/helper_submission_invariants.md` and its named
-//! regression tests. It is not something a benchmark may do on the side, and
-//! this module does not do it: the SDK is unmodified.
+//! # The two experiments
 //!
-//! What this does instead is measure the ceiling. `confirm_pending_share` is a
-//! public, per-share entry point, and the invariants document is explicit that
-//! the per-share operation lock is what keeps two callers off one share. So a
-//! host may legitimately drive several focused confirmations at once over
-//! *distinct* shares, and the time that takes is the evidence a decision about
-//! the walk would need.
+//! [`crate::drive`] can instead run the shipped background tracker over *every*
+//! unconfirmed share, or [`confirm_concurrently`] over every share at a chosen
+//! width. Both measure the confirmation tail rather than what a wallet waits
+//! on, and both are labelled as experiments wherever their numbers appear.
 //!
-//! # Why it replaces the tracking driver rather than joining it
+//! The tail is worth measuring because it does not scale: the tracker's pass
+//! walks shares one at a time, and its four-way
+//! `SHARE_STATUS_MAX_CONCURRENT_POLLS` parallelises the quorum search *across
+//! helpers for one share*, not across shares. A 1,776-share round therefore
+//! costs about 4.7 minutes of serial polling per sweep before any share gets a
+//! second look. Making that walk concurrent is a change to helper-share
+//! behaviour, which `AGENTS.md` requires be made together with
+//! `docs/helper_submission_invariants.md` and its named regression tests; this
+//! crate does not make it, it produces the evidence such a change would need.
+//!
+//! # Why the experiments replace the tracker rather than joining it
 //!
 //! "A round admits one run", and interleaved runs re-poll shares the other has
-//! just answered — doubling helper traffic for no added progress. This mode
-//! therefore runs *instead of* `ShareTrackingDriver`, never beside it.
-//!
-//! # What its numbers are not
-//!
-//! Not a measurement of shipped behaviour. Focused confirmation also bypasses
-//! the tracker's grace period and its fifteen-second ready-share cadence, so a
-//! sweep is faster than the product for two reasons at once. The run manifest
-//! records the mode so no reader can mistake one for the other.
+//! just answered — doubling helper traffic for no added progress. Concurrent
+//! confirmation therefore runs *instead of* `ShareTrackingDriver`, never beside
+//! it.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -267,4 +265,126 @@ fn now_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or_default()
+}
+
+/// How long to wait between focused confirmation attempts, early on.
+///
+/// Focused confirmation bypasses the tracker's grace period, so back-to-back
+/// attempts would measure the SDK's own quorum budget rather than the share
+/// becoming confirmable. A second resolves the transition precisely when it
+/// happens quickly, which is the common case.
+const IMMEDIATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How long to wait once a share has clearly not confirmed promptly.
+///
+/// A share that has not settled within [`IMMEDIATE_BACKOFF_AFTER`] is waiting
+/// on its reveal transaction reaching the chain, and polling it every second
+/// only adds helper load — a ten-minute wait at one second is over five hundred
+/// requests for a single share, which can slow the very helper being waited on.
+const IMMEDIATE_POLL_INTERVAL_SETTLED: Duration = Duration::from_secs(5);
+
+/// When the poll interval backs off.
+const IMMEDIATE_BACKOFF_AFTER: Duration = Duration::from_secs(30);
+
+/// Confirms the round's designated immediate share, and nothing else.
+///
+/// This is the shipped wallet behaviour: one share decides whether the vote
+/// reads as cast, and the rest settle in the background over the voting
+/// window. The measurement it produces is the latency a voter actually sees.
+///
+/// Returns when the share confirms, when the budget expires, or when the
+/// share is already confirmed — the SDK reports that as `Reused` rather than
+/// polling again.
+pub async fn confirm_immediate_share(
+    target: &ConfirmationTarget<'_>,
+    share: ShareKey,
+    budget: Duration,
+    events: &EventLog,
+) -> Result<ConfirmationRun> {
+    let started = Instant::now();
+    let mut snapshots = Vec::new();
+    let mut attempts = 0u32;
+
+    let mut phase = PhaseEvent::phase("confirm::immediate_started");
+    phase.bundle_index = Some(share.bundle_index);
+    phase.proposal_id = Some(share.proposal_id);
+    phase.share_index = Some(share.share_index);
+    events.record(phase);
+    eprintln!(
+        "bench: confirming the immediate share (bundle {}, proposal {}, share {})",
+        share.bundle_index, share.proposal_id, share.share_index
+    );
+
+    loop {
+        attempts += 1;
+        let params = ShareConfirmationParams {
+            round_id: target.round_id,
+            share,
+            configured_server_urls: target.helper_urls,
+            now_seconds: now_seconds(),
+        };
+        let (result, snapshot) = confirm_pending_share_with_report(
+            target.database,
+            &params,
+            target.client,
+            &|| false,
+            Some(OPTIONS_PER_SHARE),
+        )
+        .await
+        .into_parts();
+        if let Some(snapshot) = snapshot {
+            snapshots.push(snapshot);
+        }
+
+        match result {
+            Ok(report) if report.confirmed => {
+                let elapsed = started.elapsed().as_secs_f64();
+                let mut phase = PhaseEvent::phase("confirm::immediate_confirmed");
+                phase.detail = Some(format!("{elapsed:.2}s after {attempts} attempts"));
+                events.record(phase);
+                eprintln!(
+                    "bench: immediate share confirmed after {elapsed:.2}s ({attempts} attempts)"
+                );
+                return Ok(ConfirmationRun {
+                    summary: TrackingSummary {
+                        quiescence: format!("ImmediateShareConfirmed({elapsed:.2}s)"),
+                        passes: attempts,
+                        confirmed: 1,
+                        ..TrackingSummary::default()
+                    },
+                    snapshots,
+                });
+            }
+            // Pending is the ordinary answer while the reveal transaction is
+            // still reaching the chain, and is not a failure.
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("bench: immediate confirmation attempt {attempts} failed: {error:?}");
+            }
+        }
+
+        if started.elapsed() >= budget {
+            eprintln!(
+                "bench: the immediate share did not confirm inside its {budget:?} budget \
+                 after {attempts} attempts"
+            );
+            events.record(PhaseEvent::phase("confirm::immediate_budget_expired"));
+            return Ok(ConfirmationRun {
+                summary: TrackingSummary {
+                    quiescence: "ImmediateShareUnconfirmed".to_string(),
+                    passes: attempts,
+                    confirmed: 0,
+                    unrecoverable: 1,
+                    ..TrackingSummary::default()
+                },
+                snapshots,
+            });
+        }
+        tokio::time::sleep(if started.elapsed() < IMMEDIATE_BACKOFF_AFTER {
+            IMMEDIATE_POLL_INTERVAL
+        } else {
+            IMMEDIATE_POLL_INTERVAL_SETTLED
+        })
+        .await;
+    }
 }

@@ -42,7 +42,9 @@ use zcash_voting::{
 };
 
 use crate::events::{EventLog, PhaseEvent};
-use crate::run_config::{BenchOutcome, BenchRunConfig, FailureRecord, TrackingSummary};
+use crate::run_config::{
+    BenchOutcome, BenchRunConfig, ConfirmMode, FailureRecord, TrackingSummary,
+};
 
 /// The route every transport in a run shares.
 ///
@@ -257,28 +259,46 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
     let mut tracking = Vec::new();
     let tracking_started = Instant::now();
     let budget = Duration::from_secs(config.tracking_budget_seconds);
-    if config.confirm_concurrency > 1 {
-        // The experiment, never beside the shipped path: a round admits one
-        // run, and interleaving the two would double helper traffic for no
-        // added progress.
-        match confirm_shares_concurrently(&database, config, &route, &events, budget).await {
-            Ok(run) => {
-                save_snapshots(
-                    &config.run_dir,
-                    "confirm.observability.json",
-                    &run.snapshots,
-                );
-                tracking.push(run.summary);
+    match config.confirm_mode {
+        // What a wallet does: a round designates one immediate share, and
+        // confirming it is what decides whether the vote reads as cast. The
+        // rest settle in the background across the voting window.
+        ConfirmMode::Immediate => {
+            match confirm_immediate(&database, config, &route, &events, budget).await {
+                Ok(run) => {
+                    save_snapshots(
+                        &config.run_dir,
+                        "confirm.observability.json",
+                        &run.snapshots,
+                    );
+                    tracking.push(run.summary);
+                }
+                Err(error) => eprintln!("bench: immediate confirmation stopped early: {error}"),
             }
-            Err(error) => eprintln!("bench: concurrent confirmation stopped early: {error}"),
         }
-    } else {
-        match track_shares(&database, config, &route, &events, options, budget).await {
-            Ok((summary, snapshot)) => {
-                save_snapshot(&config.run_dir, "tracking.0.observability.json", snapshot);
-                tracking.push(summary);
+        ConfirmMode::All => {
+            match track_shares(&database, config, &route, &events, options, budget).await {
+                Ok((summary, snapshot)) => {
+                    save_snapshot(&config.run_dir, "tracking.0.observability.json", snapshot);
+                    tracking.push(summary);
+                }
+                Err(error) => eprintln!("bench: background share tracking stopped early: {error}"),
             }
-            Err(error) => eprintln!("bench: background share tracking stopped early: {error}"),
+        }
+        // Never beside the tracker: a round admits one run, and interleaving
+        // the two would double helper traffic for no added progress.
+        ConfirmMode::Concurrent => {
+            match confirm_shares_concurrently(&database, config, &route, &events, budget).await {
+                Ok(run) => {
+                    save_snapshots(
+                        &config.run_dir,
+                        "confirm.observability.json",
+                        &run.snapshots,
+                    );
+                    tracking.push(run.summary);
+                }
+                Err(error) => eprintln!("bench: concurrent confirmation stopped early: {error}"),
+            }
         }
     }
     let tracking_seconds = tracking_started.elapsed().as_secs_f64();
@@ -482,6 +502,60 @@ fn placed_shares(database: &Arc<VotingDb>, round_id: &str) -> usize {
     zcash_voting::share::list(database, round_id)
         .map(|shares| shares.len())
         .unwrap_or_default()
+}
+
+/// Confirms the round's designated immediate share, and nothing else.
+///
+/// The key comes from the executor's own plan projection rather than from a
+/// fresh calculation over the ballot: the durable designation is what delivery
+/// executed, and `submit_at == 0` alone does not identify it.
+///
+/// A round with no designation — nothing delivered, or it is already confirmed
+/// — is reported rather than treated as a failure.
+async fn confirm_immediate(
+    database: &Arc<VotingDb>,
+    config: &BenchRunConfig,
+    route: &Arc<BenchRoute>,
+    events: &EventLog,
+    budget: Duration,
+) -> Result<crate::confirm::ConfirmationRun> {
+    let plan = zcash_voting::session::resume_plan(
+        database,
+        &config.round_id,
+        &config.ballot.proposal_ids(),
+    )
+    .map_err(voting_error)?;
+    let Some(designated) = plan.immediate_share_key else {
+        eprintln!("bench: this round designates no immediate share; nothing to confirm");
+        return Ok(crate::confirm::ConfirmationRun {
+            summary: TrackingSummary {
+                quiescence: "NoImmediateShareDesignated".to_string(),
+                ..Default::default()
+            },
+            snapshots: Vec::new(),
+        });
+    };
+
+    let client = HelperClient::new(
+        Arc::new(HyperTransport::with_shared_route(Arc::clone(route))),
+        HelperHealth::default(),
+    );
+    crate::confirm::confirm_immediate_share(
+        &crate::confirm::ConfirmationTarget {
+            database,
+            client: &client,
+            round_id: &config.round_id,
+            helper_urls: &config.endpoints.helper_urls,
+        },
+        zcash_voting::share_tracking::ShareKey {
+            bundle_index: designated.bundle_index,
+            proposal_id: designated.proposal_id,
+            share_index: designated.share_index,
+        },
+        budget,
+        events,
+    )
+    .await
 }
 
 /// Runs the concurrent focused-confirmation experiment over this round.
