@@ -33,6 +33,7 @@ pub mod ballot;
 pub mod confirm;
 pub mod drive;
 pub mod events;
+pub mod helper_fleet;
 pub mod manifest;
 pub mod metrics;
 pub mod preflight;
