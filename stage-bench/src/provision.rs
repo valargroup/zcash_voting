@@ -29,13 +29,15 @@ const PROVISION_ATTEMPTS: usize = 3;
 /// design, so an abandoned one costs nothing but its own id.
 const PROVISION_RETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// A freshly provisioned round and the vote end it was created with.
+/// A freshly provisioned round and the timing it was created with.
 ///
-/// The vote end travels with the round because share scheduling derives its
-/// overdue and last-moment windows from the distance to it. Recomputing it
-/// later would silently disagree with what the chain was told.
+/// The benchmark is the authority that creates this one-off round, so it keeps
+/// the timestamp at which it began provisioning as the ceremony start Vizor's
+/// authenticated config would carry. Both boundaries travel with the round;
+/// recomputing either later would change the helper submission schedule.
 pub struct ProvisionedRound {
     pub round_id: String,
+    pub ceremony_start_time_seconds: u64,
     pub vote_end_time_seconds: u64,
 }
 
@@ -76,13 +78,14 @@ async fn provision_once(
         rpc_url: STAGING_CHAIN_RPC,
         chain_id: STAGING_CHAIN_ID,
     };
-    let vote_end = i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs(),
-    )
-    .context("the clock is outside the representable range")?
-        + i64::try_from(vote_window_seconds).context("the vote window is too long")?;
+    let ceremony_start_time_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let ceremony_start = i64::try_from(ceremony_start_time_seconds)
+        .context("the clock is outside the representable range")?;
+    let vote_end = ceremony_start
+        .checked_add(i64::try_from(vote_window_seconds).context("the vote window is too long")?)
+        .context("the vote end is outside the representable range")?;
 
     let round_id = provision_round_with_ballot(
         &preflight.keyring,
@@ -97,6 +100,7 @@ async fn provision_once(
 
     Ok(ProvisionedRound {
         round_id,
+        ceremony_start_time_seconds,
         vote_end_time_seconds: vote_end as u64,
     })
 }

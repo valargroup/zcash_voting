@@ -1,0 +1,1410 @@
+{
+    "schema": "v1",
+    "round": {
+      "id": "d8cedf49-e4c0-430e-b02c-f6392f1aada9",
+      "name": "General Knowledge Quiz: Math, Geography, and Literature",
+      "status": "draft",
+      "settings": {
+        "description": "A neutral 37-question general knowledge quiz covering basic mathematics, geography, and literature. It includes both dual-choice and multiple-choice questions.",
+        "snapshotHeight": "4245460",
+        "endTime": "2026-09-09T19:27:00.000Z",
+        "openUntilClosed": true,
+        "defaultProposalType": "binary",
+        "defaultLabels": [
+          "Yes",
+          "No"
+        ],
+        "discussionURL": ""
+      },
+      "proposals": [
+        {
+          "index": 0,
+          "id": "de881f3c-a745-47db-84d6-a1439885c960",
+          "title": "Is 12 an even number?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "2273e334-14ed-4190-a47c-11afbf779e3a",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "c12b3437-c7b1-4690-a84d-50fefeb9029f",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "30a96645-f778-45e1-8509-8b09be1bc03d",
+          "title": "What is 7 + 8?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "db333aa9-bd44-43c9-8c36-47f2b5c4ad04",
+              "label": "13",
+              "description": ""
+            },
+            {
+              "id": "4fa9b69b-0d22-4d1e-b070-4de70953db09",
+              "label": "14",
+              "description": ""
+            },
+            {
+              "id": "d5081095-b88d-4ff9-85e8-2fa9c79d047e",
+              "label": "15",
+              "description": ""
+            },
+            {
+              "id": "0c56598d-721f-4621-88a3-25f72759562d",
+              "label": "16",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "15"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "id": "26cd6394-df59-4973-ab08-07c48e9388fd",
+          "title": "What is 9 * 6?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "4283a35c-ad7c-4900-a519-1a0ca5b599bf",
+              "label": "45",
+              "description": ""
+            },
+            {
+              "id": "fe7d0eaf-98da-4f80-a7b9-9a3fcb1f64be",
+              "label": "54",
+              "description": ""
+            },
+            {
+              "id": "96383483-3a69-4d18-ab1d-1713612e3871",
+              "label": "63",
+              "description": ""
+            },
+            {
+              "id": "7542f556-c79c-4dfb-b5b6-b75dd0779aa6",
+              "label": "72",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "54"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "id": "87c5cbf5-0893-4beb-97ae-bc762ecb6eab",
+          "title": "Is 17 a prime number?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "cf43c60e-78b8-46b7-a3fd-0adca629f7af",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "1165cc76-6ea1-459c-9ea1-70d3ac987e6a",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "id": "7fbe740d-37eb-470e-b288-8555849665aa",
+          "title": "What is 100 / 4?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "9332761e-1bb2-4129-addf-06a05bf90ff4",
+              "label": "20",
+              "description": ""
+            },
+            {
+              "id": "80c90f56-1f22-4d99-9e32-256c5aa4d9a9",
+              "label": "25",
+              "description": ""
+            },
+            {
+              "id": "bf1eaf2d-8c5f-402a-9ebf-56cf793f29dc",
+              "label": "30",
+              "description": ""
+            },
+            {
+              "id": "9617f426-e8e1-47ea-b154-28b1ae28f3bc",
+              "label": "40",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "25"
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "id": "77315177-e900-41bf-b13a-37e19e57f04e",
+          "title": "Which fraction equals one-half?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "28efb1ab-71cb-45f6-b0de-a1c6b1bf552e",
+              "label": "1/3",
+              "description": ""
+            },
+            {
+              "id": "81ef4636-88e6-40f1-927e-bf61bf1f764d",
+              "label": "2/4",
+              "description": ""
+            },
+            {
+              "id": "b90f2dcc-5546-475d-8c35-44981cff197a",
+              "label": "3/5",
+              "description": ""
+            },
+            {
+              "id": "aef82a28-d2ee-4a4e-959a-1018d24e081e",
+              "label": "4/6",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "2/4"
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "id": "63d6c695-fb0f-47a3-88bd-e92fc926fb2d",
+          "title": "Does a triangle have four sides?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "d58149b8-d3e6-479c-a3c7-18f01b00f35b",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "dde42c6e-30f6-495b-bec4-ba81d887e6f5",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "No"
+            }
+          ]
+        },
+        {
+          "index": 7,
+          "id": "9e8159f5-d105-45d5-a533-a2043bc5035a",
+          "title": "What is the perimeter of a square with sides of 5 cm?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "eb017ac0-3d6a-44d3-93b6-dab264a8a274",
+              "label": "10 cm",
+              "description": ""
+            },
+            {
+              "id": "d287ae01-310b-456e-ba6e-1942726ad2f2",
+              "label": "15 cm",
+              "description": ""
+            },
+            {
+              "id": "ff551d2e-6c44-474a-a46f-847502d8193e",
+              "label": "20 cm",
+              "description": ""
+            },
+            {
+              "id": "9906416a-80bf-4e3a-bc35-8ce7828eeb39",
+              "label": "25 cm",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "20 cm"
+            }
+          ]
+        },
+        {
+          "index": 8,
+          "id": "8a65273d-60e7-4295-bb5a-ebcc8e13e30c",
+          "title": "What is 15% of 100?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "45ff214e-ad2b-45a6-bae0-3b49f8400697",
+              "label": "5",
+              "description": ""
+            },
+            {
+              "id": "c65a39f8-4d67-4775-b03d-bac29674871d",
+              "label": "10",
+              "description": ""
+            },
+            {
+              "id": "df5eecc6-aa4a-4f9b-9ec2-d2905a54c111",
+              "label": "15",
+              "description": ""
+            },
+            {
+              "id": "4c3f6545-f298-4d12-beab-a4d38629dff1",
+              "label": "20",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "15"
+            }
+          ]
+        },
+        {
+          "index": 9,
+          "id": "a849e40b-9801-471c-b74c-ddfd4f0001d1",
+          "title": "Is zero greater than one?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "3b8b2779-4f71-47f7-be5b-8ee2152cdcb2",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "57d23bec-828d-4d53-9266-b784f0c185b3",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "No"
+            }
+          ]
+        },
+        {
+          "index": 10,
+          "id": "08a7c512-3973-4a09-88a0-518a7a80dbdc",
+          "title": "Which number is the largest?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "507e25e0-cec4-4e86-aed2-eb2cd916b3a4",
+              "label": "0.25",
+              "description": ""
+            },
+            {
+              "id": "bdf877d1-120a-409a-b2e1-1dfa3907487a",
+              "label": "0.5",
+              "description": ""
+            },
+            {
+              "id": "5c1160e8-c441-4bfc-aae1-3ac1ae9e9c40",
+              "label": "0.75",
+              "description": ""
+            },
+            {
+              "id": "7c7ea355-2659-42b3-b2c5-620a3fe30c69",
+              "label": "0.6",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "0.75"
+            }
+          ]
+        },
+        {
+          "index": 11,
+          "id": "b74b5a83-107f-4748-96f8-1f5ee81ae398",
+          "title": "What is the next number in the sequence: 2, 4, 6, 8?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "06bfa864-ff8f-4ca5-b776-fb2825ac5b6e",
+              "label": "9",
+              "description": ""
+            },
+            {
+              "id": "ec09df22-983f-4c5d-8451-19bafd724eed",
+              "label": "10",
+              "description": ""
+            },
+            {
+              "id": "69879b37-cb77-4fff-8541-3f2b9856eef0",
+              "label": "11",
+              "description": ""
+            },
+            {
+              "id": "7076b825-010b-4d1f-858b-07ebf0ad35b7",
+              "label": "12",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "10"
+            }
+          ]
+        },
+        {
+          "index": 12,
+          "id": "432bb515-188f-41eb-8a83-6dbd1d6e0fff",
+          "title": "Are all sides of an equilateral triangle equal?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "fb98929f-b78a-4897-97ea-d2d418214306",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "495e43c6-793f-4af4-aed1-599d331cdcde",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Basic Mathematics"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 13,
+          "id": "c7bb6ca6-2304-48b1-ba07-bd711a698e96",
+          "title": "What is the capital of France?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "f5a5c552-1fd0-4a5f-be58-28a76cf22e7f",
+              "label": "Madrid",
+              "description": ""
+            },
+            {
+              "id": "e6cddae6-8fcc-40ae-83e1-bd7f0e0dbf3b",
+              "label": "Paris",
+              "description": ""
+            },
+            {
+              "id": "880e8818-17e0-4ecc-94dc-7de3f33c8f2b",
+              "label": "Rome",
+              "description": ""
+            },
+            {
+              "id": "b3bc104c-bd4f-439b-8c6e-b5bd809cd861",
+              "label": "Brussels",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Paris"
+            }
+          ]
+        },
+        {
+          "index": 14,
+          "id": "46bd6c5c-0de4-4796-a723-3b1f9ef59450",
+          "title": "Is Africa a continent?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "6e2abf9a-447b-4cd0-893f-0fa6c1ea6ee4",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "d635131c-5e90-421d-a8dc-df07cedb0823",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 15,
+          "id": "4996a8c2-7c49-4cbd-bf2e-cd2909a5558a",
+          "title": "Which ocean lies between Africa and Australia?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "a9e8ff51-17a8-41e9-a678-2bee3216b420",
+              "label": "Atlantic Ocean",
+              "description": ""
+            },
+            {
+              "id": "f2fff26c-ccd8-4847-b50f-4cfa13381e15",
+              "label": "Arctic Ocean",
+              "description": ""
+            },
+            {
+              "id": "03295066-abb5-473b-98c8-0e4ffd61a57e",
+              "label": "Indian Ocean",
+              "description": ""
+            },
+            {
+              "id": "c298e0e5-7d62-4fc1-8d93-6e73f384ddb2",
+              "label": "Pacific Ocean",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Indian Ocean"
+            }
+          ]
+        },
+        {
+          "index": 16,
+          "id": "70c71182-8d01-4276-90c3-9e4e4cb06b4a",
+          "title": "Which country is home to the city of Kyoto?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "4c43f840-bd30-4030-9d92-f366cf499854",
+              "label": "China",
+              "description": ""
+            },
+            {
+              "id": "ae4ed877-5dfa-4fb1-a2f1-d3f63b480b41",
+              "label": "Japan",
+              "description": ""
+            },
+            {
+              "id": "f70c70ca-b500-4a5d-a1d9-ae44dbf297f3",
+              "label": "Thailand",
+              "description": ""
+            },
+            {
+              "id": "2141ce8b-b5d7-4996-9d6b-d68313bc787e",
+              "label": "Vietnam",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Japan"
+            }
+          ]
+        },
+        {
+          "index": 17,
+          "id": "f6690848-f813-488d-a926-f4ec7bdf5cd1",
+          "title": "Does the Equator cross South America?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "a8614809-097f-4d22-83ad-a138d2b17338",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "69987542-5568-42f8-bf04-c301f88cadf4",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 18,
+          "id": "afadba55-12be-4f3e-b2f0-902c39cb7b50",
+          "title": "What is the capital of Canada?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "4e88348d-6282-4afc-93e8-29bb0162305b",
+              "label": "Toronto",
+              "description": ""
+            },
+            {
+              "id": "7a7a7728-ab36-4676-a82f-3c9977e9c6ba",
+              "label": "Vancouver",
+              "description": ""
+            },
+            {
+              "id": "45044fcf-5e39-4c8c-87b0-e5f021f1cadb",
+              "label": "Montreal",
+              "description": ""
+            },
+            {
+              "id": "c011afb9-a845-478d-afb5-d7d197413b3f",
+              "label": "Ottawa",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Ottawa"
+            }
+          ]
+        },
+        {
+          "index": 19,
+          "id": "72605b3c-6f06-429b-965b-dd1580ab718e",
+          "title": "Which continent contains the Sahara Desert?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "e53ff485-447e-4c19-b5b3-ca466a717451",
+              "label": "Africa",
+              "description": ""
+            },
+            {
+              "id": "dc171c3e-4674-4c75-a55d-1a06336e43c3",
+              "label": "Asia",
+              "description": ""
+            },
+            {
+              "id": "494440fc-f6e8-4d4e-8239-0695de85c2d4",
+              "label": "Australia",
+              "description": ""
+            },
+            {
+              "id": "2d082176-aabe-4251-9da1-c4a1c93e1166",
+              "label": "South America",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Africa"
+            }
+          ]
+        },
+        {
+          "index": 20,
+          "id": "e18a9b04-97fc-42de-84e5-7b416b5b88ef",
+          "title": "Is the Nile a river?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "5e653032-ade7-48d0-865e-d3cdc0f39296",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "82e67fff-2e45-4b5a-9658-52b9f603e18b",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 21,
+          "id": "b4a7da26-aa8f-4290-9bd9-20e464c2ca20",
+          "title": "Which country has the largest land area?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "0799d9bd-8598-43eb-bb2d-75dfb3a5d31e",
+              "label": "Brazil",
+              "description": ""
+            },
+            {
+              "id": "be46e260-8336-4cfc-bb49-739b6eff8fa5",
+              "label": "Canada",
+              "description": ""
+            },
+            {
+              "id": "faaa6e05-3f6a-4ecd-b2ff-9deb2656b50e",
+              "label": "China",
+              "description": ""
+            },
+            {
+              "id": "eef5ed84-4a37-4bbe-99d8-11f26508c8bf",
+              "label": "Russia",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Russia"
+            }
+          ]
+        },
+        {
+          "index": 22,
+          "id": "e8252bd4-c08b-4cc1-a389-cd48d69ca5f9",
+          "title": "Which mountain range includes Mount Everest?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "5cc03d43-cfa8-4b42-8ca9-f1e97add90da",
+              "label": "Andes",
+              "description": ""
+            },
+            {
+              "id": "63045ac3-a81a-48c0-9506-ce6ffc69af5e",
+              "label": "Alps",
+              "description": ""
+            },
+            {
+              "id": "153217bc-3f5f-44f6-84fc-5d04c281d6b9",
+              "label": "Himalayas",
+              "description": ""
+            },
+            {
+              "id": "f63ea5be-1124-4ecc-b20a-98f4291439d7",
+              "label": "Rockies",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Himalayas"
+            }
+          ]
+        },
+        {
+          "index": 23,
+          "id": "f0a81dd4-d28d-4fb6-8f50-f8f86a2efb8b",
+          "title": "Is Iceland located in the Atlantic Ocean?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "74187210-2f99-4b93-9bcd-2f8bff5c83cf",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "d8bf3ff8-74b1-4731-9e41-e277a30916bc",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 24,
+          "id": "de33b77f-e507-4855-9210-c0da4e22fc55",
+          "title": "Which city is the capital of Australia?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "af9935dc-d374-40f8-83df-a3a5b4995f15",
+              "label": "Canberra",
+              "description": ""
+            },
+            {
+              "id": "537de7ef-1039-4771-85d6-29d798ed0cf2",
+              "label": "Melbourne",
+              "description": ""
+            },
+            {
+              "id": "d5688454-c852-412c-b18a-0690ced1325c",
+              "label": "Perth",
+              "description": ""
+            },
+            {
+              "id": "277942f0-9015-4e06-99d4-7a5fa061824e",
+              "label": "Sydney",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Canberra"
+            }
+          ]
+        },
+        {
+          "index": 25,
+          "id": "3b00bf19-6c01-4774-9067-dbab684d7f53",
+          "title": "Which continent is directly south of Europe?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "ba8e468b-d48f-4c58-872b-1b6fe8e8520e",
+              "label": "Africa",
+              "description": ""
+            },
+            {
+              "id": "bbef0584-b880-4940-a283-b4ec3c1898ec",
+              "label": "Asia",
+              "description": ""
+            },
+            {
+              "id": "2061ff27-d24e-41ca-9e3e-82fa25e874a4",
+              "label": "North America",
+              "description": ""
+            },
+            {
+              "id": "b986242f-dead-4342-97e4-2c53a2439598",
+              "label": "South America",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Geography"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Africa"
+            }
+          ]
+        },
+        {
+          "index": 26,
+          "id": "813a9eef-7068-4965-a21b-4e6db40ebef9",
+          "title": "Who wrote Romeo and Juliet?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "a8bc94a2-2fd5-48c4-9d30-145da001570c",
+              "label": "Charles Dickens",
+              "description": ""
+            },
+            {
+              "id": "e19b1129-753d-45ac-af7c-c6013fa3aa10",
+              "label": "Jane Austen",
+              "description": ""
+            },
+            {
+              "id": "720b77f9-f1da-49b4-bae7-1d6a14087141",
+              "label": "William Shakespeare",
+              "description": ""
+            },
+            {
+              "id": "fb96e708-fd09-46b8-adec-3d8596ebd187",
+              "label": "Virginia Woolf",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "William Shakespeare"
+            }
+          ]
+        },
+        {
+          "index": 27,
+          "id": "81cb9aba-ef85-4197-9e28-064eb75bb9ce",
+          "title": "Is a haiku traditionally associated with Japanese poetry?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "05c2b668-5c07-4a6c-accf-feac558e51b2",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "360954f2-b6fa-4101-a73e-64db28a3294f",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 28,
+          "id": "5048b317-1c8a-4fff-89c7-636e35b88ec8",
+          "title": "Who wrote Pride and Prejudice?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "13a59eef-bd7b-49c5-887d-0bf0cb38aa06",
+              "label": "Emily Bronte",
+              "description": ""
+            },
+            {
+              "id": "06ff274c-1fe7-40af-b33a-fa85e8905d3b",
+              "label": "Jane Austen",
+              "description": ""
+            },
+            {
+              "id": "c33391ca-5a96-4998-8a7c-aaeb77e3ad82",
+              "label": "Mary Shelley",
+              "description": ""
+            },
+            {
+              "id": "16c0d5f4-646f-423d-96a1-8e64b45f421e",
+              "label": "George Eliot",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Jane Austen"
+            }
+          ]
+        },
+        {
+          "index": 29,
+          "id": "03139e1a-c67a-446f-9587-cb696d0eab57",
+          "title": "In literature, what is the main character commonly called?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "fdf2469b-685b-446d-8727-da247ea8f41a",
+              "label": "Narrator",
+              "description": ""
+            },
+            {
+              "id": "92ccb3be-42fa-41b3-8239-b159c64b032f",
+              "label": "Protagonist",
+              "description": ""
+            },
+            {
+              "id": "b317e66b-3c21-4f73-a076-67eda8b4428b",
+              "label": "Publisher",
+              "description": ""
+            },
+            {
+              "id": "c34c3044-04d8-428b-9ba3-b9cb52b36fd1",
+              "label": "Reviewer",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Protagonist"
+            }
+          ]
+        },
+        {
+          "index": 30,
+          "id": "6d3eb234-8ca4-4e21-abcc-7bbb06282878",
+          "title": "Is a biography an account of a person's life?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "f01bf2e3-feca-412e-a7de-618a338e7ab3",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "a89b6032-ac9b-4fef-a8fb-9ae143d1019b",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 31,
+          "id": "29df45f9-80ea-486b-9e0d-a5a6265e1fa4",
+          "title": "Which novel first introduced the character Sherlock Holmes?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "319f59f0-c26a-4041-8ecf-52d576ecc5c6",
+              "label": "A Study in Scarlet",
+              "description": ""
+            },
+            {
+              "id": "8aa95f16-b179-4eb3-9e8e-3d7dc06a3bec",
+              "label": "Great Expectations",
+              "description": ""
+            },
+            {
+              "id": "bb174cd2-5eaa-4332-8404-01c375184118",
+              "label": "The Great Gatsby",
+              "description": ""
+            },
+            {
+              "id": "42ff6345-39f9-4c3a-9e14-783a9daadc2b",
+              "label": "The Old Man and the Sea",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "A Study in Scarlet"
+            }
+          ]
+        },
+        {
+          "index": 32,
+          "id": "b7301c3c-1dfc-4db3-9230-89bc8637bd2a",
+          "title": "Who is traditionally credited with writing The Odyssey?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "4dbfe354-3ef9-486c-a481-3703bc268ab4",
+              "label": "Homer",
+              "description": ""
+            },
+            {
+              "id": "73f59d60-3006-41f6-a6f7-1424d0d6cb3d",
+              "label": "Plato",
+              "description": ""
+            },
+            {
+              "id": "5fe04bd1-c83e-45e6-95e4-f82449faada8",
+              "label": "Sophocles",
+              "description": ""
+            },
+            {
+              "id": "a7b53174-a250-4a59-9adc-b0ae7ec960c0",
+              "label": "Virgil",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Homer"
+            }
+          ]
+        },
+        {
+          "index": 33,
+          "id": "db4605e6-d0f5-4d6b-a996-e1d2f7f94198",
+          "title": "Is a metaphor a figure of speech?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "656b2611-682d-4179-b37a-d6d03b6c3c80",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "c8c3eef6-3f72-4111-b8e8-5f55a1b48efd",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        },
+        {
+          "index": 34,
+          "id": "b1885ca2-b589-4fc2-a0fe-6f6a0416e912",
+          "title": "Which genre commonly includes magic and imaginary worlds?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "dcd8a060-1767-4d50-b3f1-f88b324183c8",
+              "label": "Biography",
+              "description": ""
+            },
+            {
+              "id": "79dfcdca-2717-423b-a071-154f7c7e807c",
+              "label": "Fantasy",
+              "description": ""
+            },
+            {
+              "id": "6b2a2cc2-5b30-4423-85d5-bbf3e91d5491",
+              "label": "Journalism",
+              "description": ""
+            },
+            {
+              "id": "ef2566c3-a389-4967-8c45-2aac7da3bf09",
+              "label": "Realism",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Fantasy"
+            }
+          ]
+        },
+        {
+          "index": 35,
+          "id": "c716b5bc-80c4-429f-8dc7-7fad62a133a3",
+          "title": "Who wrote The Little Prince?",
+          "description": "Select the correct answer.",
+          "type": "multi-choice",
+          "options": [
+            {
+              "id": "87a1b9a9-7481-4e4b-9971-68fdc69c65db",
+              "label": "Antoine de Saint-Exupery",
+              "description": ""
+            },
+            {
+              "id": "38acb702-c6d6-49c4-ad88-44bea4c24f09",
+              "label": "Jules Verne",
+              "description": ""
+            },
+            {
+              "id": "b675aea5-44fd-4cb8-b907-6b866ab86f36",
+              "label": "Victor Hugo",
+              "description": ""
+            },
+            {
+              "id": "ca15e5a3-7e1f-4abc-bf3d-57caf5019bac",
+              "label": "Voltaire",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Antoine de Saint-Exupéry"
+            }
+          ]
+        },
+        {
+          "index": 36,
+          "id": "2df4ea81-4be8-42d6-93e1-a27c53cfb446",
+          "title": "Does an autobiography describe the author's own life?",
+          "description": "Select the correct answer.",
+          "type": "binary",
+          "options": [
+            {
+              "id": "eeeb7a8a-91ab-4f86-bc59-805c440d4e0a",
+              "label": "Yes",
+              "description": ""
+            },
+            {
+              "id": "133c29bc-d9e5-4c6b-8bb6-797bab4cd59d",
+              "label": "No",
+              "description": ""
+            }
+          ],
+          "zipNumber": "",
+          "forumURL": "",
+          "metadata": [
+            {
+              "key": "category",
+              "value": "Literature"
+            },
+            {
+              "key": "correctAnswer",
+              "value": "Yes"
+            }
+          ]
+        }
+      ]
+    },
+    "generatedAt": "2026-09-09T09:16:18.957Z"
+  }

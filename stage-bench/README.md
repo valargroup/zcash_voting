@@ -22,9 +22,10 @@ regression in ZKP2 proving, PIR, chain advance, or vote-tree sync would not show
 up until someone repeated the whole manual capture. This crate is that
 procedure as a command.
 
-It measures; it asserts almost nothing. The one correctness claim it makes is
-that the round it timed actually completed, because a run that delivered
-nothing quickly is not a fast run.
+It measures and makes two correctness claims: the round it timed actually
+completed, and its helper submission schedule matches Vizor. A fast run that
+delivered nothing, or one that accidentally marked every helper payload for
+immediate chain submission, is not a representative run.
 
 ## What it is not
 
@@ -77,6 +78,18 @@ the benchmark before.
 | `--out <dir>` | `runs` | Where run directories are created. |
 
 ## Reading the report
+
+The foreground sends every encrypted share payload to its assigned helper.
+That is the work Vizor labels **Delivering shares**. It does not mean every
+helper reveals its share to the chain immediately: exactly one round-designated
+share carries `submit_at = 0`; the remaining payloads carry randomized future
+submission times before the round's last-moment window. Vizor confirms the
+designated share and leaves that passive tail to background tracking, and the
+benchmark's default `--confirm immediate` mode does the same.
+
+Every run records the ceremony start and vote end that produced this schedule.
+It fails if provisioning has already consumed the delayed window or if the
+durable SDK plan contains an immediate non-designated share.
 
 Real output, from a three-proposal round on staging:
 

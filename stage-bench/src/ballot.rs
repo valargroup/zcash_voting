@@ -2,7 +2,7 @@
 //!
 //! Two sources, one shape. A synthetic ballot is described by a proposal count
 //! and a cycle of option widths; an imported ballot is read from the round
-//! export a vote manager produces (the repository's own `prop.json` is one).
+//! export a vote manager produces (`tests/fixtures/prop.json` is one).
 //! Both produce the same [`Ballot`], so nothing downstream knows which was
 //! used.
 //!

@@ -54,6 +54,27 @@ pub fn render(manifest: &Manifest, metrics: &Metrics) -> String {
         manifest.tracking_seconds
     );
 
+    let schedule = &manifest.share_schedule;
+    if schedule.total_shares > 0 {
+        let _ = writeln!(out, "\n-- helper submission schedule --");
+        let _ = writeln!(
+            out,
+            "  designated immediate {:>5}   submit_at=0 {:>5}   passive {:>5}   future {:>5}",
+            schedule.designated_immediate_shares,
+            schedule.submit_at_zero_shares,
+            schedule.passive_shares,
+            schedule.future_shares,
+        );
+        let _ = writeln!(
+            out,
+            "  passive delay       p50 {:>7}s   p95 {:>7}s   max {:>7}s   due in budget {}",
+            schedule.p50_delay_seconds,
+            schedule.p95_delay_seconds,
+            schedule.max_delay_seconds,
+            schedule.due_within_tracking_budget,
+        );
+    }
+
     if !metrics.complete {
         let _ = writeln!(
             out,

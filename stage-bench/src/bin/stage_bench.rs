@@ -297,6 +297,7 @@ async fn run(args: RunArgs) -> Result<()> {
     std::fs::create_dir_all(&run_dir).context("creating the run directory")?;
 
     let config = build_config(&args, &preflight, &ballot, &round, &run_dir)?;
+    report_submission_window(&config)?;
     let config_path = BenchRunConfig::path_in(&run_dir);
     config.write(&config_path)?;
 
@@ -355,6 +356,7 @@ fn report(
             bundles: 0,
             proposals: config.ballot.len(),
             immediate_share: None,
+            share_schedule: Default::default(),
             completed_proposals: 0,
             tracking: Vec::new(),
             round_drive_seconds: 0.0,
@@ -438,6 +440,7 @@ fn build_config(
         endpoints,
         ballot: ballot.clone(),
         fleet,
+        ceremony_start_time_seconds: round.ceremony_start_time_seconds,
         vote_end_time_seconds: round.vote_end_time_seconds,
         bundle_concurrency: args.bundle_concurrency,
         proof_concurrency: args.proof_concurrency,
@@ -449,6 +452,28 @@ fn build_config(
         max_records: args.max_records,
         run_dir: run_dir.to_path_buf(),
     })
+}
+
+/// Rejects a benchmark invocation that can no longer exercise passive helper
+/// submission and prints the window that makes the run Vizor-equivalent.
+fn report_submission_window(config: &BenchRunConfig) -> Result<()> {
+    let now = now_unix();
+    let buffer = zcash_voting::share_policy::last_moment_buffer_seconds(
+        config.ceremony_start_time_seconds,
+        config.vote_end_time_seconds,
+    )
+    .context("the provisioned round has no valid last-moment buffer")?;
+    let deadline = config.vote_end_time_seconds.saturating_sub(buffer);
+    anyhow::ensure!(
+        deadline > now,
+        "the provisioned round is already inside its last-moment window; increase --vote-window"
+    );
+    eprintln!(
+        "bench: passive helper submissions span the next {}s before the {}s last-moment window",
+        deadline - now,
+        buffer
+    );
+    Ok(())
 }
 
 fn refresh_warm_pir(preflight: &Preflight, config: &BenchRunConfig) {
