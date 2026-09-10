@@ -158,13 +158,44 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
     // With an empty fleet plan this wrapper delegates every request unchanged,
     // so a one-helper run and a ten-helper run share one code path.
     let route = Arc::new(HelperFleetRoute::new(
-        zcash_voting::transport::DirectRoute::default(),
+        if config.http1_only {
+            zcash_voting::transport::DirectRoute::http1_only()
+        } else {
+            zcash_voting::transport::DirectRoute::default()
+        },
         config.fleet.clone(),
         Arc::clone(&contacts),
     ));
 
+    let helper_route = if config.separate_helper_pool {
+        Arc::new(HelperFleetRoute::new(
+            if config.http1_only {
+                zcash_voting::transport::DirectRoute::http1_only()
+            } else {
+                zcash_voting::transport::DirectRoute::default()
+            },
+            config.fleet.clone(),
+            Arc::clone(&contacts),
+        ))
+    } else {
+        Arc::clone(&route)
+    };
+    if config.warm_helper_connections {
+        use zcash_voting::HelperTransport;
+        let transport = HyperTransport::with_shared_route(Arc::clone(&helper_route));
+        for endpoint in &config.endpoints.helper_urls {
+            transport
+                .get(
+                    &format!("{}/shielded-vote/v1/status", endpoint.trim_end_matches('/')),
+                    Duration::from_secs(10),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("helper connection warmup failed"))?;
+        }
+    }
+
     let helper_client = HelperClient::new(
-        Arc::new(HyperTransport::with_shared_route(Arc::clone(&route))),
+        Arc::new(HyperTransport::with_shared_route(Arc::clone(&helper_route))),
         HelperHealth::default(),
     );
     let chain_config = ChainSubmissionClientConfig::for_network(
@@ -287,7 +318,7 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
         // confirming it is what decides whether the vote reads as cast. The
         // rest settle in the background across the voting window.
         ConfirmMode::Immediate => {
-            match confirm_immediate(&database, config, &route, &events, budget).await {
+            match confirm_immediate(&database, config, &helper_route, &events, budget).await {
                 Ok(run) => {
                     save_snapshots(
                         &config.run_dir,
@@ -300,7 +331,7 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
             }
         }
         ConfirmMode::All => {
-            match track_shares(&database, config, &route, &events, options, budget).await {
+            match track_shares(&database, config, &helper_route, &events, options, budget).await {
                 Ok((summary, snapshot)) => {
                     save_snapshot(&config.run_dir, "tracking.0.observability.json", snapshot);
                     tracking.push(summary);
@@ -311,7 +342,9 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
         // Never beside the tracker: a round admits one run, and interleaving
         // the two would double helper traffic for no added progress.
         ConfirmMode::Concurrent => {
-            match confirm_shares_concurrently(&database, config, &route, &events, budget).await {
+            match confirm_shares_concurrently(&database, config, &helper_route, &events, budget)
+                .await
+            {
                 Ok(run) => {
                     save_snapshots(
                         &config.run_dir,

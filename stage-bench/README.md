@@ -321,3 +321,23 @@ unless their recorded configuration says otherwise.
 
 Round creation serialises chain-wide, and a delegation is consumed per round:
 never run two benchmarks at once, and expect every run to spend a fresh round.
+
+## Staging transport diagnostics
+
+`run` accepts `--separate-helper-pool`, `--http1-only`, and
+`--warm-helper-connections`. All default to false and are saved in
+`run-config.json`. A separate pool isolates helper requests from chain, PIR,
+and tree traffic without changing helper selection. Warmup issues status GETs
+before the timed round; HTTP/1.1 mode retains certificate checks and deadlines.
+
+Set `SENTRY_ENVIRONMENT=staging` and `SVOTE_HELPER_DIAGNOSTICS=1`
+on the benchmark process to enable correlation. Both are required; the default
+is off. Only HTTPS share POSTs to the exact primary and secondary staging
+hostnames qualify, even when these environment variables are set.
+
+Eligible observed direct POSTs include `http_diagnostics` on `helper.http.transport`
+records: a random per-attempt request ID, connection assignment and setup timing,
+negotiated protocol, and matching helper timing headers when available. The
+`vote-sdk` helper latency runbook documents the Caddy overlay and SSH collector
+that correlate these IDs without storing payloads or HTTP credentials. Custom
+routes may not provide these diagnostics. Missing timings stay absent.

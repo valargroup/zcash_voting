@@ -23,6 +23,15 @@ use crate::ballot::Ballot;
 /// Everything one child run needs.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BenchRunConfig {
+    /// Restrict direct transport to HTTP/1.1 for diagnostic comparisons.
+    #[serde(default)]
+    pub http1_only: bool,
+    /// Give helper traffic its own connection pool, separate from chain and PIR.
+    #[serde(default)]
+    pub separate_helper_pool: bool,
+    /// Prime the helper pool with a status GET before the measured round drive.
+    #[serde(default)]
+    pub warm_helper_connections: bool,
     /// The voting sidecar this run builds and drives.
     pub sidecar: PathBuf,
     /// The scanned voter wallet note selection reads.

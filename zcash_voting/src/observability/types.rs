@@ -77,6 +77,28 @@ pub enum ObservationOutcome {
     PossiblyDispatched,
 }
 
+/// Request correlation and transport boundaries, present only for observed direct HTTP.
+/// Server timings are untrusted diagnostics and never affect request outcomes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HttpRequestDiagnostics {
+    pub request_id: String,
+    pub protocol: Option<String>,
+    /// Time from handoff until Hyper assigns a connection, including pool wait.
+    pub connection_acquired_us: Option<u64>,
+    /// DNS, TCP, and TLS combined for the assigned connection; excludes pool wait.
+    #[serde(default)]
+    pub connection_setup_us: Option<u64>,
+    /// True when the assigned connection was established before this request began.
+    #[serde(default)]
+    pub connection_predates_request: Option<bool>,
+    pub response_headers_us: Option<u64>,
+    pub server_started_unix_us: Option<u64>,
+    pub server_handler_us: Option<u64>,
+    /// Client time to headers less reported server time; not a pure network metric.
+    pub unattributed_wait_us: Option<u64>,
+}
+
 /// One measured stage or network attempt. Durations may overlap with children.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -98,6 +120,8 @@ pub struct ObservationRecord {
     pub endpoint_index: Option<u32>,
     /// One-based network attempt within its parent operation; absent on ordinary stages.
     pub attempt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_diagnostics: Option<HttpRequestDiagnostics>,
 }
 
 /// Totals for one stage, attribution, and outcome, subject to the summary group cap.

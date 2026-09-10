@@ -42,8 +42,8 @@ pub mod note_bundling;
 pub mod observability;
 pub(crate) use observability::ObservationScope;
 pub use observability::{
-    ObservabilityOptions, ObservationAttribution, ObservationOutcome, ObservationRecord,
-    ObservationSummary, OperationObservability, OperationReport,
+    HttpRequestDiagnostics, ObservabilityOptions, ObservationAttribution, ObservationOutcome,
+    ObservationRecord, ObservationSummary, OperationObservability, OperationReport,
 };
 pub mod delegate_and_vote_batch;
 pub mod phases;

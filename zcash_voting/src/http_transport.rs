@@ -1,3 +1,5 @@
+mod connection_diagnostics;
+mod diagnostics;
 mod observations;
 pub(crate) use observations::observe_helper_http;
 pub use observations::{HttpObservationContext, HttpObservationPhase};
@@ -439,9 +441,10 @@ where
     C::Future: Send + 'static,
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    type Response = T;
+    type Response = connection_diagnostics::DiagnosticConnection<T>;
     type Error = Box<dyn std::error::Error + Send + Sync>;
-    type Future = Pin<Box<dyn Future<Output = std::result::Result<T, Self::Error>> + Send>>;
+    type Future =
+        Pin<Box<dyn Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
 
     /// Readiness is part of connection setup, so the deadline covers it too,
     /// by racing the inner connector against a timer rather than by sampling
@@ -507,19 +510,23 @@ where
     }
 
     fn call(&mut self, uri: http::Uri) -> Self::Future {
+        let started = diagnostics::connection_enabled(&uri).then(std::time::Instant::now);
         let future = self.inner.call(uri);
         let deadline = DIRECT_CONNECT_DEADLINE
             .try_with(|deadline| *deadline)
             .ok()
             .flatten();
         Box::pin(async move {
-            match deadline {
+            let connected = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline, future)
                     .await
                     .map_err(|_| connect_timeout_error())?
                     .map_err(Into::into),
                 None => future.await.map_err(Into::into),
-            }
+            }?;
+            Ok(connection_diagnostics::DiagnosticConnection::new(
+                connected, started,
+            ))
         })
     }
 }
@@ -559,6 +566,26 @@ impl DirectRoute {
         let mut connector = HttpConnector::new();
         connector.enforce_http(false);
         Self::with_http_connector(connector)
+    }
+
+    /// Creates a direct route restricted to HTTP/1.1 for transport comparisons.
+    /// Deadlines, certificate verification, and delivery classification are unchanged.
+    pub fn http1_only() -> Self {
+        ensure_rustls_provider();
+        let mut connector = HttpConnector::new();
+        connector.enforce_http(false);
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .wrap_connector(connector);
+        Self::from_connector(
+            ConnectDeadlineConnector {
+                inner: https,
+                readiness_timer: None,
+            },
+            true,
+        )
     }
 
     /// Applies the SDK's standard Rustls configuration to a caller-supplied
@@ -683,7 +710,7 @@ impl RouteHttp for DirectRoute {
                     on_dispatch();
                     let observations = observations::scope();
                     let headers_stage = observations.stage("helper.http.response_headers");
-                    let response = self.client.request(hyper_request).await;
+                    let response = diagnostics::request(self.client.as_ref(), hyper_request).await;
                     headers_stage.finish(
                         if response.is_ok() {
                             crate::ObservationOutcome::Succeeded
@@ -1897,3 +1924,7 @@ mod tests {
 #[cfg(test)]
 #[path = "http_transport/tests/observations.rs"]
 mod observation_tests;
+
+#[cfg(test)]
+#[path = "http_transport/tests/diagnostics.rs"]
+mod diagnostics_tests;

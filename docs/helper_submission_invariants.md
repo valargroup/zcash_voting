@@ -2222,3 +2222,14 @@ reintroducing full-round decoding in a per-share operation;
 `full_ballot_delivers_592_shares_with_bounded_admission` exercises a 37-proposal
 ballot, durable acceptance and the 32-delivery limit. Existing queued-deletion,
 wallet-scope, generation-replacement and confirmation-race tests remain binding.
+
+## Diagnostic HTTP correlation
+
+Only when `SENTRY_ENVIRONMENT=staging` and `SVOTE_HELPER_DIAGNOSTICS=1`,
+observed HTTPS share POSTs to the two exact staging helper hostnames may carry an independently random per-attempt
+`X-Vote-Request-ID`. It is diagnostic metadata, never a share identity, placement
+input, idempotency key, acceptance signal, or retry hint. Unobserved requests do
+not generate it. Server timing headers are accepted only with the matching echo
+and are untrusted observations; malformed or missing timing cannot fail a vote.
+Connection timing records do not redefine the existing pre-dispatch boundary.
+The HTTP/1.1 comparison route retains all timeout and ambiguity rules.

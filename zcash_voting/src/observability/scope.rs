@@ -213,6 +213,7 @@ impl ObservationScope {
             http_status: None,
             endpoint_index: self.endpoint_index,
             attempt: self.attempt,
+            http_diagnostics: None,
         };
         collection.active.insert(id, (stage, record, started));
         ObservationStage {
@@ -339,6 +340,18 @@ impl ObservationStage {
     /// Child context for work belonging to this stage.
     pub(crate) fn scope(&self) -> &ObservationScope {
         &self.scope
+    }
+
+    /// Attaches bounded request diagnostics without adding identifier labels to summaries.
+    pub(crate) fn http_diagnostics(&self, diagnostics: super::HttpRequestDiagnostics) {
+        if let (Some(id), Some(collector)) = (self.id, &self.scope.collector) {
+            let mut collection = collector
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if let Some((_, record, _)) = collection.active.get_mut(&id) {
+                record.http_diagnostics = Some(diagnostics);
+            }
+        }
     }
 
     /// Finishes a stage with a semantic outcome and a static error category.

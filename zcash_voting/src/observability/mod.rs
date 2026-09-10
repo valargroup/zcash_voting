@@ -23,8 +23,8 @@ mod types;
 #[doc(hidden)]
 pub use scope::ObservationScope;
 pub use types::{
-    ObservabilityOptions, ObservationAttribution, ObservationOutcome, ObservationRecord,
-    ObservationSummary, OperationObservability, OperationReport,
+    HttpRequestDiagnostics, ObservabilityOptions, ObservationAttribution, ObservationOutcome,
+    ObservationRecord, ObservationSummary, OperationObservability, OperationReport,
 };
 
 #[cfg(test)]

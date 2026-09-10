@@ -100,6 +100,15 @@ struct PreflightArgs {
 
 #[derive(Parser, Debug)]
 struct RunArgs {
+    /// Restrict the diagnostic run to HTTP/1.1.
+    #[arg(long)]
+    http1_only: bool,
+    /// Separate helper connections from chain, PIR, and tree requests.
+    #[arg(long)]
+    separate_helper_pool: bool,
+    /// Prime helper connections with status GETs before timing the round.
+    #[arg(long)]
+    warm_helper_connections: bool,
     /// Proposals on the ballot.
     #[arg(long, default_value_t = 37)]
     proposals: usize,
@@ -427,6 +436,9 @@ fn build_config(
     helpers: SelectedHelpers,
 ) -> Result<BenchRunConfig> {
     Ok(BenchRunConfig {
+        http1_only: args.http1_only,
+        separate_helper_pool: args.separate_helper_pool,
+        warm_helper_connections: args.warm_helper_connections,
         sidecar: run_dir.join("sidecar.db"),
         wallet_db: preflight.wallet_db.clone(),
         warm_pir_from: (!args.no_warm_pir)

@@ -26,6 +26,9 @@ fn scratch(name: &str) -> PathBuf {
 
 fn config(run_dir: &std::path::Path) -> BenchRunConfig {
     BenchRunConfig {
+        http1_only: false,
+        separate_helper_pool: false,
+        warm_helper_connections: false,
         sidecar: run_dir.join("sidecar.db"),
         wallet_db: PathBuf::from("/tmp/voter.db"),
         warm_pir_from: Some(PathBuf::from("/tmp/pir-warm.db")),

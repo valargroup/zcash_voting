@@ -22,6 +22,8 @@ pub struct ObservationRecord {
     pub endpoint_index: Option<u32>,
     /// One-based network attempt within its parent operation; absent on ordinary stages.
     pub attempt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_diagnostics: Option<super::HttpRequestDiagnostics>,
 }
 
 /// Plain owned-string projection for wire and FFI consumers.
@@ -69,6 +71,7 @@ impl From<&super::ObservationRecord> for ObservationRecord {
             http_status: record.http_status,
             endpoint_index: record.endpoint_index,
             attempt: record.attempt,
+            http_diagnostics: record.http_diagnostics.clone(),
         }
     }
 }
