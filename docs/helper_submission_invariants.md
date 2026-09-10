@@ -335,6 +335,92 @@ Regression coverage:
 5. `immediate = true` and `submit_at = 0` are not equivalent. Last-moment and
    single-share planning can assign `submit_at = 0` to undesignated shares,
    but the designated immediate share MUST always have `submit_at = 0`.
+6. **Initial delivery dispatches the designated share before the round's other
+   shares, and concurrent deliveries of the same round wait for it to reach a
+   helper.** The designation names the *highest* eligible bundle, which is the
+   last to reach the chain, while initial delivery runs once per confirmed unit
+   — so without this the share a voter waits on is submitted after the bundles
+   that confirmed earlier. Measured against staging on a 37-proposal round, 67%
+   of the round's shares preceded it with bundles running serially and 8% with
+   them concurrent.
+
+   The guarantee is best-effort and bounded on both sides. A call holding the
+   designation dispatches it first. A call without it proceeds on **any** of
+   three conditions, and never waits past the last of them:
+
+   1. the designated share already has a definite acceptance recorded against it
+      — an acknowledged enqueue, not a chain confirmation, and a duplicate answer
+      counts;
+   2. the call holding the designated share finished with it, **including with a
+      refusal or any other non-acceptance outcome** — a share no helper took will
+      not arrive by being waited for, so the round is released rather than made to
+      spend its budget discovering that; or
+   3. the wait budget expired, so a round whose designated bundle has not
+      confirmed never stalls the bundles that are ready.
+
+   Condition 2 covers a designated share this call cannot dispatch at all — one
+   whose preparation failed — as well as one the helpers refused. Holder identity
+   is resolved from the durable designation against the call's votes rather than
+   from its job list, because a failed preparation contributes no job and would
+   otherwise read as another call's responsibility, leaving this call's own
+   siblings waiting for a share already in front of them.
+
+   A wait is recorded as `helper::immediate_gate_wait`, with `Pending` marking
+   one that expired. Every share's `helper::delivery_queue_wait` is already open
+   when the gate wait begins, so without its own record an expired wait would be
+   charged to generic queue time and read as delivery contention.
+
+   Cancellation while waiting leaves the shares pending, as any cancelled
+   admission does.
+
+   Conditions 1 and 2 both persist for the round within a process: a release is
+   remembered, so a later pass does not wait again for a designated share that
+   has already been dealt with. That matters most for a refusal, which records no
+   acceptance and would otherwise send every later pass into the full budget
+   waiting for a share no helper took. The memory is bounded and does not survive
+   a restart, after which condition 1 still covers an accepted share and a refused
+   one pays a single wait once.
+
+   Condition 1 is read from durable state once, beside the plan loads the call
+   has already performed, which is what lets a later pass or anything after a
+   restart proceed with no state carried between calls. The wait budget bounds
+   the **wait**; it does not bound that read, and could not — a blocking
+   connection acquisition is not preemptible by a timer, and this path performs
+   one such read per proposal before the gate is reached at all. It is not re-read while waiting: a durable read takes the
+   sidecar connection that delivery is using continuously, and re-reading it on
+   every tick could block a bounded wait past its own deadline. Nothing is lost,
+   because a share accepted while this call waits is being accepted by a sibling
+   call in the same process, which is condition 2.
+
+   Within one share's fan-out the boundary is the completion of its wave: the
+   executor resolves a wave's outcomes only after all of its POSTs return,
+   deliberately and serially, so that a stale generation aborts before a later
+   write can mask it. That ordering is not changed here; the difference it costs
+   is at most one wave's slowest reply, is bounded by the wait budget regardless,
+   and is zero for a single-target placement.
+
+   It deliberately stops at ordering *inside* one call: holding a call's own
+   shares behind its designated one would break the no-proposal-barrier property
+   (`combined_reconciliation_delivers_later_proposals_while_the_first_is_unfinished`)
+   and prevent a full commitment reaching the POST ceiling
+   (`full_commitment_reaches_but_never_exceeds_128_posts`). Both are deliberate,
+   and every share measured ahead of the designated one belonged to another
+   bundle, which is what the gate addresses.
+
+   Enforcement:
+   [`immediate_gate`](../zcash_voting/src/vote/share_delivery/immediate_gate.rs)
+   and `submit_votes` in
+   [`queue.rs`](../zcash_voting/src/vote/share_delivery/queue.rs).
+
+   Regression tests:
+   `the_immediate_share_is_posted_before_every_other_share`,
+   `other_bundles_wait_for_the_immediate_ack_then_deliver_without_limits`,
+   `the_gate_expires_so_a_round_whose_designated_bundle_is_unconfirmed_still_delivers`,
+   `cancellation_while_waiting_on_the_gate_leaves_shares_pending`,
+   `a_pass_after_the_immediate_share_is_accepted_does_not_wait`, and
+   `a_later_pass_does_not_wait_again_after_the_designated_share_was_refused`,
+   `a_designated_share_that_cannot_be_prepared_releases_the_round`, and
+   `an_expired_gate_wait_is_recorded_separately_from_queue_time`.
 
 Enforcement:
 [`round_immediate_share_key`](../zcash_voting/src/share_policy/initial_placement.rs)

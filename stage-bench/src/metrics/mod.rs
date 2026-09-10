@@ -34,7 +34,7 @@ pub use table::render;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use zcash_voting::{ObservationOutcome, ObservationRecord};
+use zcash_voting::{ObservationAttribution, ObservationOutcome, ObservationRecord};
 
 use crate::CapturedSnapshot;
 
@@ -116,8 +116,40 @@ pub struct Metrics {
     pub bundles: Vec<BundleMetrics>,
     /// Helper delivery concurrency and outcome counts.
     pub delivery: DeliveryMetrics,
+    /// Where the round's designated immediate share sat in the dispatch order.
+    ///
+    /// Absent when the run recorded no designation, or when its records were not
+    /// captured.
+    pub immediate_dispatch: Option<ImmediateDispatch>,
     /// Wall span of the whole run, first record start to last record end.
     pub wall_span_us: u64,
+}
+
+/// The dispatch position of the round's designated immediate share.
+///
+/// The share a voter waits on should be first. It is not, by construction,
+/// unless delivery is made to put it there: the designation names the highest
+/// eligible bundle, which is the last to reach the chain, so every bundle that
+/// confirmed earlier would otherwise deliver ahead of it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ImmediateDispatch {
+    pub bundle_index: u32,
+    pub proposal_id: u32,
+    pub share_index: u32,
+    /// Shares POSTed before this one. Zero is the goal.
+    pub shares_dispatched_before: usize,
+    /// Shares whose first POST carries the *same* microsecond as this one.
+    ///
+    /// Start times are truncated to microseconds, so a tie is not evidence of
+    /// order in either direction. Counted rather than broken arbitrarily: a
+    /// tie-break on record id would invent a sequence the data does not contain,
+    /// and "first" is only an honest claim when nothing preceded this share and
+    /// nothing shares its instant.
+    pub shares_dispatched_same_microsecond: usize,
+    /// Shares that actually POSTed, for reading the rank as a share.
+    pub shares_total: usize,
+    /// Seconds from the first share's POST to this one's.
+    pub dispatched_after_first_seconds: f64,
 }
 
 /// One reported invocation's own totals.
@@ -231,6 +263,15 @@ impl Metrics {
     /// invocation carries its own wall-clock anchor, which covers the same gap
     /// with a finer clock.
     pub fn derive(captured: &[CapturedSnapshot], events: &[PhaseEvent]) -> Self {
+        Self::derive_for(captured, events, None)
+    }
+
+    /// Derives every metric, and where `immediate` sat in the dispatch order.
+    pub fn derive_for(
+        captured: &[CapturedSnapshot],
+        events: &[PhaseEvent],
+        immediate: Option<(u32, u32, u32)>,
+    ) -> Self {
         let _ = events;
 
         let mut incomplete = Vec::new();
@@ -239,6 +280,13 @@ impl Metrics {
         // Ancestry is per snapshot: record ids are invocation-local, so a
         // parent id from one snapshot names a different record in another.
         let mut initial_http: Vec<Interval> = Vec::new();
+        // Each share's earliest initial-delivery POST. Ranking uses this rather
+        // than the admitted workflow: a workflow opens its stage before it
+        // reaches the transport, so one that never POSTs — a resumed share
+        // already at target, or a pre-dispatch failure — would otherwise be
+        // counted as a dispatch and could even rank the designated share first
+        // when it was never sent.
+        let mut first_post: BTreeMap<ObservationAttribution, u64> = BTreeMap::new();
         let mut initial_http_samples: Vec<u64> = Vec::new();
         let mut recovery_http_attempts = 0usize;
 
@@ -293,10 +341,15 @@ impl Metrics {
                 }
                 match delivery_kind(record, &by_id) {
                     DeliveryKind::Initial => {
+                        let start_us = snapshot
+                            .started_at_unix_us
+                            .saturating_add(record.started_after_us);
+                        first_post
+                            .entry(record.attribution)
+                            .and_modify(|earliest| *earliest = (*earliest).min(start_us))
+                            .or_insert(start_us);
                         initial_http.push(Interval {
-                            start_us: snapshot
-                                .started_at_unix_us
-                                .saturating_add(record.started_after_us),
+                            start_us,
                             elapsed_us: record.elapsed_us,
                         });
                         if is_finished(record.outcome) {
@@ -318,6 +371,7 @@ impl Metrics {
             initial_http_samples,
             recovery_http_attempts,
         );
+        let immediate_dispatch = immediate.and_then(|key| immediate_dispatch(&first_post, key));
         let wall_span_us = placed
             .iter()
             .map(Placed::end_us)
@@ -333,6 +387,7 @@ impl Metrics {
             proposals,
             bundles,
             delivery,
+            immediate_dispatch,
             wall_span_us,
         }
     }
@@ -341,6 +396,40 @@ impl Metrics {
     pub fn stage(&self, stage: &str) -> Option<&StageMetrics> {
         self.stages.iter().find(|entry| entry.stage == stage)
     }
+}
+
+/// Where the designated share sat among the run's initial-delivery POSTs.
+///
+/// Ranked over each share's first actual POST, not over admitted workflows: a
+/// workflow opens its stage before reaching the transport, so a share that never
+/// POSTs would otherwise count as a dispatch. A designated share with no POST of
+/// its own yields no rank at all rather than an unearned first place.
+fn immediate_dispatch(
+    first_post: &BTreeMap<ObservationAttribution, u64>,
+    (bundle_index, proposal_id, share_index): (u32, u32, u32),
+) -> Option<ImmediateDispatch> {
+    let designated = ObservationAttribution {
+        bundle_index: Some(bundle_index),
+        proposal_id: Some(proposal_id),
+        share_index: Some(share_index),
+    };
+    let dispatched_at = *first_post.get(&designated)?;
+    let first = *first_post.values().min()?;
+    Some(ImmediateDispatch {
+        bundle_index,
+        proposal_id,
+        share_index,
+        shares_dispatched_before: first_post
+            .values()
+            .filter(|start| **start < dispatched_at)
+            .count(),
+        shares_dispatched_same_microsecond: first_post
+            .iter()
+            .filter(|(attribution, start)| **start == dispatched_at && **attribution != designated)
+            .count(),
+        shares_total: first_post.len(),
+        dispatched_after_first_seconds: dispatched_at.saturating_sub(first) as f64 / 1e6,
+    })
 }
 
 /// Whether an HTTP attempt was a first placement or a repair.

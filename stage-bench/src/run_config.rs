@@ -151,6 +151,14 @@ pub struct FailureRecord {
     pub message: String,
 }
 
+/// One share's public position in a round.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShareIdentity {
+    pub bundle_index: u32,
+    pub proposal_id: u32,
+    pub share_index: u32,
+}
+
 /// What one background share-tracking invocation did.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TrackingSummary {
@@ -182,6 +190,12 @@ pub struct BenchOutcome {
     pub notes: usize,
     pub bundles: u32,
     pub proposals: usize,
+    /// The round's designated immediate share, once the plan has one.
+    ///
+    /// Recorded so the report can say how much of the round preceded the share a
+    /// voter actually waits on. Absent when no vote has been planned yet.
+    #[serde(default)]
+    pub immediate_share: Option<ShareIdentity>,
     /// Proposals the driver reported complete, out of the ballot.
     pub completed_proposals: usize,
     pub tracking: Vec<TrackingSummary>,

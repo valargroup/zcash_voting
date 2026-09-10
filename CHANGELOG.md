@@ -10,6 +10,17 @@ This release is `zcash_voting` 4.0.0.
 
 ### Added
 
+- Initial delivery now dispatches the round's designated immediate share before
+  its other shares, and a concurrent delivery of the same round waits for that
+  share to reach a helper before sending its own. The designation names the
+  highest eligible bundle, which is the last to reach the chain, so the share a
+  voter waits on was previously submitted after the bundles that confirmed
+  earlier — 67% of a 37-proposal round's shares preceded it with bundles running
+  serially, 8% with them concurrent. The wait is bounded and always expires, so a
+  round whose designated bundle has not confirmed never stalls the bundles that
+  are ready, and a call's own shares are never held behind its designated one.
+
+
 - `stage-bench`, a multi-proposal staging benchmark. One command provisions a
   round with a configurable ballot — a proposal count and option widths, or a
   replayed vote-manager round export — drives a complete vote, and reports

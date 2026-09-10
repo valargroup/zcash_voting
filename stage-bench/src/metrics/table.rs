@@ -108,6 +108,39 @@ pub fn render(manifest: &Manifest, metrics: &Metrics) -> String {
         let _ = writeln!(out, "  POST statuses    {}", statuses.join(" "));
     }
 
+    if let Some(immediate) = &metrics.immediate_dispatch {
+        let _ = writeln!(
+            out,
+            "\n-- immediate share (bundle {}, proposal {}, share {}) --",
+            immediate.bundle_index, immediate.proposal_id, immediate.share_index
+        );
+        // "First" is claimed only when nothing preceded it, nothing shares its
+        // microsecond, and every record was retained. Start times are truncated,
+        // so a tie is not evidence of order; and a capture that dropped records
+        // may simply be missing the POST that came first, which would turn
+        // truncated evidence into a confident ordering claim.
+        let verdict = match (
+            metrics.complete,
+            immediate.shares_dispatched_before,
+            immediate.shares_dispatched_same_microsecond,
+        ) {
+            (false, _, _) => "  <- INDETERMINATE: capture incomplete".to_string(),
+            (true, 0, 0) => "  <- first, as intended".to_string(),
+            (true, 0, tied) => {
+                format!("  <- tied with {tied} at the same microsecond, order unknown")
+            }
+            _ => String::new(),
+        };
+        let _ = writeln!(
+            out,
+            "  {} of {} shares dispatched before it{}, {:.2}s after the first",
+            immediate.shares_dispatched_before,
+            immediate.shares_total,
+            verdict,
+            immediate.dispatched_after_first_seconds,
+        );
+    }
+
     let _ = writeln!(out, "\n-- phases, by wall time --");
     let _ = writeln!(
         out,
