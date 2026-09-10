@@ -166,6 +166,9 @@ pub(in crate::vote) async fn submit_votes<'a>(
     // See `immediate_gate` for why the barrier spans calls, why every wait is
     // bounded, and why it stops at ordering inside one call.
     let mut jobs = jobs.into_iter().collect::<Vec<_>>();
+    let round_id = jobs
+        .first()
+        .map(|job| job.prepared.vote.round_id().to_string());
     let gate = round_gate(db, &scope, &jobs);
     let mut designated = None;
     if let Some(gate) = &gate {
@@ -183,7 +186,8 @@ pub(in crate::vote) async fn submit_votes<'a>(
             // storage, which is the path an ordinary cancellation already takes
             // and the one that finalizes each proposal's report.
             None => {
-                let _ = gate.wait(cancel).await;
+                let accepted = || designated_share_accepted(db, &scope, round_id.as_deref());
+                let _ = gate.wait(&accepted, cancel).await;
             }
         }
     }
@@ -285,4 +289,45 @@ fn record_completion(
     if let Some(report) = proposal.finish(cancel()) {
         on_report(vote, report);
     }
+}
+
+/// Whether the round's designated share already has a definite acceptance.
+///
+/// The durable row is what a waiting delivery actually needs to know, and
+/// reading it directly is what lets the wait end at the *first* acceptance
+/// rather than at the end of the designated share's whole fan-out — a share
+/// planned to several helpers finishes its workflow only once the slowest of
+/// them answers or times out.
+///
+/// It also removes any need to carry state between calls: a later pass, or
+/// anything after a restart, sees the acceptance and does not wait.
+///
+/// Any failure to read reports "not accepted". The wait is bounded either way,
+/// so an unreadable row costs at most the budget and never blocks delivery.
+fn designated_share_accepted(
+    db: &VotingDb,
+    scope: &ShareOperationScope,
+    round_id: Option<&str>,
+) -> bool {
+    let Some(round_id) = round_id else {
+        return false;
+    };
+    let designation = {
+        let conn = db.conn();
+        crate::share_tracking::round_immediate_share(&conn, round_id, scope.wallet_id())
+    };
+    let Ok(Some(key)) = designation else {
+        return false;
+    };
+    matches!(
+        crate::share::get_delegation_for_scope(
+            db,
+            scope,
+            round_id,
+            key.bundle_index,
+            key.proposal_id,
+            key.share_index,
+        ),
+        Ok(Some(share)) if !share.sent_to_urls.is_empty()
+    )
 }

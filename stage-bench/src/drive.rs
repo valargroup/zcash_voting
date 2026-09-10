@@ -259,7 +259,7 @@ pub async fn drive(config: &BenchRunConfig) -> Result<BenchOutcome> {
     // Resolved for every mode, not just `immediate`: the report states how much
     // of the round preceded this share, which is the whole point of dispatching
     // it first.
-    let immediate_share = designated_share(&database, config);
+    let immediate_share = designated_share(&database, config)?;
     if let Some(share) = immediate_share {
         eprintln!(
             "bench: the round's immediate share is bundle {}, proposal {}, share {}",
@@ -516,6 +516,36 @@ fn placed_shares(database: &Arc<VotingDb>, round_id: &str) -> usize {
         .unwrap_or_default()
 }
 
+/// The round's designated immediate share, from the executor's plan projection.
+///
+/// Read from the durable designation rather than recalculated over the ballot:
+/// `submit_at == 0` alone does not identify it.
+///
+/// A planning failure is propagated rather than reported as "no designation".
+/// The two are not the same answer: one says the round designated nothing, the
+/// other says the benchmark could not find out, and a run that presented the
+/// second as the first would omit its dispatch measurement while still looking
+/// like a complete result.
+fn designated_share(
+    database: &Arc<VotingDb>,
+    config: &BenchRunConfig,
+) -> Result<Option<crate::run_config::ShareIdentity>> {
+    let plan = zcash_voting::session::resume_plan(
+        database,
+        &config.round_id,
+        &config.ballot.proposal_ids(),
+    )
+    .map_err(voting_error)?;
+    let Some(key) = plan.immediate_share_key else {
+        return Ok(None);
+    };
+    Ok(Some(crate::run_config::ShareIdentity {
+        bundle_index: key.bundle_index,
+        proposal_id: key.proposal_id,
+        share_index: key.share_index,
+    }))
+}
+
 /// Confirms the round's designated immediate share, and nothing else.
 ///
 /// The key comes from the executor's own plan projection rather than from a
@@ -524,28 +554,6 @@ fn placed_shares(database: &Arc<VotingDb>, round_id: &str) -> usize {
 ///
 /// A round with no designation — nothing delivered, or it is already confirmed
 /// — is reported rather than treated as a failure.
-/// The round's designated immediate share, from the executor's plan projection.
-///
-/// Read from the durable designation rather than recalculated over the ballot:
-/// `submit_at == 0` alone does not identify it.
-fn designated_share(
-    database: &Arc<VotingDb>,
-    config: &BenchRunConfig,
-) -> Option<crate::run_config::ShareIdentity> {
-    let plan = zcash_voting::session::resume_plan(
-        database,
-        &config.round_id,
-        &config.ballot.proposal_ids(),
-    )
-    .ok()?;
-    let key = plan.immediate_share_key?;
-    Some(crate::run_config::ShareIdentity {
-        bundle_index: key.bundle_index,
-        proposal_id: key.proposal_id,
-        share_index: key.share_index,
-    })
-}
-
 async fn confirm_immediate(
     database: &Arc<VotingDb>,
     config: &BenchRunConfig,

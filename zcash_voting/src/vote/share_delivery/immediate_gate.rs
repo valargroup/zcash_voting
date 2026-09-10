@@ -76,11 +76,19 @@ use tokio::sync::Notify;
 /// a failure.
 pub(super) const WAIT_BUDGET: Duration = Duration::from_secs(10);
 
-/// How often a waiter observes host cancellation while the gate is closed.
+/// How often a waiter re-reads whether the designated share has been accepted.
 ///
-/// Matches the delivery admission tick in [`super::capacity`], for the same
-/// reason: a caller that cancels must not wait out the whole budget first.
-const CANCEL_CHECK: Duration = Duration::from_millis(50);
+/// The durable row is the authority, and consulting it is what makes the wait
+/// end at the first acceptance rather than at the end of the designated share's
+/// whole fan-out: one helper can acknowledge immediately while another stalls to
+/// the delivery deadline, and there is no reason for the rest of the round to
+/// wait on the second. It also means a delivery pass that finds the share
+/// already accepted — a later retry, or anything after a restart — never waits
+/// at all, with no state kept between calls.
+///
+/// This is also the tick on which host cancellation is observed, so a caller
+/// that cancels never waits out the whole budget.
+const ACCEPTANCE_CHECK: Duration = Duration::from_millis(100);
 
 /// `(sidecar connection, wallet id, round id)`. The connection id keeps two
 /// independently opened sidecars sharing a wallet from gating each other.
@@ -100,10 +108,10 @@ pub(super) struct ImmediateGate {
 /// that did its job from one that timed out, which are very different runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GateWait {
-    /// The gate was already open, so nothing waited.
-    AlreadyOpen,
-    /// A helper acknowledged the immediate share and the gate opened.
-    Opened,
+    /// The designated share was already accepted, so nothing waited.
+    AlreadyAccepted,
+    /// A helper acknowledged the immediate share while this caller waited.
+    Accepted,
     /// [`WAIT_BUDGET`] expired first; delivery proceeds unprioritised.
     Expired,
     /// The host cancelled while waiting.
@@ -153,22 +161,32 @@ impl ImmediateGate {
         self.opened.lock().map(|opened| *opened).unwrap_or(true)
     }
 
-    /// Waits for the immediate share, bounded by [`WAIT_BUDGET`].
+    /// Waits for the designated share to reach a helper, bounded by
+    /// [`WAIT_BUDGET`].
     ///
-    /// Registers for notification before testing the flag, so an `open` racing
-    /// this call is observed rather than missed.
-    pub(super) async fn wait(&self, cancel: &(dyn Fn() -> bool + Send + Sync)) -> GateWait {
-        if self.is_open() {
-            return GateWait::AlreadyOpen;
+    /// `accepted` reports the durable fact — a definite acceptance recorded
+    /// against the designated share — and is the authority. The in-process
+    /// notification is only a fast path for the common case where the call
+    /// holding the share is running alongside this one; a waiter that has no
+    /// such sibling, because the share was delivered by an earlier pass or
+    /// before a restart, still resolves through `accepted`.
+    ///
+    /// Registers for notification before testing, so an `open` racing this call
+    /// is observed rather than missed.
+    pub(super) async fn wait(
+        &self,
+        accepted: &(dyn Fn() -> bool + Send + Sync),
+        cancel: &(dyn Fn() -> bool + Send + Sync),
+    ) -> GateWait {
+        if accepted() {
+            return GateWait::AlreadyAccepted;
         }
         let deadline = tokio::time::Instant::now() + WAIT_BUDGET;
         loop {
             let woken = self.woken.notified();
             tokio::pin!(woken);
-            // Registered above, so a concurrent `open` between this check and the
-            // select below wakes the future rather than being lost.
-            if self.is_open() {
-                return GateWait::Opened;
+            if self.is_open() || accepted() {
+                return GateWait::Accepted;
             }
             if cancel() {
                 return GateWait::Cancelled;
@@ -179,12 +197,12 @@ impl ImmediateGate {
             tokio::select! {
                 biased;
                 _ = &mut woken => {
-                    if self.is_open() {
-                        return GateWait::Opened;
+                    if self.is_open() || accepted() {
+                        return GateWait::Accepted;
                     }
                 }
                 _ = tokio::time::sleep_until(deadline) => return GateWait::Expired,
-                _ = tokio::time::sleep(CANCEL_CHECK) => {}
+                _ = tokio::time::sleep(ACCEPTANCE_CHECK) => {}
             }
         }
     }

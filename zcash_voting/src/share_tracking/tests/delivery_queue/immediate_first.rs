@@ -191,3 +191,154 @@ async fn cancellation_while_waiting_on_the_gate_leaves_shares_pending() {
         .iter()
         .all(|share| share.sent_to_urls.is_empty() && share.attempting_urls.is_empty()));
 }
+
+/// The wait ends at the *first* acceptance, not at the end of the designated
+/// share's fan-out.
+///
+/// A share planned to several helpers finishes its workflow only once the
+/// slowest of them answers or times out. Waiting for that would hold the rest of
+/// the round on a helper that has nothing to do with the acknowledgement already
+/// recorded, and in practice would push every concurrent bundle to its budget.
+#[tokio::test]
+async fn the_wait_ends_at_the_first_acceptance_not_the_whole_fanout() {
+    let fixture = Fixture::with_helpers(3, 4);
+    let designated = designated_wire_identity(&fixture);
+
+    // One helper answers; the rest of the designated share's fan-out is held
+    // open, so its workflow cannot complete.
+    let stalled = Arc::new(Semaphore::new(0));
+    let answered = Arc::new(Semaphore::new(1));
+    let transport = ScriptedTransport::new({
+        let stalled = stalled.clone();
+        let answered = answered.clone();
+        move |wire| {
+            if (wire.proposal_id, wire.share_index) != designated {
+                return ReplyPlan::default();
+            }
+            // The first target answers at once; every later one stalls.
+            ReplyPlan {
+                gate: Some(if answered.try_acquire().is_ok() {
+                    Arc::new(Semaphore::new(1))
+                } else {
+                    stalled.clone()
+                }),
+                ..Default::default()
+            }
+        }
+    });
+
+    let deliver = |votes: Vec<crate::vote::ConfirmedVote>| {
+        let db = Arc::clone(&fixture.db);
+        let configured = fixture.configured.clone();
+        let transport = transport.clone();
+        tokio::spawn(async move {
+            crate::vote::submit_confirmed_vote_shares(
+                &votes,
+                &db,
+                &HelperClient::new(transport, HelperHealth::default()),
+                ShareDeliverySubmissionParams {
+                    configured_server_urls: &configured,
+                    now_seconds: SUBMIT_AT,
+                },
+                &uncancelled,
+                &mut |_, _| {},
+            )
+            .await
+            .into_iter()
+            .map(|vote| vote.delivery)
+            .collect::<Vec<_>>()
+        })
+    };
+
+    let holder: Vec<_> = fixture
+        .votes
+        .iter()
+        .filter(|vote| vote.vote().proposal_id() == designated.0)
+        .cloned()
+        .collect();
+    let others: Vec<_> = fixture
+        .votes
+        .iter()
+        .filter(|vote| vote.vote().proposal_id() != designated.0)
+        .cloned()
+        .collect();
+    let held = deliver(holder);
+    let waiting = deliver(others);
+
+    // The waiting delivery reaches the helpers while the designated share's
+    // remaining targets are still stalled, so it resolved on the recorded
+    // acceptance rather than on the workflow completing.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while transport.count() < 2 * SHARE_COUNT {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the waiting delivery must proceed on the first acceptance");
+
+    stalled.add_permits(64);
+    let _ = held.await.unwrap();
+    // `assert_complete` expects the one-helper fixture's single acceptance per
+    // share, so this fleet's reports are checked directly.
+    let waited = waiting.await.unwrap();
+    assert_eq!(waited.len(), 2);
+    for report in waited {
+        let report = report.unwrap();
+        assert_eq!(report.deliveries.len(), SHARE_COUNT);
+        assert!(report.pending_share_indices.is_empty());
+        assert!(report
+            .deliveries
+            .iter()
+            .all(|share| !share.submission.accepted_urls.is_empty()));
+    }
+}
+
+/// A later delivery pass must not wait for a share that is already placed.
+///
+/// The round's gate does not survive its last delivery, so a pass that finds no
+/// holder would otherwise spend the whole budget waiting for an acknowledgement
+/// that was recorded long ago.
+#[tokio::test(start_paused = true)]
+async fn a_pass_after_the_immediate_share_is_accepted_does_not_wait() {
+    let fixture = Fixture::new(3);
+    let designated = designated_wire_identity(&fixture);
+    let transport = ScriptedTransport::new(|_| ReplyPlan::default());
+
+    // First pass: everything delivers, including the designated share.
+    let reports = fixture.deliver(transport.clone(), &uncancelled).await;
+    assert_complete(reports, 3);
+    let persisted = share::list(&fixture.db, ROUND_ID).unwrap();
+    assert!(persisted
+        .iter()
+        .any(|share| share.proposal_id == designated.0
+            && share.share_index == designated.1
+            && !share.sent_to_urls.is_empty()));
+
+    // A later pass over the other proposals holds no designated share. It must
+    // proceed on the durable acceptance rather than waiting out the budget.
+    let others: Vec<_> = fixture
+        .votes
+        .iter()
+        .filter(|vote| vote.vote().proposal_id() != designated.0)
+        .cloned()
+        .collect();
+    let before = tokio::time::Instant::now();
+    let reports = crate::vote::submit_confirmed_vote_shares(
+        &others,
+        &fixture.db,
+        &HelperClient::new(transport.clone(), HelperHealth::default()),
+        ShareDeliverySubmissionParams {
+            configured_server_urls: &fixture.configured,
+            now_seconds: SUBMIT_AT,
+        },
+        &uncancelled,
+        &mut |_, _| {},
+    )
+    .await;
+    assert_eq!(reports.len(), 2);
+    assert!(
+        before.elapsed() < Duration::from_secs(1),
+        "a pass whose designated share is already accepted must not wait: {:?}",
+        before.elapsed()
+    );
+}

@@ -345,12 +345,20 @@ Regression coverage:
    them concurrent.
 
    The guarantee is best-effort and bounded on both sides. A call holding the
-   designation dispatches it first and opens the round's gate once the share has
-   reached a helper — an acknowledged enqueue, not a chain confirmation, and a
-   duplicate answer counts. A call without it waits for that gate and **always
-   proceeds** once the wait budget expires, so a round whose designated bundle
-   has not confirmed never stalls the bundles that are ready. Cancellation while
-   waiting leaves the shares pending, as any cancelled admission does.
+   designation dispatches it first. A call without it waits until the designated
+   share has a **definite acceptance recorded against it** — an acknowledged
+   enqueue, not a chain confirmation, and a duplicate answer counts — and
+   **always proceeds** once the wait budget expires, so a round whose designated
+   bundle has not confirmed never stalls the bundles that are ready.
+   Cancellation while waiting leaves the shares pending, as any cancelled
+   admission does.
+
+   The durable acceptance is the authority, not the in-process signal. A share
+   planned to several helpers finishes its workflow only once the slowest of them
+   answers or times out, so waiting on the workflow would hold the round for a
+   helper irrelevant to the acknowledgement already recorded. Reading the row
+   also means a later pass, or anything after a restart, sees the acceptance and
+   does not wait, with no state carried between calls.
 
    It deliberately stops at ordering *inside* one call: holding a call's own
    shares behind its designated one would break the no-proposal-barrier property
@@ -369,7 +377,9 @@ Regression coverage:
    `the_immediate_share_is_posted_before_every_other_share`,
    `other_bundles_wait_for_the_immediate_ack_then_deliver_without_limits`,
    `the_gate_expires_so_a_round_whose_designated_bundle_is_unconfirmed_still_delivers`,
-   and `cancellation_while_waiting_on_the_gate_leaves_shares_pending`.
+   `cancellation_while_waiting_on_the_gate_leaves_shares_pending`,
+   `the_wait_ends_at_the_first_acceptance_not_the_whole_fanout`, and
+   `a_pass_after_the_immediate_share_is_accepted_does_not_wait`.
 
 Enforcement:
 [`round_immediate_share_key`](../zcash_voting/src/share_policy/initial_placement.rs)
