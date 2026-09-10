@@ -50,8 +50,12 @@ pub struct Manifest {
     /// to read an older one would throw away the measurement it holds.
     #[serde(default)]
     pub tracking_budget_seconds: u64,
-    /// Focused confirmations driven at once. Above 1 the confirmation numbers
-    /// describe an experiment, not the shipped tracker.
+    /// Which shares this run confirmed. Anything but `immediate` means the
+    /// confirmation figures describe an experiment rather than what a wallet
+    /// waits on.
+    #[serde(default)]
+    pub confirm_mode: String,
+    /// Focused confirmations driven at once, when the mode used them.
     ///
     /// Defaulted on read, and defaulting to zero rather than one: an older
     /// manifest cannot say which mode ran, and zero is visibly not a mode.
@@ -108,6 +112,7 @@ impl Manifest {
             proof_concurrency: config.proof_concurrency,
             chain_repoll_milliseconds: config.chain_repoll_milliseconds,
             tracking_budget_seconds: config.tracking_budget_seconds,
+            confirm_mode: config.confirm_mode.label().to_string(),
             confirm_concurrency: config.confirm_concurrency,
             max_dispatches: config.max_dispatches,
             max_records: config.max_records,

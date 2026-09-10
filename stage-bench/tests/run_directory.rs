@@ -45,7 +45,8 @@ fn config(run_dir: &std::path::Path) -> BenchRunConfig {
         proof_concurrency: 3,
         chain_repoll_milliseconds: 2000,
         tracking_budget_seconds: 30 * 60,
-        confirm_concurrency: 1,
+        confirm_mode: stage_bench::run_config::ConfirmMode::Immediate,
+        confirm_concurrency: 8,
         max_dispatches: 8_192,
         max_records: 262_144,
         run_dir: run_dir.to_path_buf(),
@@ -149,8 +150,8 @@ fn a_manifest_records_the_workload_beside_the_numbers() {
 
     let read = Manifest::read(&run_dir).expect("reading it back");
     assert_eq!(
-        read.confirm_concurrency, 1,
-        "the shipped tracker, not the experiment"
+        read.confirm_mode, "immediate",
+        "the wallet's behaviour: one designated share, not the whole tail"
     );
     assert_eq!(read.tracking_budget_seconds, 30 * 60);
     assert_eq!(read.proposals, 37);
@@ -314,6 +315,36 @@ fn confirmation_snapshots_expand_from_their_array() {
     assert_eq!(stage.calls, 3);
     // Anchored a microsecond apart each, so they do not collapse onto one instant.
     assert_eq!(stage.wall_span_us, 2_900);
+
+    let _ = std::fs::remove_dir_all(&run_dir);
+}
+
+/// The default is what a wallet does, and the report says which mode ran.
+///
+/// A round designates one immediate share; confirming it is what decides
+/// whether a vote reads as cast. Chasing the whole tail is an experiment, and a
+/// reader must not have to infer which of the two produced a number.
+#[test]
+fn the_default_confirmation_mode_is_the_wallets_and_is_named_in_the_report() {
+    use stage_bench::run_config::ConfirmMode;
+
+    assert_eq!(ConfirmMode::default(), ConfirmMode::Immediate);
+    assert!(ConfirmMode::Immediate.is_shipped_behaviour());
+    assert!(!ConfirmMode::All.is_shipped_behaviour());
+    assert!(!ConfirmMode::Concurrent.is_shipped_behaviour());
+
+    let run_dir = scratch("mode");
+    let mut config = config(&run_dir);
+    let manifest = Manifest::build(&config, &outcome(), 1_700_000_000, 21_600);
+    let table = render(&manifest, &Metrics::derive(&[], &[]));
+    assert!(table.contains("as a wallet does"));
+    assert!(!table.contains("EXPERIMENT"));
+
+    config.confirm_mode = ConfirmMode::Concurrent;
+    let manifest = Manifest::build(&config, &outcome(), 1_700_000_000, 21_600);
+    let table = render(&manifest, &Metrics::derive(&[], &[]));
+    assert!(table.contains("EXPERIMENT"));
+    assert!(table.contains("concurrent"));
 
     let _ = std::fs::remove_dir_all(&run_dir);
 }

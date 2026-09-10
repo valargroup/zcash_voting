@@ -21,7 +21,31 @@ const MAX_PROOF_CONCURRENCY: usize = 15;
 use stage_bench::events::EventLog;
 use stage_bench::metrics::{render, Metrics};
 use stage_bench::preflight::{self, Preflight};
-use stage_bench::run_config::{BenchOutcome, BenchRunConfig};
+use stage_bench::run_config::{BenchOutcome, BenchRunConfig, ConfirmMode};
+
+/// The `--confirm` choices, mapped onto [`ConfirmMode`].
+///
+/// A separate type because the CLI surface and the persisted run configuration
+/// are allowed to evolve apart; the `From` below is the single place they meet.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ConfirmModeArg {
+    /// Confirm only the round's designated immediate share, as a wallet does.
+    Immediate,
+    /// Run the shipped background tracker over every unconfirmed share.
+    All,
+    /// Drive concurrent focused confirmations over every unconfirmed share.
+    Concurrent,
+}
+
+impl From<ConfirmModeArg> for ConfirmMode {
+    fn from(arg: ConfirmModeArg) -> Self {
+        match arg {
+            ConfirmModeArg::Immediate => Self::Immediate,
+            ConfirmModeArg::All => Self::All,
+            ConfirmModeArg::Concurrent => Self::Concurrent,
+        }
+    }
+}
 use stage_bench::{supervise, Manifest};
 
 #[derive(Parser, Debug)]
@@ -127,11 +151,17 @@ struct RunArgs {
     #[arg(long, default_value_t = 30 * 60)]
     tracking_budget: u64,
 
-    /// Focused confirmations to drive at once. 1 uses the shipped background
-    /// tracker, whose pass polls shares one at a time. Above 1 replaces it with
-    /// concurrent per-share confirmation — an experiment that measures what
-    /// that serial walk costs, not shipped behaviour.
-    #[arg(long, default_value_t = 1)]
+    /// Which shares to confirm after delivery. `immediate` is what a wallet
+    /// does: confirm the round's one designated share and leave the rest to
+    /// background tracking across the voting window. `all` runs the shipped
+    /// tracker over every share, and `concurrent` drives focused confirmations
+    /// at `--confirm-concurrency` width; both measure the tail rather than
+    /// shipped behaviour.
+    #[arg(long, value_enum, default_value_t = ConfirmModeArg::Immediate)]
+    confirm: ConfirmModeArg,
+
+    /// Focused confirmations to drive at once, for `--confirm concurrent`.
+    #[arg(long, default_value_t = 8)]
     confirm_concurrency: usize,
 
     /// Detailed records retained per reported invocation. A capped capture
@@ -223,12 +253,14 @@ async fn run(args: RunArgs) -> Result<()> {
         (1..=MAX_PROOF_CONCURRENCY).contains(&args.proof_concurrency),
         "--proof-concurrency takes 1 to {MAX_PROOF_CONCURRENCY}, the SDK's own ceiling"
     );
-    if args.confirm_concurrency > 1 {
+    let mode: ConfirmMode = args.confirm.into();
+    if !mode.is_shipped_behaviour() {
         eprintln!(
-            "bench: confirming {} shares at a time through focused confirmation. This \
-             replaces the shipped tracker and measures what its serial walk costs; it is \
-             not a measurement of shipped behaviour.",
-            args.confirm_concurrency
+            "bench: --confirm {} chases the whole confirmation tail. A wallet confirms only \
+             the round's designated immediate share and leaves the rest to background \
+             tracking, so these confirmation numbers are an experiment, not shipped \
+             behaviour.",
+            mode.label()
         );
     }
 
@@ -392,6 +424,7 @@ fn build_config(
         vote_end_time_seconds: round.vote_end_time_seconds,
         bundle_concurrency: args.bundle_concurrency,
         proof_concurrency: args.proof_concurrency,
+        confirm_mode: args.confirm.into(),
         chain_repoll_milliseconds: args.chain_repoll_ms,
         tracking_budget_seconds: args.tracking_budget,
         confirm_concurrency: args.confirm_concurrency,

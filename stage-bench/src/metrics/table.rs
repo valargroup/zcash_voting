@@ -28,13 +28,21 @@ pub fn render(manifest: &Manifest, metrics: &Metrics) -> String {
         manifest.bundle_concurrency,
         manifest.proof_concurrency
     );
-    if manifest.confirm_concurrency > 1 {
-        let _ = writeln!(
-            out,
-            "confirmation: EXPERIMENT — {} focused confirmations at a time, replacing the \
-             shipped tracker. Not a measurement of shipped behaviour.",
-            manifest.confirm_concurrency
-        );
+    match manifest.confirm_mode.as_str() {
+        "immediate" => {
+            let _ = writeln!(
+                out,
+                "confirmation: the round's designated immediate share only, as a wallet does."
+            );
+        }
+        "" => {}
+        other => {
+            let _ = writeln!(
+                out,
+                "confirmation: EXPERIMENT — `{other}` chases the whole tail. A wallet confirms \
+                 only the designated immediate share, so this is not shipped behaviour."
+            );
+        }
     }
     let _ = writeln!(
         out,
