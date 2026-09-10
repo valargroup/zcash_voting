@@ -335,6 +335,41 @@ Regression coverage:
 5. `immediate = true` and `submit_at = 0` are not equivalent. Last-moment and
    single-share planning can assign `submit_at = 0` to undesignated shares,
    but the designated immediate share MUST always have `submit_at = 0`.
+6. **Initial delivery dispatches the designated share before the round's other
+   shares, and concurrent deliveries of the same round wait for it to reach a
+   helper.** The designation names the *highest* eligible bundle, which is the
+   last to reach the chain, while initial delivery runs once per confirmed unit
+   — so without this the share a voter waits on is submitted after the bundles
+   that confirmed earlier. Measured against staging on a 37-proposal round, 67%
+   of the round's shares preceded it with bundles running serially and 8% with
+   them concurrent.
+
+   The guarantee is best-effort and bounded on both sides. A call holding the
+   designation dispatches it first and opens the round's gate once the share has
+   reached a helper — an acknowledged enqueue, not a chain confirmation, and a
+   duplicate answer counts. A call without it waits for that gate and **always
+   proceeds** once the wait budget expires, so a round whose designated bundle
+   has not confirmed never stalls the bundles that are ready. Cancellation while
+   waiting leaves the shares pending, as any cancelled admission does.
+
+   It deliberately stops at ordering *inside* one call: holding a call's own
+   shares behind its designated one would break the no-proposal-barrier property
+   (`combined_reconciliation_delivers_later_proposals_while_the_first_is_unfinished`)
+   and prevent a full commitment reaching the POST ceiling
+   (`full_commitment_reaches_but_never_exceeds_128_posts`). Both are deliberate,
+   and every share measured ahead of the designated one belonged to another
+   bundle, which is what the gate addresses.
+
+   Enforcement:
+   [`immediate_gate`](../zcash_voting/src/vote/share_delivery/immediate_gate.rs)
+   and `submit_votes` in
+   [`queue.rs`](../zcash_voting/src/vote/share_delivery/queue.rs).
+
+   Regression tests:
+   `the_immediate_share_is_posted_before_every_other_share`,
+   `other_bundles_wait_for_the_immediate_ack_then_deliver_without_limits`,
+   `the_gate_expires_so_a_round_whose_designated_bundle_is_unconfirmed_still_delivers`,
+   and `cancellation_while_waiting_on_the_gate_leaves_shares_pending`.
 
 Enforcement:
 [`round_immediate_share_key`](../zcash_voting/src/share_policy/initial_placement.rs)

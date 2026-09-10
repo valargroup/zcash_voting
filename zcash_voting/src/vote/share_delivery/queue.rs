@@ -2,6 +2,7 @@
 
 use super::{
     capacity,
+    immediate_gate::ImmediateGate,
     preparation::{self, PreparedVoteDelivery},
     reports::{ProposalDelivery, ShareResult},
     VoteDeliveryResult,
@@ -159,6 +160,34 @@ pub(in crate::vote) async fn submit_votes<'a>(
             on_report(vote, report);
         }
     }
+    // The designated immediate share is dispatched before the round's other
+    // shares and opens the round's gate once it has reached a helper. Bundles
+    // that confirmed earlier and are delivering concurrently wait on that gate.
+    // See `immediate_gate` for why the barrier spans calls, why every wait is
+    // bounded, and why it stops at ordering inside one call.
+    let mut jobs = jobs.into_iter().collect::<Vec<_>>();
+    let gate = round_gate(db, &scope, &jobs);
+    let mut designated = None;
+    if let Some(gate) = &gate {
+        match designated_position(&jobs) {
+            Some(position) => {
+                let job = jobs.remove(position);
+                designated = Some((job.proposal_position, job.payload_position));
+                jobs.insert(0, job);
+            }
+            // Another call holds the designated share. Wait for it to reach a
+            // helper, then deliver with no further restriction.
+            //
+            // A cancelled wait falls through rather than returning: every job
+            // observes cancellation at admission and completes without touching
+            // storage, which is the path an ordinary cancellation already takes
+            // and the one that finalizes each proposal's report.
+            None => {
+                let _ = gate.wait(cancel).await;
+            }
+        }
+    }
+
     let mut jobs = jobs.into_iter();
     let mut deliveries = FuturesUnordered::new();
     loop {
@@ -173,12 +202,21 @@ pub(in crate::vote) async fn submit_votes<'a>(
         let Some(completion) = deliveries.next().await else {
             break;
         };
-        let proposal = &mut proposals[completion.proposal_position];
-        proposal.record(completion.payload_position, completion.delivery);
-        let vote = proposal.vote;
-        if let Some(report) = proposal.finish(cancel()) {
-            on_report(vote, report);
+        // Opened on every outcome, not only acceptance. A share the helpers
+        // refused will not arrive by being waited for, and the rest of the
+        // round must not spend its budget discovering that.
+        if designated == Some((completion.proposal_position, completion.payload_position)) {
+            if let Some(gate) = &gate {
+                gate.open();
+            }
         }
+        record_completion(&mut proposals, completion, cancel, on_report);
+    }
+    // A call that held the designation but never dispatched it — cancelled
+    // before admission, or drained with the job unrun — must still release the
+    // round rather than leave concurrent bundles waiting out their budget.
+    if let (Some(gate), Some(_)) = (&gate, designated) {
+        gate.open();
     }
     proposals
         .into_iter()
@@ -201,5 +239,50 @@ async fn run_job(
         proposal_position,
         payload_position,
         delivery,
+    }
+}
+
+/// The round's barrier, or `None` when there is nothing to order.
+///
+/// A call with no jobs has nothing to prioritise or wait for. The round id comes
+/// from the jobs themselves rather than from the parameters, because every job
+/// in one call belongs to the same round and an empty call has no round at all.
+fn round_gate(
+    db: &VotingDb,
+    scope: &ShareOperationScope,
+    jobs: &[ShareJob<'_>],
+) -> Option<Arc<ImmediateGate>> {
+    let round_id = jobs.first()?.prepared.vote.round_id();
+    Some(ImmediateGate::for_round(
+        db.sidecar_id(),
+        scope.wallet_id(),
+        round_id,
+    ))
+}
+
+/// Position of the round's designated immediate share in `jobs`, if this call
+/// holds it.
+///
+/// The flag is the persisted plan's own, written when the designated vote's plan
+/// was first prepared. At most one share in a round carries it, which
+/// `validate_round_immediate_plans` enforces, so the first match is the only one.
+fn designated_position(jobs: &[ShareJob<'_>]) -> Option<usize> {
+    jobs.iter()
+        .position(|job| job.prepared.plan.share_plans[job.payload_position].immediate)
+}
+
+/// Records one finished share against its proposal and finalizes the report
+/// when that proposal has no work left.
+fn record_completion(
+    proposals: &mut [ProposalDelivery<'_>],
+    completion: ShareJobCompletion,
+    cancel: &(dyn Fn() -> bool + Send + Sync),
+    on_report: &mut (dyn FnMut(&CommittedVote, &ShareBatchDeliveryReport) + Send),
+) {
+    let proposal = &mut proposals[completion.proposal_position];
+    proposal.record(completion.payload_position, completion.delivery);
+    let vote = proposal.vote;
+    if let Some(report) = proposal.finish(cancel()) {
+        on_report(vote, report);
     }
 }

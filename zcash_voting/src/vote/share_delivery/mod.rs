@@ -4,6 +4,7 @@
 //! owns every durable attempt and transport outcome.
 
 mod capacity;
+mod immediate_gate;
 mod preparation;
 mod queue;
 mod reports;

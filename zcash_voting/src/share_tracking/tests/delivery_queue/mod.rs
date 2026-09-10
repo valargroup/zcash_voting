@@ -4,6 +4,7 @@ mod cancellation;
 mod executor;
 mod failures;
 mod fixtures;
+mod immediate_first;
 mod lifecycle;
 mod observability;
 mod scheduling;
