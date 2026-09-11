@@ -17,6 +17,8 @@ use super::{
     ChainTransportFailureKind, MAX_CHAIN_HTTP_RESPONSE_BYTES,
 };
 
+mod ingress_timeout;
+
 const API_PREFIX: [&str; 2] = ["shielded-vote", "v1"];
 const DELEGATION_ENDPOINT: &str = "delegate-vote";
 const VOTE_ENDPOINT: &str = "cast-vote";
@@ -85,6 +87,8 @@ pub(super) enum PostAttemptOutcome {
     },
     LocalFailure(ChainSubmissionDiagnostic),
     DefinitelyUnsent(ChainTransportError),
+    /// The trusted REST ingress rejected this attempt before broadcast.
+    NotDispatchedByServer,
     PossiblyDispatched(ChainSubmissionDiagnostic),
 }
 
@@ -331,11 +335,16 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
                 "vote-chain endpoint index is out of range",
             ));
         };
-        let request = chain_request(
+        let attempt_token = ingress_timeout::attempt_token();
+        let mut request = chain_request(
             join_chain_url(base_url, &[endpoint]),
             true,
             self.timing.post_timeout,
         );
+
+        if let Some(token) = &attempt_token {
+            request.add_header(ingress_timeout::REQUEST_HEADER, token.clone());
+        }
 
         let stage = observations.stage("chain::post_attempt");
         let dispatch_marker = dispatch.clone();
@@ -365,7 +374,13 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
                     "vote-chain submission timed out",
                 ),
             ),
-            Ok(Ok(response)) => parse_post_response(response, endpoint, expected_batch_digest),
+            Ok(Ok(response)) => {
+                if ingress_timeout::is_not_dispatched(&response, attempt_token.as_deref()) {
+                    PostAttemptOutcome::NotDispatchedByServer
+                } else {
+                    parse_post_response(response, endpoint, expected_batch_digest)
+                }
+            }
             Ok(Err(error)) if error.kind() == ChainTransportFailureKind::DefinitelyUnsent => {
                 PostAttemptOutcome::DefinitelyUnsent(error)
             }
@@ -384,6 +399,10 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
             PostAttemptOutcome::PossiblyDispatched(_) => (
                 crate::ObservationOutcome::PossiblyDispatched,
                 Some("PossiblyDispatched"),
+            ),
+            PostAttemptOutcome::NotDispatchedByServer => (
+                crate::ObservationOutcome::Failed,
+                Some("NotDispatchedByServer"),
             ),
             PostAttemptOutcome::DefinitelyUnsent(_) => {
                 (crate::ObservationOutcome::Failed, Some("DefinitelyUnsent"))
@@ -919,6 +938,7 @@ fn invalid_protocol(message: impl AsRef<str>) -> ChainSubmissionDiagnostic {
 #[cfg(test)]
 mod tests {
     mod batch_request;
+    mod ingress_timeout;
     mod rejection_diagnostics;
 
     use std::{
@@ -1064,12 +1084,15 @@ mod tests {
             "https://vote.example/mount/shielded-vote/v1/delegate-vote"
         );
         assert_eq!(
-            request.headers(),
+            &request.headers()[..2],
             &[
                 ("accept".to_string(), "application/json".to_string()),
                 ("content-type".to_string(), "application/json".to_string()),
             ]
         );
+        assert_eq!(request.headers().len(), 3);
+        assert_eq!(request.headers()[2].0, "x-vote-ingress-attempt-v1");
+        assert_eq!(hex::decode(&request.headers()[2].1).unwrap().len(), 32);
         assert_eq!(request.timeout(), Duration::from_secs(150));
         assert_eq!(request.max_response_bytes(), MAX_CHAIN_HTTP_RESPONSE_BYTES);
         assert_eq!(body, wire.to_json().unwrap().as_bytes());

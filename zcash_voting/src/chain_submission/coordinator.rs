@@ -427,14 +427,19 @@ where
                         diagnostic.message(),
                     ));
                 }
-                PostAttemptOutcome::DefinitelyUnsent(error) => {
+                outcome @ (PostAttemptOutcome::DefinitelyUnsent(_)
+                | PostAttemptOutcome::NotDispatchedByServer) => {
+                    let message = match &outcome {
+                        PostAttemptOutcome::DefinitelyUnsent(error) => error.message(),
+                        _ => "vote-chain request body timed out before server broadcast",
+                    };
                     if ambiguity_seen {
                         reserved = self.reconcile_with_durable_state(
                             derived.generation(),
-                            SubmissionObservation::DefinitelyUnsent,
+                            SubmissionObservation::DefinitelyNotDispatched,
                             Some(ChainSubmissionDiagnostic::from_redacted_message(
                                 ChainSubmissionDiagnosticKind::ReconciliationPending,
-                                error.message(),
+                                message,
                             )),
                             ChainSubmissionState::Recovering,
                         )?;
@@ -446,12 +451,12 @@ where
                             ChainSubmissionFailure::with_durable_state(
                                 ChainSubmissionFailureKind::Transport,
                                 ChainSubmissionState::Recovering,
-                                error.message(),
+                                message,
                             )
                         } else {
                             ChainSubmissionFailure::without_state(
                                 ChainSubmissionFailureKind::Transport,
-                                error.message(),
+                                message,
                             )
                         });
                     }
@@ -508,7 +513,7 @@ where
                     _ => {
                         return Err(ChainSubmissionFailure::without_state(
                             ChainSubmissionFailureKind::InvariantViolation,
-                            "definitely-unsent retry did not reserve the same generation",
+                            "non-dispatched retry did not reserve the same generation",
                         ));
                     }
                 }
@@ -1311,20 +1316,25 @@ where
                     diagnostic.message(),
                 ));
             }
-            PostAttemptOutcome::DefinitelyUnsent(error) => {
+            outcome @ (PostAttemptOutcome::DefinitelyUnsent(_)
+            | PostAttemptOutcome::NotDispatchedByServer) => {
+                let message = match &outcome {
+                    PostAttemptOutcome::DefinitelyUnsent(error) => error.message(),
+                    _ => "vote-chain request body timed out before server broadcast",
+                };
                 self.reconcile_with_durable_state(
                     derived.generation(),
-                    SubmissionObservation::DefinitelyUnsent,
+                    SubmissionObservation::DefinitelyNotDispatched,
                     Some(ChainSubmissionDiagnostic::from_redacted_message(
                         ChainSubmissionDiagnosticKind::ReconciliationPending,
-                        error.message(),
+                        message,
                     )),
                     ChainSubmissionState::Recovering,
                 )?;
                 return Err(ChainSubmissionFailure::with_durable_state(
                     ChainSubmissionFailureKind::Transport,
                     ChainSubmissionState::Recovering,
-                    error.message(),
+                    message,
                 ));
             }
             PostAttemptOutcome::LocalFailure(diagnostic) => {
