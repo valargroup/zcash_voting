@@ -20,46 +20,107 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## v3.1.0
 
+This section summarizes the public integration surface relative to `v3.0.0`.
+The detailed changes below consolidate the development history of `v3.1.0`.
+See the [v3.1.0 migration guide](docs/migration-guide-v3.1.0.md) for an
+integrator checklist and corresponding Vizor pull requests.
+
+### Added — additive public APIs
+
+- Added atomic multi-proposal voting through `commit_atomic_vote_batch`,
+  `prepare_atomic_vote_batch`, and `recover_atomic_vote_batch`, with
+  `SignedVoteBatch` as the canonical `cast-vote-batch` request. Existing batch
+  APIs remain singleton compatibility wrappers.
+- Added two-phase vote proving and persistence through `prepare_commit`,
+  `prepare_commit_batch`, `persist_prepared_commit`, and
+  `persist_prepared_commit_batch`, plus `warm_zkp2_proving_cache`.
+- Added the typed `HelperClient`, host-owned `HelperTransport`, helper health
+  tracking, URL canonicalization, fleet preflight, durable prepared-share
+  delivery, and pending-share tracking APIs. `HyperTransport` remains the
+  bundled direct transport.
+- Added round-independent PIR warming and validation through
+  `precompute_pir_proofs` and `validate_cached_pir_proofs`, snapshot bundle
+  precomputation through `precompute_snapshot_bundles`, and the associated
+  cache status and report types.
+- Added client-owned lightwalletd snapshot fetching through
+  `lwd::anchor_tree_state_with_retry_on`.
+- Added round-aware bundle-policy and note-planning APIs, including
+  `VotingDb::effective_bundle_policy`, `voting_power_for_round`,
+  `note_bundles_for_round`, `bundle_notes_for_index_for_round`,
+  `VotingNoteSelectionResultView::from_selected_for_round`, and
+  `minimum_voting_eligibility_and_plan_for_notes`.
+- Added static-config mirror support and the
+  `resolve_dynamic_voting_config_from_attempts` and
+  `resolve_dynamic_voting_config_over_mirrors` resolution APIs.
+- Added `DelegationKeys::with_round_bound_voting_target`,
+  `share::pending_rounds`, and immediate-share reporting on `RoundPlan` and
+  `RoundPlanView`.
+
+### Breaking changes from v3.0.0
+
+- The default wallet backend is now Zakura. Upstream librustzcash is available
+  through the mutually exclusive `lrz` feature, and the workspace MSRV is now
+  Rust 1.91.
+- Initial helper delivery now uses
+  `CommittedVote::prepare_share_delivery` followed by
+  `CommittedVote::submit_prepared_shares`. The per-share
+  `submit_share_to_helpers(ShareSubmissionRequest)` API and the public
+  low-level encrypted-helper-payload construction and recovery APIs were
+  removed.
+- `ShareDeliveryPlanningParams` now takes the authenticated round's complete
+  `proposal_ids` roster. Helper confirmation now polls the complete configured
+  fleet and requires agreement from two distinct helpers when at least two are
+  configured; direct confirmation and confirmation-persistence APIs were
+  replaced by `track_pending_shares` and `confirm_pending_share`.
+- Invalid helper URLs now return `VotingError::InvalidInput` before network
+  I/O instead of being silently dropped. `HELPER_PREFLIGHT_TIMEOUT_SECONDS`
+  was removed; preflight timing derives from
+  `share_policy::SHARE_HELPER_PREFLIGHT_SOFT_TIMEOUT_MILLISECONDS`.
+- `BundlePolicy::default()` now enables privacy trimming. Opt out with
+  `.with_max_privacy_bundles(None)`.
+  `BundlePolicy::with_privacy_drop_bps` now returns
+  `Result<Self, VotingError>`.
+- `ChunkResult` and `VotingNoteSelectionResultView` gained privacy-trim
+  reporting fields that struct literals must provide. `BundleLayout` exposes
+  flat `privacy_trim_dropped_*` fields rather than a nested `PrivacyTrim`.
+  `SignedDelegationBundle` and `SignedDelegationPayloadView` do not expose
+  privacy-trim fields.
+- `VotingNoteSelectionResultView::from_selected` was replaced by
+  `from_selected_for_round`. `bundle_notes_for_index` was replaced by
+  `bundle_notes_for_index_for_round` or
+  `bundle_notes_for_index_with_policy`.
+- URL-taking lightwalletd helpers that opened their own direct channel were
+  removed: `latest_block_height`, `latest_block_height_with_retry`,
+  `tree_state_bytes`, `anchor_tree_state_with_retry`, and
+  `anchor_tree_state_bytes_with_retry`. Use a caller-owned client with
+  `get_latest_block`, `get_tree_state`, or
+  `anchor_tree_state_with_retry_on`.
+- Removed `recovery::clear` and `VotingDb::clear_recovery_state`. Ordinary
+  reset preserves durable submission evidence; explicit round or account
+  deletion is the destructive cleanup boundary.
+
 ### Changed
 
-- Released the exact `v3.1.0-rc.16` implementation as `v3.1.0` without
-  implementation changes. Its supporting production snapshots were released
-  as `pir-types 0.6.2`, `pir-client 0.7.2`, `voting-circuits 0.11.2`,
+- Released `v3.1.0` with `voting-crypto-deps 0.2.2`,
+  `voting-circuits 0.11.2`, `imt-tree 0.5.2`, `pir-types 0.6.2`,
+  `pir-client 0.7.2`, `zakura-wallet-lib 0.1.0-rc4`,
   `vote-commitment-tree 0.6.0`, and `vote-commitment-tree-client 0.8.0`.
 
-## v3.1.0-rc.16
-
-### Changed
+### Detailed changes
 
 - Local voting-hotkey delegation now derives each bundle's VAN blinding from
   the stored hotkey secret and exact round and bundle identity. Restoring that
   secret and using `recoverable_bundle_policy_v1()` reconstructs the same VAN
   after voting database loss without new authority-root or recovery tables.
 
-### Fixed
-
 - Session cleanup now preserves delegation setup fields for bundles with a
   successful proof so wallets can resume signing without regenerating ZKP1.
-
-### Removed
-
-- Removed the standalone `recovery::clear` and
-  `VotingDb::clear_recovery_state` APIs. Ordinary reset preserves durable
-  submission evidence; explicit round or account deletion remains the
-  destructive cleanup boundary.
-
-## v3.1.0-rc.15
-
-### Fixed
 
 - Persisted helper-share plans can now resume after the authenticated helper
   fleet changes. Plans remain bound to their original planning fleet and
   target, while removed helpers are not contacted and current helpers are
   eligible as fallbacks.
 
-## v3.1.0-rc.14
-
-### Added
 - `VotingDb::store_keystone_signatures_batch` now provides atomic, idempotent
   Keystone signature persistence, and `VotingDb::clear_wallet_state` also
   removes the wallet's round-independent PIR cache.
@@ -85,31 +146,9 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   generation-bound plan for the complete commitment before submitting shares,
   without exposing encrypted helper payloads to the host.
 
-### Changed
 - Helper-share planning, persistence, submission, and recovery are now
   authoritative SDK responsibilities. Hosts provide authenticated helper
   configuration, round timing, transport, and cancellation.
-- **Breaking:** invalid helper URLs now fail with
-  `VotingError::InvalidInput` before network I/O instead of being silently
-  dropped. `helper::url::canonicalize_helper_base_url` and
-  `canonical_helper_url_list` are public so hosts can validate configuration.
-- **Breaking:** initial helper delivery now uses
-  `CommittedVote::prepare_share_delivery` followed by
-  `CommittedVote::submit_prepared_shares`; the per-share
-  `submit_share_to_helpers(ShareSubmissionRequest)` API was removed.
-- **Breaking:** `ShareDeliveryPlanningParams` now accepts the authenticated
-  round's complete `proposal_ids` roster and derives the immediate share from
-  durable ballot intent.
-- **Breaking:** encrypted helper payloads and their low-level construction and
-  recovery APIs are no longer public. Vote-chain submission continues to use
-  the public `VoteCommitmentWire`.
-- **Breaking:** helper confirmation polls the complete configured fleet and
-  requires agreement from two distinct helpers when at least two are
-  configured. Direct confirmation and confirmation-persistence APIs were
-  removed in favor of `track_pending_shares` and `confirm_pending_share`.
-- **Breaking:** removed `HELPER_PREFLIGHT_TIMEOUT_SECONDS`; preflight timing is
-  now derived from
-  `share_policy::SHARE_HELPER_PREFLIGHT_SOFT_TIMEOUT_MILLISECONDS`.
 - `HelperClientConfig` now validates nonzero deadlines and permits at most two
   nonzero retry delays. Confirmation polling is limited to four concurrent
   requests and ten seconds per share.
@@ -117,9 +156,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   delivery outcomes together with complete generation-bound helper plans.
   Legacy rows remain readable but do not weaken placement or quota validation.
 
-### Fixed
-- Wallet examples now separate vote-chain submission from helper delivery and
-  use the preflight, persisted-plan, and prepared-batch APIs.
 - Helper plans remain valid across normal vote confirmation while staying
   bound to the exact vote generation, wallet scope, configured fleet, durable
   VC-tree position, and complete payload set. Stale or inconsistent plans fail
@@ -147,9 +183,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   stale-snapshot `database is locked` failures during submission and
   confirmation recording.
 
-## v3.1.0-rc.13
-
-### Changed
 - `zcash_voting` now defaults to Zakura and exposes upstream librustzcash
   through the mutually exclusive `lrz` feature while depending directly on
   the leak-free `zakura` or `lrz` complete backend mode from
@@ -157,17 +190,7 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   preventing disabled Zakura forks from entering LRZ consumers' Cargo
   lockfiles and metadata. See the "Dependency notes" section of
   `zcash_voting/README.md`.
-- Updated the Zakura stack to wallet-libraries RC4 and stable crypto 1.0,
-  `voting-crypto-deps 0.2.2`, `voting-circuits 0.11.2`, `imt-tree 0.5.2`,
-  `pir-types 0.6.2`, and `pir-client 0.7.2`. This raises the workspace MSRV to
-  Rust 1.91.
-- Prepared `vote-commitment-tree 0.6.0` and
-  `vote-commitment-tree-client 0.8.0` for their Zakura-default feature
-  contracts; publish them before `zcash_voting 3.1.0-rc.13`.
 
-## v3.1.0-rc.12
-
-### Added
 - Added shared progressive helper timing and initial-delivery limits, plus
   readiness-ranked batch planning that balances a commitment's initial shares
   across the preferred helper pool.
@@ -182,36 +205,25 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   The bundled `HyperTransport` provides direct HTTP, while wallets can supply
   Tor or proxy-backed transports without fallback to a different route.
 
-### Changed
 - Initial share delivery continues to target half the configured fleet, rounded
   up, while balancing a complete commitment across the ready helper pool.
   Retries may exceed the initial distribution for liveness.
 
-## v3.1.0-rc.11
-
-### Added
 - `DelegationKeys::with_round_bound_voting_target` is now public, allowing
   callers to bind a secret-free `RoundBoundVotingHotkeyTarget` directly without
   depending on `WalletDb`, lightwalletd, or
   `prepare_delegation_bundle_for_target`.
 
-### Fixed
 - `DelegationKeys::with_round_bound_voting_target` now retains the validated
   public target. Lower-level delegation setup, signing request, and proof APIs
   reject those keys when used with a different stored voting round.
 
-## v3.1.0-rc.10
-
-### Added
 - Added deterministic round-level immediate-share selection: share index 0 of
   the lowest voted proposal in the lowest-value eligible bundle is designated
   for immediate helper submission. `RoundPlan` and `RoundPlanView` expose the
   selected `ImmediateShareKey`, while batch submission plans mark the matching
   caller-supplied batch position with `immediate = true` and `submit_at = 0`.
 
-## v3.1.0-rc.9
-
-### Added
 - `lwd::anchor_tree_state_with_retry_on` fetches the snapshot note-commitment
   tree on a caller-owned lightwalletd client, so a wallet that already holds a
   channel (Tor, a proxy, a pool) keeps that route instead of the crate dialing
@@ -225,7 +237,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   Witnesses still come from `prepare_delegation_bundle`. New type:
   `SnapshotBundlePrecomputeReport`.
 
-### Changed
 - Voting no longer builds a whole `WalletSummary` just to learn how far the
   wallet has scanned. The sync guards behind `select_notes_with_wallet_db` and
   `prepare_delegation_bundle` now read `block_fully_scanned` — one indexed
@@ -243,17 +254,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   reads the height actually scanned. Voting needs the snapshot height to be
   covered by the scan; it does not need the wallet to know the chain tip.
 
-### Removed
-- **Breaking:** URL-taking lightwalletd helpers that opened their own channel:
-  `latest_block_height`, `latest_block_height_with_retry`, `tree_state_bytes`,
-  `anchor_tree_state_with_retry`, and `anchor_tree_state_bytes_with_retry`.
-  They always dialed a direct connection, which overrode any host-owned route.
-  Open a client on the route you want and call `get_latest_block`,
-  `get_tree_state`, or `anchor_tree_state_with_retry_on`.
-
-## v3.1.0-rc.8
-
-### Added
 - Added a bundle- and round-independent PIR proof cache. `precompute_pir_proofs`
   fetches and persists IMT non-membership proofs for notes that survive the
   caller-supplied `BundlePolicy` (the same plan round setup uses: sub-ballot
@@ -268,7 +268,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   are unused, not harmful. New types: `PirCachePrecomputeResult`,
   `PirCacheValidationReport`, `PirProofCacheEntry`, `PirProofCacheStatus`.
 
-### Changed
 - The delegation prove path and `precompute_delegation_pir` now read and write
   the shared `pir_proof_cache` table instead of the bundle-scoped `imt_proofs`
   table, so background-warmed real-note proofs are never refetched at proving
@@ -282,9 +281,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   four weeks ago before warming the requested notes. Prove-time cache access
   remains non-pruning so an already cached proof can still complete a bundle.
 
-## v3.1.0-rc.7
-
-### Added
 - Added `prepare_commit`, `prepare_commit_batch`, `persist_prepared_commit`,
   and `persist_prepared_commit_batch` so wallets can perform expensive ZKP #2
   proving outside SQLite transactions, then atomically persist the prepared
@@ -294,28 +290,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - Added `warm_zkp2_proving_cache` for callers that want to initialize the vote
   proving parameters independently of the other proving caches.
 
-## v3.1.0-rc.6
-
-### Changed
-- Updated the selectable cryptography facade to `voting-crypto-deps 0.1.2`,
-  voting circuits to `0.10.3`, the indexed Merkle tree to `imt-tree 0.4.0`,
-  and the PIR stack to `pir-types 0.5.0` and `pir-client 0.6.0`.
-- Released `vote-commitment-tree 0.5.2` and
-  `vote-commitment-tree-client 0.7.2` with backend-neutral field, group, and
-  randomness trait imports for the updated upstream and Zakura dependency
-  families.
-- Updated the Zakura wallet stack to `zakura-wallet-lib 0.1.0-rc2`,
-  `zakura-pczt 0.1.0-rc1`, `zakura-client-backend 0.1.0-rc2`,
-  `zakura-client-sqlite 0.1.0-rc2`, and the `zakura-orchard`, `zakura-keys`, and
-  `zakura-primitives` `1.0.0-rc.3` crypto family. These releases move the Zakura
-  backend to `ff 0.14`, `group 0.14`, and `rand_core 0.10`.
 - Routed the remaining test-only randomness imports through the selected backend
   facade (`voting_crypto_deps::rand`) instead of a direct `rand 0.8` dependency, so
   the same tests compile under both the upstream and Zakura families.
 
-## v3.1.0-rc.5
-
-### Added
 - `VotingDb::effective_bundle_policy` is now public. A wallet that plans or
   reports outside the `*_for_round` helpers -- because its seed policy is not
   `BundlePolicy::default()` -- previously had no way to resolve a round's
@@ -330,21 +308,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   second time and repeat the canonical duplicate-nullifier collapse to do it --
   two ways for the two numbers to start describing different note sets.
 
-## v3.1.0-rc.4
-
-### Changed
-- **Breaking:** `BundleLayout` reports privacy-trim totals as flat fields
-  (`privacy_trim_dropped_bundles`, `privacy_trim_dropped_notes`,
-  `privacy_trim_dropped_value_zatoshi`) instead of a nested `PrivacyTrim`.
-  Struct literals and JSON consumers must use the new names; absent fields still
-  default to zero.
-- **Breaking:** removed `privacy_trim` from `SignedDelegationBundle` and
-  `SignedDelegationPayloadView`. Trim reporting stays on `BundleLayout` and
-  `VotingNoteSelectionResultView` (`ChunkResult` is unchanged).
-
-## v3.1.0-rc.3
-
-### Added
 - Accept `static_config_version: 2` static voting configs, which replace v1's
   single `dynamic_config_url` with an ordered `dynamic_config_urls` mirror list.
   `ResolvedStaticVotingConfig` gains `dynamic_config_urls` and
@@ -369,17 +332,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - Added `resolve_dynamic_voting_config_over_mirrors` and
   `DYNAMIC_MIRROR_FETCH_TIMEOUT` (30s): a reference lazy walk that bounds each
   mirror fetch so a blackholed primary cannot leave a healthy later mirror
-  unused. The wallet-example and `config_fetcher` transports use it; wallets
-  with their own networking should apply an equivalent per-attempt deadline.
+  unused. Wallets with their own networking should apply an equivalent
+  per-attempt deadline.
 
-### Changed
 - `ConfigConditionKind::StaticHashPinVerified` now reports the real outcome. It
   previously reported `status: true` even when the static config source carried
   no `?checksum=sha256:` pin and no verification had run.
 
-## v3.1.0-rc.2
-
-### Added
 - Privacy trim in bundle planning: trailing low-value bundles are dropped toward
   `BundlePolicy::max_privacy_bundles` (default 2) to shrink the observable
   delegation-submission count. The count is a target; the discarded value is
@@ -399,16 +358,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   sampled `van_comm_rand` of any wallet upgrading between submitting a delegation
   and casting its vote, costing that round's weight unrecoverably.
 
-### Changed
-- **Breaking:** `BundlePolicy::default()` now trims. Opt out with
-  `.with_max_privacy_bundles(None)` to keep the previous planning behavior.
-- **Breaking:** added `privacy_trim` to `ChunkResult`, `BundleLayout`,
-  `SignedDelegationBundle`, `SignedDelegationPayloadView`, and
-  `VotingNoteSelectionResultView`. Struct literals must supply it; use
-  `PrivacyTrim::default()` when no trim occurred. Serde-backed views still accept
-  older payloads with the field absent.
-- **Breaking:** `BundlePolicy::with_privacy_drop_bps` returns
-  `Result<Self, VotingError>` and rejects budgets above `MAX_PRIVACY_DROP_BPS`.
 - The effective `BundlePolicy` is persisted per round and becomes authoritative
   once stored, so an SDK upgrade that changes the defaults cannot invalidate
   bundle rows that were already signed or submitted. Rounds carried across the
@@ -416,35 +365,8 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   that already holds bundle rows; they keep re-deriving the plan they were signed
   against.
 
-### Removed
-- **Breaking:** `VotingNoteSelectionResultView::from_selected` — use
-  `from_selected_for_round`, which honors a resumed round's persisted policy.
-- **Breaking:** `bundle_notes_for_index` — use `bundle_notes_for_index_for_round`,
-  or `bundle_notes_for_index_with_policy` to pass a policy explicitly.
-
-## v3.1.0-rc.1
-
-### Changed
-- Updated `zakura-client-backend`, `zakura-client-sqlite`, and
-  `zakura-wallet-lib` to their coordinated `0.1.0-rc1` releases.
-
-## v3.1.0-rc.0
-
-### Added
 - Added `share::pending_rounds` so wallets can restore unconfirmed helper-share
   tracking with the caller context persisted for each round.
-- Extended `zcash_voting` with mutually exclusive `upstream` (default) and
-  `zakura` features so the wallet layer can select crates.io librustzcash or the
-  Zakura wallet-libraries forks via `zakura-wallet-lib`, in lockstep with the
-  vote commitment tree crypto backend.
-
-### Changed
-- Replaced temporary Git dependency patches with the published backend-selector
-  releases for IMT, PIR, voting circuits, and voting crypto dependencies.
-- Released `vote-commitment-tree 0.5.1` and
-  `vote-commitment-tree-client 0.7.1`, allowing both crates to select either
-  the default upstream voting crypto backend or the mutually exclusive Zakura
-  backend.
 - Cap each randomized initial helper-share delay at 100 hours while preserving
   the round's last-moment safety window and retry timing from the sampled
   `submit_at`.
@@ -683,8 +605,7 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   snapshot from `zcash_voting` instead of reassembling recovery state with
   low-level SQL. New exports include `recovery::round_snapshot`,
   `recovery::recoverable_commitment_bundle`, and `recovery::clear`, plus
-  prelude re-exports and a wallet example (`wallet-example::example_recovery`)
-  that pairs snapshots with `session::resume_plan`.
+  prelude re-exports.
 - Added `vote::SignedVoteCommitments`, `vote::commit_batch`, and
   `vote::recover_signed_commitments` so wallet SDKs can commit and recover
   per-bundle cast-vote batches through one crate-owned entry point instead of
@@ -840,9 +761,7 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   `resolve_static_voting_config(source, static_bytes)` authenticates the static
   trust anchor and exposes the `dynamic_config_url` to fetch next;
   `resolve_dynamic_voting_config(resolved_static, dynamic_bytes, options)` then
-  authenticates the dynamic config against it. A `wallet-example::example_config`
-  module pairs these with a direct-HTTPS `DirectHttpsFetcher` and persists the
-  resolved summary used for later switch decisions.
+  authenticates the dynamic config against it.
 - Added `examples/end_to_end_vote.rs` and README notes for moving from the
   delegation-oriented V2 API to the new vote/share API.
 
