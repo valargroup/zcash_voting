@@ -1266,7 +1266,7 @@ pub struct Zkp2DelegationData {
     pub address_index: u32,
     pub ea_pk: Vec<u8>,
     pub voting_round_id: String,
-    /// Current proposal authority bitmask (starts at 0xFFFF, decremented per submitted vote).
+    /// Current proposal authority bitmask, decremented per submitted vote.
     /// Bit `i` is set iff the voter has not yet cast a vote for proposal `i`.
     /// Since proposal IDs are 1-indexed (matching on-chain IDs), bit 0 is never
     /// cleared and acts as a structural invariant — it corresponds to the circuit's
@@ -1274,9 +1274,9 @@ pub struct Zkp2DelegationData {
     pub proposal_authority: u64,
 }
 
-/// Initial authority bitmask: all 16 bits set. Bit 0 is the dead sentinel
-/// (proposal_id=0 is rejected by the circuit); bits 1–15 are the usable slots.
-const MAX_PROPOSAL_AUTHORITY: u64 = 65535;
+/// Initial authority bitmask. Bit 0 is the dead sentinel (proposal_id=0 is
+/// rejected by the circuit); bits 1–50 are the usable slots.
+const MAX_PROPOSAL_AUTHORITY: u64 = voting_circuits::MAX_PROPOSAL_AUTHORITY;
 
 /// Load all fields ZKP #2 needs from the bundles table (persisted during delegation).
 /// Computes proposal_authority from submitted votes — each submitted vote clears its
@@ -2960,6 +2960,57 @@ pub fn get_unconfirmed_delegations(
         round_id,
         wallet_id,
     )
+}
+
+/// Load rounds that may still require helper-share recovery.
+///
+/// Confirmed votes with recovery material are candidates even when they have
+/// no unconfirmed share rows: the share API compares the recovery bundle's
+/// expected indexes with the rows that were actually recorded.
+pub fn share_recovery_round_candidates(
+    conn: &Connection,
+    wallet_id: &str,
+) -> Result<Vec<(String, Option<String>)>, VotingError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT rounds.round_id, rounds.session_json
+             FROM rounds
+             WHERE rounds.wallet_id = :wallet_id
+               AND (
+                   EXISTS (
+                       SELECT 1
+                       FROM share_delegations
+                       WHERE share_delegations.round_id = rounds.round_id
+                         AND share_delegations.wallet_id = rounds.wallet_id
+                         AND share_delegations.confirmed = 0
+                   )
+                   OR EXISTS (
+                       SELECT 1
+                       FROM votes
+                       WHERE votes.round_id = rounds.round_id
+                         AND votes.wallet_id = rounds.wallet_id
+                         AND votes.tx_hash IS NOT NULL
+                         AND votes.vc_tree_position IS NOT NULL
+                         AND votes.commitment_bundle_json IS NOT NULL
+                   )
+               )
+             ORDER BY rounds.created_at DESC, rounds.round_id",
+        )
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to prepare pending share round query: {e}"),
+        })?;
+    let rows = stmt
+        .query_map(named_params! { ":wallet_id": wallet_id }, |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to query pending share rounds: {e}"),
+        })?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to read pending share round row: {e}"),
+        })
 }
 
 fn load_share_delegations(

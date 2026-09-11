@@ -192,6 +192,7 @@ fn extend_padded32(out: &mut Vec<u8>, b: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::MAX_PROPOSAL_ID;
 
     const ROUND_ID: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 
@@ -290,7 +291,7 @@ mod tests {
         assert!(build_share_payloads(&mock_enc_shares(), &commitment, 0, 2, 42, false).is_err());
 
         let mut commitment = mock_commitment();
-        commitment.proposal_id = 16;
+        commitment.proposal_id = MAX_PROPOSAL_ID + 1;
         assert!(build_share_payloads(&mock_enc_shares(), &commitment, 0, 2, 42, false).is_err());
     }
 

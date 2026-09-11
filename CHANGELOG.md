@@ -6,6 +6,12 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Expanded the supported proposal-ID range from 1–15 to 1–50 while retaining
+  16 encrypted shares per vote commitment. This consumes the breaking circuit
+  and verification-key change from `voting-circuits 0.12.0-rc.2`.
+
 ## v3.0.0
 
 ### Changed

@@ -2537,7 +2537,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2977,19 +2977,26 @@ dependencies = [
 
 [[package]]
 name = "voting-circuits"
-version = "0.10.0"
+version = "0.12.0-rc.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "014def2d1738ecc42253d0cd0f6e74847bc51ccde55ad992abadede7fade76d5"
+checksum = "c90a84e2c6f13abd29427b131290faf9f2bb66dacc0441952866f8aef91943fe"
 dependencies = [
  "blake2b_simd",
- "ff",
- "group",
- "halo2_gadgets",
- "halo2_poseidon",
- "halo2_proofs",
  "incrementalmerkletree",
  "itertools",
  "lazy_static",
+ "voting-crypto-deps",
+]
+
+[[package]]
+name = "voting-crypto-deps"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7093c43ce71cde30f4d9c1154fa6f0b69c6866a4efb9cb582055a81dcf438a6e"
+dependencies = [
+ "halo2_gadgets",
+ "halo2_poseidon",
+ "halo2_proofs",
  "orchard",
  "pasta_curves",
  "rand",
