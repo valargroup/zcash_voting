@@ -2962,8 +2962,12 @@ pub fn get_unconfirmed_delegations(
     )
 }
 
-/// Load each round with at least one unconfirmed helper share once.
-pub fn pending_share_rounds(
+/// Load rounds that may still require helper-share recovery.
+///
+/// Confirmed votes with recovery material are candidates even when they have
+/// no unconfirmed share rows: the share API compares the recovery bundle's
+/// expected indexes with the rows that were actually recorded.
+pub fn share_recovery_round_candidates(
     conn: &Connection,
     wallet_id: &str,
 ) -> Result<Vec<(String, Option<String>)>, VotingError> {
@@ -2972,12 +2976,23 @@ pub fn pending_share_rounds(
             "SELECT rounds.round_id, rounds.session_json
              FROM rounds
              WHERE rounds.wallet_id = :wallet_id
-               AND EXISTS (
-                   SELECT 1
-                   FROM share_delegations
-                   WHERE share_delegations.round_id = rounds.round_id
-                     AND share_delegations.wallet_id = rounds.wallet_id
-                     AND share_delegations.confirmed = 0
+               AND (
+                   EXISTS (
+                       SELECT 1
+                       FROM share_delegations
+                       WHERE share_delegations.round_id = rounds.round_id
+                         AND share_delegations.wallet_id = rounds.wallet_id
+                         AND share_delegations.confirmed = 0
+                   )
+                   OR EXISTS (
+                       SELECT 1
+                       FROM votes
+                       WHERE votes.round_id = rounds.round_id
+                         AND votes.wallet_id = rounds.wallet_id
+                         AND votes.tx_hash IS NOT NULL
+                         AND votes.vc_tree_position IS NOT NULL
+                         AND votes.commitment_bundle_json IS NOT NULL
+                   )
                )
              ORDER BY rounds.created_at DESC, rounds.round_id",
         )

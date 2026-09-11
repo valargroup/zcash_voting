@@ -4,7 +4,10 @@
 //! share-delegation persistence so wallets do not need direct access to
 //! `share_delegations` SQL or recovery JSON internals.
 
+use std::collections::BTreeSet;
+
 use crate::{
+    phases::VotePhase,
     round::VotingDb,
     types::{
         ct_option_to_result, ShareDelegationRecord, SharePayload, VotingError, WireEncryptedShare,
@@ -117,21 +120,22 @@ pub fn unconfirmed(
     db.get_unconfirmed_delegations(round_id)
 }
 
-/// Lists rounds with at least one unconfirmed helper share.
+/// Lists rounds with helper shares that still require submission or confirmation.
 ///
 /// Each round is returned once in newest-first order. The persisted
 /// `session_json` lets wallet integrations restore caller-owned round timing
 /// without reading the voting database schema directly.
 pub fn pending_rounds(db: &VotingDb) -> Result<Vec<PendingShareRound>, VotingError> {
-    db.pending_share_rounds().map(|rounds| {
-        rounds
-            .into_iter()
-            .map(|(round_id, session_json)| PendingShareRound {
+    let mut pending = Vec::new();
+    for (round_id, session_json) in db.share_recovery_round_candidates()? {
+        if round_has_pending_shares(db, &round_id)? {
+            pending.push(PendingShareRound {
                 round_id,
                 session_json,
-            })
-            .collect()
-    })
+            });
+        }
+    }
+    Ok(pending)
 }
 
 /// Marks one helper-share record confirmed.
@@ -212,6 +216,38 @@ pub fn recover_payloads(bundle: &VoteRecoveryBundle) -> Result<Vec<SharePayload>
             })
         })
         .collect()
+}
+
+fn round_has_pending_shares(db: &VotingDb, round_id: &str) -> Result<bool, VotingError> {
+    let records = list(db, round_id)?;
+    if records.iter().any(|record| !record.confirmed) {
+        return Ok(true);
+    }
+
+    let recorded_indexes = records
+        .iter()
+        .map(|record| (record.bundle_index, record.proposal_id, record.share_index))
+        .collect::<BTreeSet<_>>();
+
+    for (bundle_index, proposal_id, phase) in db.vote_phases(round_id)? {
+        if phase != VotePhase::Confirmed {
+            continue;
+        }
+        let recovery = crate::vote::recovery_bundle(db, round_id, bundle_index, proposal_id)?
+            .ok_or_else(|| VotingError::Internal {
+                message: format!(
+                    "confirmed vote is missing recovery material for round={round_id}, bundle={bundle_index}, proposal={proposal_id}"
+                ),
+            })?;
+        let has_unrecorded_share = recover_payloads(&recovery)?.iter().any(|payload| {
+            !recorded_indexes.contains(&(bundle_index, proposal_id, payload.enc_share.share_index))
+        });
+        if has_unrecorded_share {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Reconstructs one helper-server payload from persisted recovery JSON and
@@ -456,6 +492,8 @@ mod tests {
         let session_json = r#"{"vote_end_time":4102444800}"#;
         let db = db_with_vote_recovery_and_session(Some(session_json));
         let urls = vec!["https://helper.example".to_string()];
+        db.record_vote_submission(ROUND_ID, 0, 1, "vote-tx")
+            .unwrap();
 
         record(&db, ROUND_ID, 0, 1, 0, &urls, 99).unwrap();
         record(&db, ROUND_ID, 0, 1, 1, &urls, 100).unwrap();
@@ -477,6 +515,35 @@ mod tests {
 
         confirm(&db, ROUND_ID, 0, 1, 1).unwrap();
         assert!(pending_rounds(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pending_rounds_include_confirmed_vote_before_any_share_is_recorded() {
+        let db = db_with_vote_recovery();
+        db.record_vote_submission(ROUND_ID, 0, 1, "vote-tx")
+            .unwrap();
+
+        assert_eq!(pending_rounds(&db).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pending_rounds_include_unrecorded_share_after_recorded_shares_confirm() {
+        let db = db_with_vote_recovery();
+        db.record_vote_submission(ROUND_ID, 0, 1, "vote-tx")
+            .unwrap();
+        record(
+            &db,
+            ROUND_ID,
+            0,
+            1,
+            0,
+            &["https://helper.example".to_string()],
+            99,
+        )
+        .unwrap();
+        confirm(&db, ROUND_ID, 0, 1, 0).unwrap();
+
+        assert_eq!(pending_rounds(&db).unwrap().len(), 1);
     }
 
     #[test]
