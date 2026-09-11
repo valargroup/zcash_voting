@@ -6,6 +6,8 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v4.0.0-rc.0
+
 ### Fixed
 - SQLite operations that validate durable voting state before updating it now
   use immediate transactions, preventing concurrent WAL writers from causing
