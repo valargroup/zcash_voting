@@ -1546,6 +1546,15 @@ impl VotingDb {
         queries::get_unconfirmed_delegations(&conn, round_id, &wallet_id)
     }
 
+    /// Loads rounds that may still require helper-share recovery.
+    pub(crate) fn share_recovery_round_candidates(
+        &self,
+    ) -> Result<Vec<(String, Option<String>)>, VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        queries::share_recovery_round_candidates(&conn, &wallet_id)
+    }
+
     /// Mark a share delegation as confirmed on-chain.
     pub fn mark_share_confirmed(
         &self,
@@ -3892,9 +3901,15 @@ mod tests {
         // Verify proposal_authority reflects per-bundle submission state
         let conn = db.conn();
         let zkp2_0 = queries::load_zkp2_inputs(&conn, ROUND_ID, W, 0).unwrap();
-        assert_eq!(zkp2_0.proposal_authority, 0xFFFF & !(1u64 << 0)); // bit 0 cleared
+        assert_eq!(
+            zkp2_0.proposal_authority,
+            voting_circuits::MAX_PROPOSAL_AUTHORITY & !(1u64 << 0)
+        );
         let zkp2_1 = queries::load_zkp2_inputs(&conn, ROUND_ID, W, 1).unwrap();
-        assert_eq!(zkp2_1.proposal_authority, 0xFFFF); // no bits cleared
+        assert_eq!(
+            zkp2_1.proposal_authority,
+            voting_circuits::MAX_PROPOSAL_AUTHORITY
+        );
         drop(conn);
 
         // Verify cascade: clearing the round removes everything
