@@ -38,7 +38,7 @@ pub struct BenchRunConfig {
     pub endpoints: Endpoints,
     /// The ballot this round was provisioned with, and votes.
     pub ballot: Ballot,
-    /// The synthetic helper fleet, if any. Empty means the real staging primary.
+    /// Synthetic routing, if any. Empty leaves the real helper URLs unchanged.
     #[serde(default)]
     pub fleet: HelperFleetPlan,
     /// Unix time when this benchmark began provisioning the ceremony.
