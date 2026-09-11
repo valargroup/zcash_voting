@@ -1019,6 +1019,7 @@ For current POST classification:
 | `queued` or `duplicate` | Definite acceptance | Stop |
 | DNS, connect, TLS, or route failure before dispatch | Definite failure | Retry |
 | HTTP 429 | Definite transient failure | Retry |
+| HTTP 408 with a valid attempt-bound ingress receipt | Definite transient failure of this attempt | Retry within the existing initial-delivery budget |
 | HTTP 500, 502, 503, or 504 | Ambiguous transient failure | Never |
 | Timeout | Ambiguous | Never |
 | Failure after dispatch but before headers | Ambiguous | Never |
@@ -2222,3 +2223,47 @@ reintroducing full-round decoding in a per-share operation;
 `full_ballot_delivers_592_shares_with_bounded_admission` exercises a 37-proposal
 ballot, durable acceptance and the 32-delivery limit. Existing queued-deletion,
 wallet-scope, generation-replacement and confirmation-race tests remain binding.
+
+## Attempt-bound helper ingress timeout receipts
+
+Each helper POST can carry a fresh random 32-byte lowercase-hex
+`X-Vote-Ingress-Attempt-V1` token. A trusted helper may answer HTTP 408 with the
+v1 `request_body_timeout` receipt defined in the chain-submission specification,
+with `dispatch: "not_started"` and the exact current attempt token, only when its
+original synchronous body read timed out before enqueue or scheduling work.
+This is protocol binding, not a diagnostic request ID or an idempotency key.
+The client validates JSON content type, its existing response-size limit, the
+complete duplicate-free schema, version, and token before classifying
+`HelperError::NotEnqueuedByServer`.
+
+Initial delivery may retry this definite transient failure using the existing
+200/600 ms backoffs and at most three attempts. Each actual POST gets a new token.
+An insufficient remaining deadline returns the held definite failure without
+sleeping into ambiguity. Cancellation stops further retries. Recovery still
+makes one attempt per helper; a receipt cannot erase a previous acceptance,
+ambiguous attempt, or interrupted request. It records no acceptance, changes no
+placement target or schedule, and creates no additional durable state.
+
+An unrecognized HTTP 408 retains the existing definite non-transient status
+classification and never gains same-helper retry permission. Generic transport
+timeouts, lost receipts, and incomplete response reads remain ambiguous. A
+complete matching receipt says nothing about earlier attempts. The trusted
+HTTPS ingress must neither cache receipts nor replay POSTs nor synthesize a
+receipt after forwarding work; token binding does not protect against a lying
+trusted helper.
+
+`HelperTransport::post_json_with_headers` is an optional extension whose default
+calls the legacy method without forwarding optional headers. Existing custom
+transports therefore remain compatible and cannot normally obtain a matching
+receipt until they forward the token. HyperTransport and the Arc and crash-test
+transport wrappers forward the header over the caller's existing route.
+
+Conformance: `helper_receipts_retry_with_fresh_tokens_and_existing_backoff`,
+`helper_receipts_obey_initial_budget_and_recovery_single_attempt`,
+`invalid_helper_receipts_never_authorize_retry`,
+`lost_helper_receipt_stays_ambiguous_and_stops_retries`,
+`helper_receipt_deadline_returns_definite_failure_without_waiting`,
+`helper_receipt_cancellation_stops_before_retry`,
+`legacy_helper_transport_keeps_generic_timeout_handling`,
+`exhausted_helper_receipts_clear_fresh_reservation_without_acceptance`, and
+`helper_receipt_preserves_prior_ambiguity_after_reopen`.

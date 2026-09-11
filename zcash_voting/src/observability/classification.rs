@@ -127,6 +127,7 @@ pub(crate) fn round_run_outcome(result: &crate::RoundRunReport) -> ObservationOu
 pub(crate) fn helper_error_kind(error: &crate::HelperError) -> &'static str {
     use crate::HelperError;
     match error {
+        HelperError::NotEnqueuedByServer => "NotEnqueuedByServer",
         HelperError::InvalidRequest { .. } => "InvalidInput",
         HelperError::Transport(_) => "Transport",
         HelperError::Status { .. } => "HttpStatus",

@@ -162,6 +162,21 @@ pub trait HelperTransport: Send + Sync {
     /// Implementations are responsible for setting `Content-Type:
     /// application/json`.
     fn post_json<'a>(&'a self, url: &'a str, body: Vec<u8>, timeout: Duration) -> HelperFuture<'a>;
+
+    /// Performs a JSON POST with optional protocol headers.
+    ///
+    /// Override to forward headers without changing the host's route, deadlines,
+    /// or failure classification. The default ignores optional headers and uses
+    /// the legacy POST, so existing transports retain conservative handling.
+    fn post_json_with_headers<'a>(
+        &'a self,
+        url: &'a str,
+        body: Vec<u8>,
+        timeout: Duration,
+        _headers: &'a [(String, String)],
+    ) -> HelperFuture<'a> {
+        self.post_json(url, body, timeout)
+    }
 }
 
 impl<T: HelperTransport + ?Sized> HelperTransport for std::sync::Arc<T> {
@@ -171,6 +186,16 @@ impl<T: HelperTransport + ?Sized> HelperTransport for std::sync::Arc<T> {
 
     fn post_json<'a>(&'a self, url: &'a str, body: Vec<u8>, timeout: Duration) -> HelperFuture<'a> {
         (**self).post_json(url, body, timeout)
+    }
+
+    fn post_json_with_headers<'a>(
+        &'a self,
+        url: &'a str,
+        body: Vec<u8>,
+        timeout: Duration,
+        headers: &'a [(String, String)],
+    ) -> HelperFuture<'a> {
+        (**self).post_json_with_headers(url, body, timeout, headers)
     }
 }
 
