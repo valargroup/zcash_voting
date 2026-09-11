@@ -5,12 +5,12 @@ use std::{sync::LazyLock, time::Duration};
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 /// Maximum active share workflows, including fleets with small placement targets.
-pub(super) const MAX_CONCURRENT_SHARE_DELIVERIES: usize = 32;
-// A minimum charge bounds share workflows as well as their aggregate fan-out.
-const MINIMUM_SHARE_CHARGE: u32 =
-    SHARE_HELPER_MAX_CONCURRENT_POSTS.div_ceil(MAX_CONCURRENT_SHARE_DELIVERIES) as u32;
-static DELIVERY_PERMITS: LazyLock<Semaphore> =
-    LazyLock::new(|| Semaphore::new(SHARE_HELPER_MAX_CONCURRENT_POSTS));
+pub(super) const MAX_CONCURRENT_SHARE_DELIVERIES: usize = 50;
+// Scale the budget so both limits remain exact when 128 is not divisible by 50.
+// Each workflow consumes at least 1/50 of capacity and each target at least 1/128.
+const DELIVERY_CAPACITY: usize =
+    SHARE_HELPER_MAX_CONCURRENT_POSTS * MAX_CONCURRENT_SHARE_DELIVERIES;
+static DELIVERY_PERMITS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(DELIVERY_CAPACITY));
 
 /// Waits for capacity without creating durable reservations. Cancellation is
 /// observed within 50 ms even while all permits remain occupied. The caller
@@ -22,7 +22,9 @@ pub(super) async fn acquire(
     planned_target: u32,
     cancel: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<Option<SemaphorePermit<'static>>, VotingError> {
-    let admission = DELIVERY_PERMITS.acquire_many(planned_target.max(MINIMUM_SHARE_CHARGE));
+    let charge = (planned_target * MAX_CONCURRENT_SHARE_DELIVERIES as u32)
+        .max(SHARE_HELPER_MAX_CONCURRENT_POSTS as u32);
+    let admission = DELIVERY_PERMITS.acquire_many(charge);
     tokio::pin!(admission);
     loop {
         if cancel() {

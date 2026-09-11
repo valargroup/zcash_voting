@@ -3,7 +3,7 @@ use tokio::sync::Semaphore;
 
 #[tokio::test(start_paused = true)]
 async fn queued_replaced_generation_is_not_posted_or_mutated() {
-    let fixture = Fixture::new(3);
+    let fixture = Fixture::with_helpers(5, 8);
     let gate = Arc::new(Semaphore::new(0));
     let transport = ScriptedTransport::new({
         let gate = gate.clone();
@@ -13,26 +13,26 @@ async fn queued_replaced_generation_is_not_posted_or_mutated() {
         }
     });
     let replace = async {
-        transport.wait_for(32).await;
+        transport.wait_for(128).await;
         fixture.db.conn().execute(
-            "UPDATE votes SET commitment_bundle_json = replace(commitment_bundle_json, '\"anchor_height\":123', '\"anchor_height\":124') WHERE proposal_id = 3", []
+            "UPDATE votes SET commitment_bundle_json = replace(commitment_bundle_json, '\"anchor_height\":123', '\"anchor_height\":124') WHERE proposal_id = 5", []
         ).unwrap();
-        gate.add_permits(SHARE_COUNT * 3);
+        gate.add_permits(SHARE_COUNT * 5 * 4);
     };
     let (mut reports, ()) = tokio::join!(fixture.deliver(transport.clone(), &uncancelled), replace);
-    assert_complete(reports.drain(..2).collect(), 2);
+    assert_complete(reports.drain(..4).collect(), 4);
     let failed = reports.remove(0).unwrap_err().partial.unwrap();
     assert_eq!(failed.pending_share_indices.len(), SHARE_COUNT);
-    assert_eq!(transport.count(), SHARE_COUNT * 2);
+    assert_eq!(transport.count(), SHARE_COUNT * 4 * 4);
     assert!(share::list(&fixture.db, ROUND_ID)
         .unwrap()
         .iter()
-        .all(|share| share.proposal_id <= 2));
+        .all(|share| share.proposal_id <= 4));
 }
 
 #[tokio::test(start_paused = true)]
 async fn queued_work_retains_its_wallet_even_after_active_wallet_switches() {
-    let fixture = Fixture::new(3);
+    let fixture = Fixture::with_helpers(3, 8);
     let wallet = fixture.db.wallet_id();
     let gate = Arc::new(Semaphore::new(0));
     let transport = ScriptedTransport::new({
@@ -43,10 +43,10 @@ async fn queued_work_retains_its_wallet_even_after_active_wallet_switches() {
         }
     });
     let switch = async {
-        transport.wait_for(32).await;
+        transport.wait_for(128).await;
         fixture.db.set_wallet_id("other-wallet");
         seed_round_and_bundle(&fixture.db);
-        gate.add_permits(SHARE_COUNT * 3);
+        gate.add_permits(SHARE_COUNT * 3 * 4);
     };
     let (reports, ()) = tokio::join!(fixture.deliver(transport.clone(), &uncancelled), switch);
     assert_complete(reports, 3);
@@ -60,7 +60,7 @@ async fn queued_work_retains_its_wallet_even_after_active_wallet_switches() {
 
 #[tokio::test(start_paused = true)]
 async fn waiting_in_queue_does_not_spend_the_next_shares_fanout_budget() {
-    let fixture = Fixture::new(5);
+    let fixture = Fixture::with_helpers(5, 8);
     let transport = ScriptedTransport::new(|wire| ReplyPlan {
         delay: if wire.proposal_id <= 4 {
             Duration::from_secs(31)
@@ -73,13 +73,14 @@ async fn waiting_in_queue_does_not_spend_the_next_shares_fanout_budget() {
     let reports = fixture.deliver(transport.clone(), &uncancelled).await;
     // Two waves of 32 shares consume the 30-second request timeout each.
     assert!(start.elapsed() >= Duration::from_secs(60));
-    assert_eq!(transport.count(), SHARE_COUNT * 5);
+    // Timed-out shares try all eight helpers; the final proposal needs four.
+    assert_eq!(transport.count(), SHARE_COUNT * (4 * 8 + 4));
     assert!(reports[4]
         .as_ref()
         .unwrap()
         .deliveries
         .iter()
-        .all(|share| share.submission.accepted_urls.len() == 1));
+        .all(|share| share.submission.accepted_urls.len() == 4));
 }
 
 #[tokio::test(start_paused = true)]
@@ -100,37 +101,39 @@ async fn reopened_database_reuses_plans_and_only_delivers_unsent_proposals() {
         db.conn().prepare("SELECT commitment_bundle_json, share_plans_json FROM helper_share_plans ORDER BY proposal_id")
             .unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().map(Result::unwrap).collect()
     }
-    let fixture = Fixture::seed(Arc::new(VotingDb::open_path(&sidecar.0).unwrap()), 3);
+    let fixture =
+        Fixture::seed_with_helpers(Arc::new(VotingDb::open_path(&sidecar.0).unwrap()), 5, 8);
     let original_plans = plans(&fixture.db);
     let wallet = fixture.db.wallet_id();
     let gate = Arc::new(Semaphore::new(0));
     let transport = ScriptedTransport::new({
         let gate = gate.clone();
         move |wire| ReplyPlan {
-            gate: (wire.proposal_id <= 2).then(|| gate.clone()),
-            status: if wire.proposal_id == 2 { 503 } else { 200 },
+            gate: (wire.proposal_id <= 4).then(|| gate.clone()),
+            status: 200,
             ..Default::default()
         }
     });
     let cancelled = std::sync::atomic::AtomicBool::new(false);
     let cancel = || cancelled.load(Ordering::SeqCst);
     let interrupt = async {
-        transport.wait_for(SHARE_COUNT * 2).await;
+        transport.wait_for(SHARE_COUNT * 2 * 4).await;
         cancelled.store(true, Ordering::SeqCst);
-        gate.add_permits(SHARE_COUNT * 2);
+        gate.add_permits(SHARE_COUNT * 2 * 4);
     };
     let (reports, ()) = tokio::join!(fixture.deliver(transport.clone(), &cancel), interrupt);
-    assert_eq!(transport.count(), SHARE_COUNT * 2);
-    assert!(reports[2].as_ref().unwrap().cancelled);
+    assert_eq!(transport.count(), SHARE_COUNT * 2 * 4);
+    assert!(reports[4].as_ref().unwrap().cancelled);
     assert_eq!(
-        reports[2].as_ref().unwrap().pending_share_indices.len(),
+        reports[4].as_ref().unwrap().pending_share_indices.len(),
         SHARE_COUNT
     );
+    let attempted = transport.started.lock().unwrap().clone();
     drop(fixture);
 
     let db = Arc::new(VotingDb::open_path(&sidecar.0).unwrap());
     db.set_wallet_id(&wallet);
-    let votes = (1..=3)
+    let votes = (1..=5)
         .map(|proposal| {
             crate::vote::CommittedVote::recover(&db, ROUND_ID, 0, proposal)
                 .unwrap()
@@ -142,30 +145,22 @@ async fn reopened_database_reuses_plans_and_only_delivers_unsent_proposals() {
     let resumed = Fixture {
         db,
         votes,
-        configured: helpers(1),
+        configured: helpers(8),
     };
     let transport = ScriptedTransport::new(|_| ReplyPlan::default());
     let reports = resumed.deliver(transport.clone(), &uncancelled).await;
     assert_eq!(plans(&resumed.db), original_plans);
-    assert_eq!(transport.count(), SHARE_COUNT);
+    assert_eq!(transport.count(), (SHARE_COUNT * 5 - 32) * 4);
     assert!(transport
         .started
         .lock()
         .unwrap()
         .iter()
-        .all(|wire| wire.proposal_id == 3));
-    assert_eq!(reports[1].as_ref().unwrap().deliveries.len(), SHARE_COUNT);
-    assert!(reports[1]
-        .as_ref()
-        .unwrap()
-        .deliveries
+        .all(|wire| !attempted
+            .iter()
+            .any(|previous| previous.proposal_id == wire.proposal_id
+                && previous.share_index == wire.share_index)));
+    assert!(reports
         .iter()
-        .all(|share| share.submission.accepted_urls.is_empty()
-            && share.submission.ambiguous_urls == helpers(1)));
-    assert!(reports[2]
-        .as_ref()
-        .unwrap()
-        .deliveries
-        .iter()
-        .all(|share| share.submission.accepted_urls == helpers(1)));
+        .all(|report| report.as_ref().unwrap().pending_share_indices.is_empty()));
 }

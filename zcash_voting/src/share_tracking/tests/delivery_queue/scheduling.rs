@@ -27,8 +27,8 @@ async fn slow_successful_fanout_keeps_queued_shares_outside_the_deadline() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn completed_slots_refill_across_three_proposals_without_a_barrier() {
-    let fixture = Fixture::new(3);
+async fn completed_slots_refill_across_four_proposals_without_a_barrier() {
+    let fixture = Fixture::new(4);
     let gate = Arc::new(Semaphore::new(0));
     let slow = Arc::new(Semaphore::new(0));
     let transport = ScriptedTransport::new({
@@ -44,27 +44,27 @@ async fn completed_slots_refill_across_three_proposals_without_a_barrier() {
         }
     });
     let observe = async {
-        transport.wait_for(32).await;
-        assert_eq!(transport.active.load(Ordering::SeqCst), 32);
-        for admitted in 32 + 1..=SHARE_COUNT * 3 {
+        transport.wait_for(50).await;
+        assert_eq!(transport.active.load(Ordering::SeqCst), 50);
+        for admitted in 50 + 1..=SHARE_COUNT * 4 {
             gate.add_permits(1);
             transport.wait_for(admitted).await;
             assert_eq!(transport.count(), admitted);
             assert!(!transport.completed.lock().unwrap().contains(&(1, 0)));
-            assert!(transport.peak.load(Ordering::SeqCst) <= 32);
+            assert!(transport.peak.load(Ordering::SeqCst) <= 50);
         }
-        gate.add_permits(32);
+        gate.add_permits(50);
         slow.add_permits(1);
     };
     let (reports, ()) = tokio::join!(fixture.deliver(transport.clone(), &uncancelled), observe);
-    assert_complete(reports, 3);
-    assert_eq!(transport.count(), SHARE_COUNT * 3);
+    assert_complete(reports, 4);
+    assert_eq!(transport.count(), SHARE_COUNT * 4);
     assert_eq!(transport.active.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test(start_paused = true)]
-async fn batch_and_singleton_calls_share_the_process_wide_thirty_two_slots() {
-    let batch = Fixture::new(2);
+async fn batch_and_singleton_calls_share_the_process_wide_fifty_slots() {
+    let batch = Fixture::new(4);
     let singleton = Fixture::new(1);
     let gate = Arc::new(Semaphore::new(0));
     let transport = ScriptedTransport::new({
@@ -76,7 +76,7 @@ async fn batch_and_singleton_calls_share_the_process_wide_thirty_two_slots() {
     });
     let client = HelperClient::new(transport.clone(), HelperHealth::default());
     let run_singleton = async {
-        transport.wait_for(32).await;
+        transport.wait_for(50).await;
         singleton.votes[0]
             .submit_prepared_shares(
                 &singleton.db,
@@ -91,24 +91,24 @@ async fn batch_and_singleton_calls_share_the_process_wide_thirty_two_slots() {
             .unwrap()
     };
     let observe = async {
-        transport.wait_for(32).await;
+        transport.wait_for(50).await;
         // Give the independent caller time to queue its permits while the
         // first batch still owns every slot.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(transport.count(), 32);
+        assert_eq!(transport.count(), 50);
         gate.add_permits(1);
-        transport.wait_for(33).await;
-        assert_eq!(transport.count(), 33);
-        gate.add_permits(3 * SHARE_COUNT);
+        transport.wait_for(51).await;
+        assert_eq!(transport.count(), 51);
+        gate.add_permits(5 * SHARE_COUNT);
     };
     let (batch_reports, single_report, ()) = tokio::join!(
         batch.deliver(transport.clone(), &uncancelled),
         run_singleton,
         observe,
     );
-    assert_complete(batch_reports, 2);
+    assert_complete(batch_reports, 4);
     assert_complete(vec![Ok(single_report)], 1);
-    assert_eq!(transport.peak.load(Ordering::SeqCst), 32);
+    assert_eq!(transport.peak.load(Ordering::SeqCst), 50);
 }
 
 #[tokio::test(start_paused = true)]
@@ -183,7 +183,7 @@ async fn thirty_seven_proposals_finish_faster_with_identical_durable_results() {
     assert_eq!(reports, old_reports);
     assert_eq!(durable, old_durable);
     assert_eq!(old_peak, 16);
-    assert_eq!(peak, 32);
+    assert_eq!(peak, 50);
     assert!(
         queued < sequential / 2,
         "queued {queued:?}, sequential {sequential:?}"
@@ -192,8 +192,12 @@ async fn thirty_seven_proposals_finish_faster_with_identical_durable_results() {
 
 #[tokio::test(start_paused = true)]
 async fn helper_fanout_bounds_admitted_workflows() {
-    for (helpers, admitted, peak_posts, target) in [(8, 32, 128, 4), (20, 12, 120, 10)] {
-        let fixture = Fixture::with_helpers(2, helpers);
+    for (helpers, admitted, peak_posts, target) in
+        [(2, 50, 50, 1), (8, 32, 128, 4), (20, 12, 120, 10)]
+    {
+        let proposals = if helpers == 2 { 4 } else { 2 };
+        let placements = proposals as usize * SHARE_COUNT * target;
+        let fixture = Fixture::with_helpers(proposals, helpers);
         let gate = Arc::new(Semaphore::new(0));
         let transport = ScriptedTransport::new({
             let gate = gate.clone();
@@ -223,10 +227,10 @@ async fn helper_fanout_bounds_admitted_workflows() {
             assert_eq!(transport.active.load(Ordering::SeqCst), peak_posts);
             // Excess shares wait before durable preparation and their deadline.
             assert_eq!(share::list(&fixture.db, ROUND_ID).unwrap().len(), admitted);
-            gate.add_permits(32 * target);
+            gate.add_permits(placements);
         };
         let (reports, ()) = tokio::join!(fixture.deliver(transport.clone(), &uncancelled), observe);
-        assert_eq!(reports.len(), 2);
+        assert_eq!(reports.len(), proposals as usize);
         for report in reports {
             let report = report.unwrap();
             assert!(report.pending_share_indices.is_empty());
@@ -237,7 +241,7 @@ async fn helper_fanout_bounds_admitted_workflows() {
                 assert!(delivery.submission.ambiguous_urls.is_empty());
             }
         }
-        assert_eq!(transport.count(), 32 * target);
+        assert_eq!(transport.count(), placements);
         assert_eq!(transport.peak.load(Ordering::SeqCst), peak_posts);
         assert_eq!(transport.active.load(Ordering::SeqCst), 0);
     }
@@ -255,7 +259,7 @@ async fn full_ballot_delivers_592_shares_with_bounded_admission() {
     eprintln!("37-proposal helper delivery: {:?}", started.elapsed());
     assert_complete(reports, 37);
     assert_eq!(transport.count(), 592);
-    assert!(transport.peak.load(Ordering::SeqCst) <= 32);
+    assert!(transport.peak.load(Ordering::SeqCst) <= 50);
     assert_eq!(transport.active.load(Ordering::SeqCst), 0);
     let persisted = share::list(&fixture.db, ROUND_ID).unwrap();
     assert_eq!(persisted.len(), 592);

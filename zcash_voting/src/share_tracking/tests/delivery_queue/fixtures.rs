@@ -30,7 +30,11 @@ impl Fixture {
         Self::seed_with_helpers(db, proposals, 1)
     }
 
-    fn seed_with_helpers(db: Arc<VotingDb>, proposals: u32, helper_count: usize) -> Self {
+    pub(super) fn seed_with_helpers(
+        db: Arc<VotingDb>,
+        proposals: u32,
+        helper_count: usize,
+    ) -> Self {
         static WALLET: AtomicUsize = AtomicUsize::new(0);
         db.set_wallet_id(&format!(
             "delivery-queue-{}",
@@ -200,7 +204,7 @@ pub(super) fn assert_complete(
         assert!(report
             .deliveries
             .iter()
-            .all(|share| share.submission.accepted_urls.len() == 1));
+            .all(|share| share.submission.accepted_urls.len() == share.submission.target_count));
     }
 }
 
