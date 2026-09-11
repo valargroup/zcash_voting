@@ -79,6 +79,7 @@ const ALG_ED25519: &str = "ed25519";
 const CHECKSUM_QUERY_NAME: &str = "checksum";
 const SHA256_CHECKSUM_PREFIX: &str = "sha256:";
 const VERSION_V0: &str = "v0";
+const VOTE_PROTOCOL_VERSION_V1: &str = "v1";
 const VOTE_SERVER_VERSION_V1: &str = "v1";
 const ROUND_PARAM_BYTE_LEN: usize = 32;
 
@@ -95,7 +96,10 @@ impl Default for WalletCapabilities {
     fn default() -> Self {
         Self {
             vote_server: vec![VOTE_SERVER_VERSION_V1.to_string()],
-            vote_protocol: vec![VERSION_V0.to_string()],
+            // Both protocol generations are accepted so one wallet build
+            // spans the server rollout: every deployed config advertises v0
+            // today, and a config that moves to v1 must not strand it.
+            vote_protocol: vec![VERSION_V0.to_string(), VOTE_PROTOCOL_VERSION_V1.to_string()],
             tally: vec![VERSION_V0.to_string()],
             pir: vec![VERSION_V0.to_string()],
         }
@@ -2034,6 +2038,58 @@ mod tests {
                 ea_pk: vec![7u8; 32],
             }]
         );
+    }
+
+    #[test]
+    fn resolve_dynamic_voting_config_rejects_unsupported_vote_protocol() {
+        let trusted_key = SigningKey::from_bytes(&[3u8; 32]);
+        let mut dynamic: serde_json::Value =
+            serde_json::from_slice(&dynamic_bytes(&trusted_key)).unwrap();
+        dynamic["supported_versions"]["vote_protocol"] = serde_json::json!("v2");
+        let resolved_static =
+            resolve_static_voting_config(&source(), &static_bytes(&trusted_key)).unwrap();
+
+        let error = resolve_dynamic_voting_config(
+            resolved_static,
+            &dynamic.to_string().into_bytes(),
+            ResolveVotingConfigOptions::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            VotingConfigError::UnsupportedVersion {
+                component: "vote_protocol".to_string(),
+                advertised: "v2".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_dynamic_voting_config_accepts_both_vote_protocol_generations() {
+        // One wallet build has to span the rollout: deployed configs
+        // advertise v0 today and will advertise v1 later, and neither may
+        // strand it.
+        for advertised in ["v0", "v1"] {
+            let trusted_key = SigningKey::from_bytes(&[3u8; 32]);
+            let mut dynamic: serde_json::Value =
+                serde_json::from_slice(&dynamic_bytes(&trusted_key)).unwrap();
+            dynamic["supported_versions"]["vote_protocol"] = serde_json::json!(advertised);
+            let resolved_static =
+                resolve_static_voting_config(&source(), &static_bytes(&trusted_key)).unwrap();
+
+            let resolved = resolve_dynamic_voting_config(
+                resolved_static,
+                &dynamic.to_string().into_bytes(),
+                ResolveVotingConfigOptions::default(),
+            );
+
+            assert!(
+                resolved.is_ok(),
+                "vote_protocol {advertised} was rejected: {:?}",
+                resolved.err()
+            );
+        }
     }
 
     #[test]

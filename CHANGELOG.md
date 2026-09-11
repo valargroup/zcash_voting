@@ -6,6 +6,18 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Updated the dependency stack to `voting-crypto-deps 0.2.3`,
+  `voting-circuits 0.12.0-rc.2`, `imt-tree 0.5.3`, `pir-types 0.6.3`,
+  `pir-client 0.7.3`, and `zakura-wallet-lib 0.1.0-rc5`.
+- Prepared `vote-commitment-tree 0.6.1` and
+  `vote-commitment-tree-client 0.8.1` with the updated exact pins.
+- Expanded the supported proposal-ID and atomic vote-batch ranges from 1–15 to
+  1–50 while retaining 16 encrypted shares per vote commitment. This consumes
+  the breaking circuit and verification-key change from `voting-circuits
+  0.12.0-rc.2`.
+
 ## v3.1.0
 
 ### Changed
