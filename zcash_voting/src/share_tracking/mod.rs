@@ -510,7 +510,9 @@ mod initial_delivery;
 mod post_capacity;
 mod recovery;
 
-pub(crate) use delivery_plan::{load_share_delivery_plan, prepare_share_delivery_plan};
+pub(crate) use delivery_plan::{
+    load_delivery_plans, prepare_share_delivery_plan, DeliveryPlanRequest,
+};
 pub(crate) use delivery_progress::{delivery_progress, DeliveryProgress};
 
 use configured_fleet::ConfiguredHelperFleet;

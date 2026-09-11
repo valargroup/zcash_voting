@@ -23,6 +23,9 @@ use super::{
 
 const PLAN_FORMAT_VERSION: u32 = 1;
 
+mod submission_snapshot;
+pub(crate) use submission_snapshot::{load_delivery_plans, DeliveryPlanRequest};
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_share_delivery_plan(
     db: &VotingDb,
@@ -435,17 +438,21 @@ fn validate_round_immediate_plans(
     Ok(())
 }
 
-pub(crate) fn load_share_delivery_plan(
-    db: &VotingDb,
-    scope: &ShareOperationScope,
-    round_id: &str,
-    bundle_index: u32,
-    proposal_id: u32,
-    handle_commitment_bundle_json: &str,
+fn load_share_delivery_plan(
+    conn: &Connection,
+    wallet_id: &str,
+    request: &DeliveryPlanRequest<'_>,
     current_fleet: &[String],
-    payloads: &[SharePayload],
+    round_audits: &mut BTreeMap<String, submission_snapshot::RoundDeliveryAudit>,
+    observations: &crate::ObservationScope,
 ) -> Result<(ShareDeliveryPlan, String), VotingError> {
-    let conn = db.conn();
+    let DeliveryPlanRequest {
+        round_id,
+        bundle_index,
+        proposal_id,
+        generation: handle_commitment_bundle_json,
+        payloads,
+    } = *request;
     let commitment_bundle_json: String = conn
         .query_row(
             "SELECT commitment_bundle_json FROM votes
@@ -453,7 +460,7 @@ pub(crate) fn load_share_delivery_plan(
                AND bundle_index = :bundle_index AND proposal_id = :proposal_id",
             named_params! {
                 ":round_id": round_id,
-                ":wallet_id": scope.wallet_id(),
+                ":wallet_id": wallet_id,
                 ":bundle_index": bundle_index as i64,
                 ":proposal_id": proposal_id as i64,
             },
@@ -469,9 +476,9 @@ pub(crate) fn load_share_delivery_plan(
         })?;
     validate_handle_generation(handle_commitment_bundle_json, &commitment_bundle_json)?;
     let plan = load_plan_with_conn(
-        &conn,
+        conn,
         round_id,
-        scope.wallet_id(),
+        wallet_id,
         bundle_index,
         proposal_id,
         &commitment_bundle_json,
@@ -481,36 +488,38 @@ pub(crate) fn load_share_delivery_plan(
     })?;
     validate_current_helper_fleet(current_fleet)?;
     validate_share_delivery_plan(&plan, payloads.len())?;
-    let intents = durable_decisions(&conn, round_id, scope.wallet_id())?;
-    if !matches!(intents.get(&proposal_id), Some(Decision::Choice(_))) {
+    if !round_audits.contains_key(round_id) {
+        let stage = observations
+            .for_round()
+            .stage("helper::audit_delivery_round");
+        let audit = submission_snapshot::RoundDeliveryAudit::load(conn, wallet_id, round_id);
+        stage.finish(
+            if audit.is_ok() {
+                crate::ObservationOutcome::Succeeded
+            } else {
+                crate::ObservationOutcome::Failed
+            },
+            audit
+                .as_ref()
+                .err()
+                .map(crate::observability::voting_error_kind),
+        );
+        round_audits.insert(round_id.to_string(), audit?);
+    }
+    let audit = &round_audits[round_id];
+    if !matches!(audit.decisions.get(&proposal_id), Some(Decision::Choice(_))) {
         return Err(VotingError::InvalidInput {
             message: format!(
                 "committed proposal {proposal_id} is no longer a chosen member of the round"
             ),
         });
     }
-    // The durable designation is what the persisted plans were made against;
-    // a choice recorded after it does not move it. Derive only while the
-    // round has none, as preparation does.
-    let immediate_key = match super::immediate_designation::round_immediate_share(
-        &conn,
-        round_id,
-        scope.wallet_id(),
-    )? {
-        Some(key) => Some(key),
-        None => {
-            let choice_proposals = intents
-                .iter()
-                .filter_map(|(&proposal_id, decision)| {
-                    matches!(decision, Decision::Choice(_)).then_some(proposal_id)
-                })
-                .collect::<Vec<_>>();
-            immediate_key_for_choices(&conn, round_id, scope.wallet_id(), &choice_proposals)?
-        }
-    };
-    validate_round_immediate_plans(&conn, round_id, scope.wallet_id(), immediate_key)?;
-    let immediate_position =
-        immediate_position_for_commitment(immediate_key, bundle_index, proposal_id, payloads)?;
+    let immediate_position = immediate_position_for_commitment(
+        audit.immediate_key,
+        bundle_index,
+        proposal_id,
+        payloads,
+    )?;
     validate_immediate_plan(&plan, immediate_position)?;
     Ok((plan, commitment_bundle_json))
 }

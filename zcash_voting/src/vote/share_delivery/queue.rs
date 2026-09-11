@@ -118,10 +118,25 @@ pub(in crate::vote) async fn submit_votes<'a>(
     on_report: &mut (dyn FnMut(&CommittedVote, &ShareBatchDeliveryReport) + Send),
 ) -> Vec<VoteDeliveryResult<'a>> {
     let scope = ShareOperationScope::capture(db);
+    let preparation_stage = client
+        .observation_scope()
+        .stage("helper::prepare_delivery_queue");
+    let votes = votes.into_iter().collect::<Vec<_>>();
+    let prepared =
+        preparation::prepare_all(&votes, db, &scope, &params, preparation_stage.scope()).await;
     let mut proposals = votes
         .into_iter()
-        .map(|vote| ProposalDelivery::new(vote, preparation::prepare(vote, db, &scope, &params)))
+        .zip(prepared)
+        .map(|(vote, prepared)| ProposalDelivery::new(vote, prepared))
         .collect::<Vec<_>>();
+    preparation_stage.finish(
+        if proposals.iter().all(|proposal| proposal.prepared.is_some()) {
+            crate::ObservationOutcome::Succeeded
+        } else {
+            crate::ObservationOutcome::Failed
+        },
+        None,
+    );
     let jobs = proposals
         .iter()
         .enumerate()

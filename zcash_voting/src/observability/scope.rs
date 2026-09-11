@@ -123,6 +123,15 @@ impl ObservationScope {
         }
     }
 
+    /// Attributes work to the whole round, clearing the caller's bundle,
+    /// proposal, and share identity while retaining the collector and parent.
+    pub(crate) fn for_round(&self) -> Self {
+        Self {
+            attribution: ObservationAttribution::default(),
+            ..self.clone()
+        }
+    }
+
     /// Attributes work to the complete bundle, clearing a triggering member's
     /// proposal and share identity while retaining the collector and parent.
     pub(crate) fn for_bundle(&self, bundle_index: u32) -> Self {

@@ -7,4 +7,5 @@ mod fixtures;
 mod immediate_first;
 mod lifecycle;
 mod observability;
+mod preparation;
 mod scheduling;
