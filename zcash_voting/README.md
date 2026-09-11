@@ -398,7 +398,7 @@ capability selectors, those features never weak-reference both optional
 backend families. External-consumer regression tests verify that selecting
 `zcash_voting/lrz` puts no Zakura forks in Cargo lockfiles or resolved
 metadata. The selected wallet facade release is `zakura-wallet-lib
-0.1.0-rc4`.
+0.1.0-rc5`.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
@@ -406,16 +406,16 @@ This release line requires Rust 1.91 or newer.
 
 - **`orchard 0.15`** from [zcash/orchard](https://github.com/zcash/orchard),
   with `unstable-voting-circuits` enabled for the governance proof paths
-  (or `zakura-orchard 1.0.0` with the `zakura` feature).
-- **`voting-circuits 0.11.2`** from [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits)
+  (or `zakura-orchard 1.2.0` with the `zakura` feature).
+- **`voting-circuits 0.12.0-rc.2`** from [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits)
   for the delegation and vote proof circuits.
-- **`vote-commitment-tree 0.6.0`** and
-  **`vote-commitment-tree-client 0.8.0`** for vote commitment tree state
+- **`vote-commitment-tree 0.6.1`** and
+  **`vote-commitment-tree-client 0.8.1`** for vote commitment tree state
   and optional HTTP sync.
 - **`pczt 0.9.2`, `zcash_client_backend 0.24.0-rc.7`,
   `zcash_client_sqlite 0.22.0-rc.7`, `zcash_keys 0.16.1`,
   `zcash_primitives 0.30.0`, and `zcash_protocol 0.10.4`** from published
-  librustzcash releases (or the stable `zakura-*` family and RC4 wallet crates in
+  librustzcash releases (or the stable `zakura-*` family and RC5 wallet crates in
   `zakura` builds).
 
 ## Downstream test fixtures

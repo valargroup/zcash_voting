@@ -174,7 +174,7 @@ Pre-launch wallet databases with older schema versions are reset when opened by
 this branch; callers that need to preserve test data should export it before
 upgrading the crate.
 
-The workspace uses the published `voting-circuits 0.11.2` release.
+The workspace uses the `voting-circuits 0.12.0-rc.2` release.
 
 ## Dependency Strategy
 
@@ -186,7 +186,7 @@ The LRZ backend uses one Ironwood dependency stack:
   `zcash_client_sqlite 0.22.0-rc.7`, `zcash_keys 0.16.1`,
   `zcash_primitives 0.30.0`, and `zcash_protocol 0.10.4`** from published
   librustzcash releases.
-- **`voting-circuits 0.11.2`** from
+- **`voting-circuits 0.12.0-rc.2`** from
   [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits)
   for the delegation and vote proof circuits.
 
@@ -196,7 +196,7 @@ build with `--no-default-features --features lrz` for the LRZ VCT backend.
 
 The published `zcash_voting` crate defaults to Zakura and exposes LRZ through
 the mutually exclusive `lrz` feature. Wallet-family selection is consolidated
-in published `zakura-wallet-lib 0.1.0-rc4`, whose complete `zakura` and `lrz`
+in published `zakura-wallet-lib 0.1.0-rc5`, whose complete `zakura` and `lrz`
 modes never weak-reference both backend families. Gemini selects
 `zcash_voting` with `default-features = false, features = ["lrz"]`; Vizor uses
 the defaults. External-consumer regression tests verify that Gemini's Cargo

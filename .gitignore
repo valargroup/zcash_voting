@@ -1,4 +1,4 @@
-/target
+target/
 .vscode/
 
 # zcash-voting-ffi build artifacts
@@ -6,3 +6,16 @@ zcash-voting-ffi/target
 zcash-voting-ffi/products
 zcash-voting-ffi/releases
 zcash-voting-ffi/Sources
+
+# recovery-conformance run artifacts: crash logs and the sidecar databases the
+# suite kills processes on top of. Generated per run, never source.
+*.crashlog.jsonl
+
+# stage-bench run directories: sidecar databases, observability snapshots, and
+# derived metrics. Each is one measurement of a staging round, generated per
+# run and never source. Archive one deliberately if it is worth keeping.
+runs/
+
+# Infisical workspace link. Not secret, but it pins this shared repo to one
+# person's project; the suite takes --projectId explicitly instead.
+.infisical.json
