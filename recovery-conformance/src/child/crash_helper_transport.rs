@@ -65,6 +65,16 @@ impl<T: HelperTransport> HelperTransport for CrashHelperTransport<T> {
     }
 
     fn post_json<'a>(&'a self, url: &'a str, body: Vec<u8>, timeout: Duration) -> HelperFuture<'a> {
+        self.post_json_with_headers(url, body, timeout, &[])
+    }
+
+    fn post_json_with_headers<'a>(
+        &'a self,
+        url: &'a str,
+        body: Vec<u8>,
+        timeout: Duration,
+        headers: &'a [(String, String)],
+    ) -> HelperFuture<'a> {
         // Only a share submission arms the crash. Every other helper call this
         // transport sees must pass through untouched, or the process dies at a
         // point where no delivery attempt has been journaled yet and a
@@ -73,7 +83,9 @@ impl<T: HelperTransport> HelperTransport for CrashHelperTransport<T> {
         // neither reaches this method; the path check is what keeps that true
         // if a future call POSTs somewhere else.
         let Some(armed) = self.armed.filter(|_| url.ends_with(SHARES_ENDPOINT)) else {
-            return self.inner.post_json(url, body, timeout);
+            return self
+                .inner
+                .post_json_with_headers(url, body, timeout, headers);
         };
         let log = Arc::clone(&self.log);
         let recorded = url.to_string();
@@ -90,7 +102,10 @@ impl<T: HelperTransport> HelperTransport for CrashHelperTransport<T> {
             log.record(&Observation::PostDispatched {
                 url: recorded.clone(),
             });
-            let response = self.inner.post_json(url, body, timeout).await;
+            let response = self
+                .inner
+                .post_json_with_headers(url, body, timeout, headers)
+                .await;
 
             if let Ok(response) = &response {
                 log.record(&Observation::PostResponse {

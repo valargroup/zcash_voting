@@ -141,6 +141,10 @@ pub enum ShareSubmissionStatus {
 /// A helper request that did not produce a usable answer.
 #[derive(Clone, Debug)]
 pub enum HelperError {
+    /// A matching ingress receipt proves this attempt never enqueued the share.
+    /// Earlier ambiguous attempts remain unresolved. Initial delivery may retry
+    /// within its existing budget; recovery still makes only one POST per helper.
+    NotEnqueuedByServer,
     /// The caller supplied a request that cannot be dispatched safely.
     InvalidRequest { message: String },
     /// The request never completed. Carries the ambiguity of a timeout.
@@ -175,7 +179,7 @@ impl HelperError {
     /// retryable for an idempotent GET.
     fn is_transient(&self) -> bool {
         match self {
-            Self::Transport(_) => true,
+            Self::Transport(_) | Self::NotEnqueuedByServer => true,
             Self::Status { status } => matches!(status, 429 | 500 | 502 | 503 | 504),
             Self::InvalidRequest { .. }
             | Self::Decode { .. }
@@ -201,6 +205,7 @@ impl HelperError {
 impl std::fmt::Display for HelperError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NotEnqueuedByServer => write!(f, "helper request body timed out before enqueue"),
             Self::InvalidRequest { message } => write!(f, "invalid helper request: {message}"),
             Self::Transport(error) => write!(f, "{error}"),
             Self::Status { status } => write!(f, "helper returned HTTP {status}"),
@@ -1039,16 +1044,37 @@ impl HelperClient {
             let deadline = tokio::time::Instant::now()
                 .checked_add(timeout)
                 .ok_or(HelperError::Transport(HelperTransportError::Timeout))?;
-            tokio::time::timeout_at(
+            let attempt = crate::ingress_timeout::attempt_token();
+            let headers = attempt
+                .as_ref()
+                .map(|token| {
+                    vec![(
+                        crate::ingress_timeout::REQUEST_HEADER.to_owned(),
+                        token.clone(),
+                    )]
+                })
+                .unwrap_or_default();
+            let response = tokio::time::timeout_at(
                 deadline,
                 crate::http_transport::observe_helper_http(
                     stage.scope().clone(),
-                    self.transport.post_json(url, body, timeout),
+                    self.transport
+                        .post_json_with_headers(url, body, timeout, &headers),
                 ),
             )
             .await
             .map_err(|_| HelperError::Transport(HelperTransportError::Timeout))?
-            .map_err(HelperError::Transport)
+            .map_err(HelperError::Transport)?;
+            if validate_json_response(&response).is_ok()
+                && crate::ingress_timeout::is_not_dispatched(
+                    response.status(),
+                    response.body(),
+                    attempt.as_deref(),
+                )
+            {
+                return Err(HelperError::NotEnqueuedByServer);
+            }
+            Ok(response)
         }
         .await;
         let status = result.as_ref().ok().map(HelperResponse::status);
@@ -1343,6 +1369,7 @@ fn join_helper_url(base_url: &str, segments: &[&str]) -> Result<String, VotingEr
 
 #[cfg(test)]
 mod tests {
+    mod ingress_timeout;
     mod observability;
     use std::{
         collections::{HashMap, VecDeque},

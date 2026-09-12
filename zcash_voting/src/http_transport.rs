@@ -1112,12 +1112,14 @@ impl<R: RouteHttp> HyperTransport<R> {
         url: &str,
         body: Vec<u8>,
         timeout: Duration,
+        protocol_headers: &[(String, String)],
     ) -> std::result::Result<HelperResponse, HelperTransportError> {
-        let headers: Vec<(String, String)> = if body.is_empty() {
+        let mut headers: Vec<(String, String)> = if body.is_empty() {
             Vec::new()
         } else {
             vec![("content-type".to_string(), "application/json".to_string())]
         };
+        headers.extend_from_slice(protocol_headers);
         match self
             .execute(
                 RouteRequest {
@@ -1305,13 +1307,28 @@ impl<R: RouteHttp> vote_commitment_tree_client::transport::Transport for HyperTr
 impl<R: RouteHttp> HelperTransport for HyperTransport<R> {
     fn get<'a>(&'a self, url: &'a str, timeout: Duration) -> HelperFuture<'a> {
         Box::pin(async move {
-            self.helper_request(Method::GET, url, Vec::new(), timeout)
+            self.helper_request(Method::GET, url, Vec::new(), timeout, &[])
                 .await
         })
     }
 
     fn post_json<'a>(&'a self, url: &'a str, body: Vec<u8>, timeout: Duration) -> HelperFuture<'a> {
-        Box::pin(async move { self.helper_request(Method::POST, url, body, timeout).await })
+        Box::pin(async move {
+            self.helper_request(Method::POST, url, body, timeout, &[])
+                .await
+        })
+    }
+    fn post_json_with_headers<'a>(
+        &'a self,
+        url: &'a str,
+        body: Vec<u8>,
+        timeout: Duration,
+        headers: &'a [(String, String)],
+    ) -> HelperFuture<'a> {
+        Box::pin(async move {
+            self.helper_request(Method::POST, url, body, timeout, headers)
+                .await
+        })
     }
 }
 
@@ -1506,6 +1523,7 @@ mod tests {
                 &format!("http://{address}"),
                 Vec::new(),
                 Duration::from_millis(150),
+                &[],
             )
             .await;
 
@@ -1534,6 +1552,7 @@ mod tests {
                 &format!("http://{address}"),
                 br#"{"share_index":0}"#.to_vec(),
                 Duration::from_secs(1),
+                &[],
             )
             .await;
 
@@ -1560,6 +1579,7 @@ mod tests {
                 &format!("http://{address}"),
                 br#"{"share_index":0}"#.to_vec(),
                 Duration::from_secs(1),
+                &[],
             )
             .await;
 

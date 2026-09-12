@@ -4,3 +4,6 @@ pub mod client;
 pub mod health;
 pub mod transport;
 pub mod url;
+
+#[cfg(test)]
+pub(crate) mod tests;

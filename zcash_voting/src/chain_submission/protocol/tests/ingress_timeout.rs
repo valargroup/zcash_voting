@@ -1,12 +1,11 @@
-use super::*;
-
 #[test]
 fn only_a_complete_matching_ingress_timeout_is_non_dispatch_evidence() {
     let token = "a".repeat(64);
     let valid = serde_json::json!({"error":{"version":1,"code":"request_body_timeout","dispatch":"not_started","attempt":token}});
     let accepts = |status, value: &serde_json::Value, expected: Option<&str>| {
         super::super::ingress_timeout::is_not_dispatched(
-            &ChainHttpResponse::json(status, serde_json::to_vec(value).unwrap()),
+            status,
+            &serde_json::to_vec(value).unwrap(),
             expected,
         )
     };
@@ -33,7 +32,8 @@ fn only_a_complete_matching_ingress_timeout_is_non_dispatch_evidence() {
         r#"{{"error":{{"version":1,"version":1,"code":"request_body_timeout","dispatch":"not_started","attempt":"{token}"}}}}"#
     );
     assert!(!super::super::ingress_timeout::is_not_dispatched(
-        &ChainHttpResponse::json(408, duplicate.into_bytes()),
+        408,
+        duplicate.as_bytes(),
         Some(&token)
     ));
 }

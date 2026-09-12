@@ -17,7 +17,7 @@ use super::{
     ChainTransportFailureKind, MAX_CHAIN_HTTP_RESPONSE_BYTES,
 };
 
-mod ingress_timeout;
+use crate::ingress_timeout;
 
 const API_PREFIX: [&str; 2] = ["shielded-vote", "v1"];
 const DELEGATION_ENDPOINT: &str = "delegate-vote";
@@ -375,7 +375,13 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
                 ),
             ),
             Ok(Ok(response)) => {
-                if ingress_timeout::is_not_dispatched(&response, attempt_token.as_deref()) {
+                if validate_json_response(&response).is_ok()
+                    && ingress_timeout::is_not_dispatched(
+                        response.status(),
+                        response.body(),
+                        attempt_token.as_deref(),
+                    )
+                {
                     PostAttemptOutcome::NotDispatchedByServer
                 } else {
                     parse_post_response(response, endpoint, expected_batch_digest)
