@@ -109,7 +109,7 @@ pub(super) fn store_two_vote_batch(db: &VotingDb) -> [u8; 32] {
     let mut second = recovery_for(0, 2);
     second.van_nullifier = [0x20; 32];
     second.vote_authority_note_new = [0x22; 32];
-    second.vote_commitment = [0x62; 32];
+    second.vote_commitment = [0x32; 32];
     second.r_vpk = [0x25; 32];
     let actions = [&first, &second]
         .into_iter()

@@ -6,3 +6,4 @@ mod admission;
 mod ambiguous_retry;
 mod bundle_causality;
 mod persistence;
+mod restart;

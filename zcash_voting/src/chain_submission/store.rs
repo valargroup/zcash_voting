@@ -424,6 +424,9 @@ impl StoredChainSubmission {
 pub(super) enum StoreAdmission {
     NoAuthoritativeState,
     Authoritative(StoredChainSubmission),
+    /// Active admission normalized an interrupted reservation without deriving
+    /// its generation. No reconciliation has run yet.
+    AbandonedReservation(StoredChainSubmission),
     Ready {
         derived: Box<DerivedChainSubmission>,
         record: StoredChainSubmission,
@@ -978,7 +981,7 @@ pub(super) mod memory {
                         state
                             .records
                             .insert(request.identity().clone(), record.clone());
-                        return Ok(StoreAdmission::Authoritative(record));
+                        return Ok(StoreAdmission::AbandonedReservation(record));
                     }
                     let derived = Self::derive(state, request.derivation()).map_err(|error| {
                         ChainSubmissionFailure::with_durable_state(
