@@ -35,6 +35,7 @@ fn config(mode: RunMode) -> RoundRunConfig {
             helper_urls: vec!["https://a.example".to_string()],
             lightwalletd: "https://lwd.example:443".to_string(),
         },
+        broadcast_skip: 0,
         target: Target {
             bundle_index: 0,
             proposal_id: 1,
@@ -80,6 +81,7 @@ fn snapshot(submissions: Vec<(&str, i64, &str, &str, i64)>) -> DurableSnapshot {
         pczt_persisted: true,
         cached_tree: false,
         deliveries: Vec::new(),
+        setup: Vec::new(),
     }
 }
 

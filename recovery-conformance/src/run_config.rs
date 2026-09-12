@@ -75,6 +75,14 @@ pub struct RoundRunConfig {
     pub account_uuid: String,
     pub endpoints: Endpoints,
     pub target: Target,
+    /// Matching broadcast POSTs to let through before the armed one fires.
+    ///
+    /// Zero for every ordinary stage. Signer-less target recovery sets it so
+    /// the crash lands on the last bundle's batch, leaving a round whose only
+    /// outstanding work is that batch — the one shape in which a child with no
+    /// signing material can make progress at all.
+    #[serde(default)]
+    pub broadcast_skip: usize,
     pub mode: RunMode,
     pub crash_log: PathBuf,
     /// Where the child writes [`RunOutcome`] before exiting.

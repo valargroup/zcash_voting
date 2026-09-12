@@ -156,7 +156,8 @@ recovery-conformance-unit: ## Run hermetic crash-recovery harness tests (no stag
 		--test stage_taxonomy --test stage_config --test target_chain \
 		--test crash_log --test round_shape --test orchestration \
 		--test fault_routes --test helper_fleet_plan --test stall_taxonomy \
-		--test combined_recovery --test precompute
+		--test combined_recovery --test precompute --test setup_preservation \
+		--test recrash_taxonomy --test sidecar_durability
 
 .PHONY: bench-bundle-pipelines
 bench-bundle-pipelines: ## Compare serial and five real-proof pipelines with controlled peer delays

@@ -63,8 +63,15 @@ definition of the remaining work.
 | **Crash** (`staging_conformance`) | `abort()` at a named durable boundary | Does a round killed here still know what it owes? |
 | **Hang** (`stall_conformance`) | One class of network request never answers | Does the request end *at all*, or does it wedge the round? |
 | **Fleet** (`helper_fleet_conformance`) | Ten helpers whose reachability changes | Does a partial placement get completed, exactly once, on the helpers that are still owed? |
+| **Recrash** (`staging_conformance`) | `abort()` again, *during* the recovery | Does a round survive being interrupted more than once, including at the same boundary every time? |
 
-The second and third exist because the first cannot reach them.
+The second and third exist because the first cannot reach them. The fourth
+exists because all three prove their claim over exactly **one** fault: the
+armed run kills the child once, and everything after is a clean resume, so the
+durability of the recovery path itself goes unasked. It is also the shape a
+real user hits — a device that kills a process for memory pressure kills it at
+the same point on every launch — so "the user can always recover" is a claim
+about repeated faults, not a single one.
 
 A crash is an abrupt, observable fault: the process dies and leaves durable
 evidence. A **hang** is its opposite — nothing dies, nothing unwinds, and the
@@ -124,7 +131,18 @@ The other two axes select the same way:
 ```bash
 RECOVERY_CONFORMANCE_STALLS=share-post,pir-query   # hang matrix
 RECOVERY_CONFORMANCE_FLEET=half-then-other-half    # fleet matrix
+RECOVERY_CONFORMANCE_RECRASH=before-broadcast-thrice   # crash-during-recovery
 ```
+
+The crash-during-recovery cases run inside the crash matrix binary, after the
+single-stage loop. They are the more expensive dimension — each provisions a
+round and kills the child two or three times within it — and a failure there is
+much easier to read once the single-fault stages are known green. Naming either
+selector narrows the run to what was named: `RECOVERY_CONFORMANCE_STAGES` alone
+runs no recrash cases, and `RECOVERY_CONFORMANCE_RECRASH` alone runs no single
+stages. With neither set, both dimensions run in full. Without that rule a
+two-stage re-run would still quietly provision five extra rounds, and a targeted
+run that costs an unexplained extra hour is one people stop using.
 
 Each matrix builds its own control run, unconditionally, because every terminal
 comparison is against it — and the fleet matrix's control is built against *its
@@ -158,6 +176,41 @@ substitutes the literal `*not found*`:
 infisical secrets get VOTE_MANAGER_VOTE_SDK --env=staging -o json \
   | grep -q '"secretValue":"\*not found\*"' && echo absent || echo present
 ```
+
+## Does a committed write actually survive the kill?
+
+Everything here rests on one assumption: that a transaction committed before the
+abort is on disk when the process dies. `examples/durability_probe.rs` exists
+because that was once doubted — the share-delivery path commits its attempt
+marker in an immediate transaction before dispatching, and a crash inside the
+dispatch appeared to find it gone.
+
+Run directly, the answer is unambiguous:
+
+```
+$ durability_probe /tmp/probe.db write
+probe: committed, aborting          # exits 134, i.e. SIGABRT
+$ durability_probe /tmp/probe.db
+rounds named probe after reopen: 1
+```
+
+The commit survives. So whatever produced that symptom, it was not WAL
+durability, and a missing marker after a crash should be read as a defect in the
+path that wrote it rather than in the storage beneath it.
+
+`tests/sidecar_durability.rs` pins the three settings this depends on, none of
+which the SDK sets explicitly enough to be safe from drift:
+
+- **`journal_mode=WAL`** and **`foreign_keys=ON`**, set on every open. The
+  latter is load-bearing rather than cosmetic: `bundles` cascades from `rounds`,
+  and with foreign keys off a deleted round leaves orphaned delegation setup.
+- **`synchronous`**, which the SDK never sets at all, so it takes whatever the
+  linked SQLite was compiled with. That is `FULL` here, meaning the WAL is
+  fsynced on every commit. A build configured with
+  `SQLITE_DEFAULT_WAL_SYNCHRONOUS=1` would drop it to `NORMAL` — still safe
+  against every fault this suite injects, because killing a process does not
+  empty the page cache, but no longer safe against power loss. That weakening
+  would be invisible to every other test here, which is why it is pinned.
 
 ## Crash stages
 
@@ -365,11 +418,52 @@ as a claim.
 | **B4** | Terminal rows (`confirmed`/`rejected`/`submitted_without_hash`) are byte-identical across resume | `assert_terminal_rows_unchanged` |
 | **B5** | `committed_post_reservations` never decreases | `assert_reservations_monotonic` |
 | **C5** | A vote submission never exists without a durable helper plan | `assert_plans_precede_broadcast` |
+| **B7** | **A bundle whose delegation reached the chain keeps every byte of its setup.** `van_comm_rand` and its siblings are what reconstruct the VAN already published on chain; the governance nullifiers are spent, so a changed or cleared value strands the bundle's voting weight with no way back. Compared against the round's own earlier snapshot, never against the control, since two rounds differ here by construction. Frozen once *any* broadcast evidence exists, mirroring the SDK's own guard; a pre-broadcast exchange is legal and is **reported** rather than asserted, so a rebuild is never silent | `assert_delegation_setup_preserved` |
+| **B8** | A host reset (`reset_voting_session_state`) run against exactly the state a crash left mid-submission does not take that bundle's setup. Checked against a `VACUUM INTO` copy, so the surrounding case is unperturbed | `assert_a_host_reset_preserved_crash_state`, on the two sharp stages |
 | **E1** | Bundles other than the crashed one keep their pending work | `assert_other_bundles_untouched` |
 | **B3** (part) | A hashless dispatch confirms by one of the two routes open to it, tree scan or same-generation retry, and the route is reported every run. Which one wins is the SDK's choice and not assertable; that no *second* generation was built is what carries the safety claim | `assert_confirmed_by_a_legal_route` |
 | **B2/B3** (identity) | Where the stage captured the dispatched response, the transaction the round finally confirms is **the same one** the killed process had already sent — not merely "exactly one eventually confirmed" | `assert_recovered_the_same_transaction` |
 | **D2** (part) | `after-share-accepted` records a definite acceptance in `sent_to_urls` | `assert_stage_state` |
 | — | Each stage leaves the durable state its row expects (PCZT persisted, proof persisted, vote committed, share journaled) | `assert_stage_state` |
+
+### Asserted by the crash-during-recovery cases
+
+A second armed run on the same sidecar *is* a recovery run that happens to die
+partway through: `run_until_crash` re-enters an existing sidecar the way a
+resume does, because `drive_round` skips setup once bundles exist. Each crash is
+held to the same anti-rot bar as a first one — `SIGABRT` plus a matching fsynced
+observation — so a second seam that quietly stopped firing fails the case rather
+than letting it decay into an ordinary single-fault round.
+
+| Case | Sequence | What only it can ask |
+| --- | --- | --- |
+| `before-broadcast-twice` | `before-broadcast`, then `before-broadcast` | Does a reservation that survived one crash survive the next, without licensing a new generation? |
+| `hashless-then-shares` | `after-broadcast-unread`, then `after-share-accepted` | Can a hashless dispatch resolve across a second, later crash? |
+| `commit-then-plans` | `after-vote-commit`, then `after-helper-plans` | Does exactly one plan per vote survive two crashes around the commit? |
+| `share-acceptance-twice` | `after-share-accepted`, twice | Do acceptances recorded by two separately killed processes both survive? |
+| `before-broadcast-thrice` | `before-broadcast`, three times | Does a round survive a crash loop at one boundary and still converge? |
+
+Every existing terminal assertion applies, and `B5`, `B4`, `B7` and the
+no-second-generation check are applied across **every consecutive pair of
+opens** rather than only first-to-last — a value that drifted on a middle open
+and drifted back would otherwise pass. A case that compared no frozen setup at
+all fails as vacuous.
+
+Two choices in that table are load-bearing.
+
+- **Every second stage is one the resume cannot avoid.** `run_until_crash`
+  fails a round that finished without its seam firing, and that rule applies to
+  a second crash as much as a first — so a pair whose second seam the resume
+  might legitimately skip would be flaky rather than strict. That rules out
+  pairing `after-broadcast-unread` with itself: a hashless dispatch may be
+  resolved by scanning the tree instead of by re-POSTing, and which route wins
+  is the SDK's choice, not something a test may require. Pairing it with a
+  later, unavoidable seam asks the same question without encoding a guess.
+  `tests/recrash_taxonomy.rs` pins this rule.
+- **`before-broadcast-thrice` is the case the suite exists for.** Three kills at
+  one boundary before any clean run, so the sidecar is opened four times and
+  must still converge. It is the closest thing here to a real user whose app
+  dies at the same point on every launch.
 
 ### Asserted by the hang matrix
 
@@ -468,6 +562,12 @@ does not exist. **Do not read them as tested.**
 | Fleet **disagreement** | Every answering helper shares one backend, so the fleet has ten identities and one opinion. A scenario where two helpers disagree about a share is not expressible here. |
 | Contracted-fleet **target** | `fleet-contracts-then-grows` reports the placement a clamped target settles on rather than asserting a number. Encoding one before observing it would be a guess wearing an assertion's clothes. |
 | **Placement target at completion** | A confirmed share is not required to have reached `target_count` helpers, and nothing repairs it if it did not — observed live at two acceptances against a target of five. The spread is reported every run; see the section above. This is the most substantive open question the fleet axis has surfaced. |
+| **Combined-generation retirement** | `retire_rejected_combined_generation` is the most destructive path in the SDK — in one transaction it clears every member's recovery JSON (firing both generation-change triggers, which delete the helper plans and the immediate-share designation), deletes the members' share rows, the bundle's authorization, and the submission row — while deliberately preserving setup. It is `pub(super)`, so nothing here can drive it directly. `B7` is applied to it **opportunistically**: the per-bundle rejection streak is read every snapshot, and a streak that grew means a retirement ran and that bundle was held to the frozen rule. A run in which no batch was rejected checks it not at all, and reports `0 bundle(s) survived a generation retirement`. |
+| **Power loss, torn writes, fsync** | Every fault here kills a *process*, never a machine, so the page cache outlives all of them and a committed WAL frame always survives. `tests/sidecar_durability.rs` pins the settings this rests on — WAL, `foreign_keys=ON`, and `synchronous=FULL` — but pinning a pragma is not the same as testing power loss, which would need `dm-flakey` or an fsync interceptor. |
+| **Disk full, IO errors** | No `ENOSPC`, `EIO`, read-only filesystem or quota injection anywhere. Note that `CrashLog::record` swallows its own write failures by design, so a disk-full harness would degrade rather than report. |
+| **A corrupted or truncated sidecar** | Nothing flips bytes, truncates the database, or removes the WAL. `DurableSnapshot::read` turns any such failure into "unreadable sidecar", i.e. corruption is treated as a harness fault rather than as an input worth recovering from. |
+| **Two processes on one sidecar** | The suite is built to *avoid* this: the child-process design exists so a detached prover cannot write to a sidecar the parent has reopened. So cross-process safety — which rests only on SQLite locking plus the `chain_submissions` triggers, since the `SIDECAR_IDS`/epoch coordination is process-local — is unexercised, and it is arguably the most realistic mobile shape (a background service beside a foreground UI). Related to `E3`, round-lock leakage, also unasserted. |
+| **An interrupted schema migration** | No migration is ever exercised: every run opens a sidecar the same binary created. `migrate()` and `ensure_current_chain_submission_schema()` both run inside `BEGIN IMMEDIATE` transactions that advance `user_version` in the same commit, so a kill mid-migration should roll back to the untouched source database — but that is read from the code, not observed here. |
 
 ### The sharp submission cases
 
@@ -652,12 +752,476 @@ active for fourteen days. Existing on-chain rounds retain their original expiry.
 
 ## Current adaptation verification
 
-`make recovery-conformance-unit NEXTEST_PROFILE=ci` passed 112 hermetic tests.
+`make recovery-conformance-unit NEXTEST_PROFILE=ci` passed 142 hermetic tests.
 Before rebasing onto `main` with #312, the SDK default suite passed 1,632 tests
 (nine configured skips). A complete
 19-stage crash matrix and all five helper-fleet scenarios have passed during
 adaptation. Focused recovery also confirmed all 144 shares without changing
 previously confirmed chain-submission rows after a background tracking pause.
+
+The setup-preservation checks (`B7`, `B8`) and the crash-during-recovery cases
+are **hermetically verified and not yet run against staging.** What that covers
+and what it does not is worth stating exactly, because the two are easy to
+conflate:
+
+- The comparison itself is proven to catch a real regression: flipping one byte
+  of `van_comm_rand` in a migrated sidecar fails with the column named
+  (`a_single_flipped_byte_in_a_real_sidecar_is_caught`), and every setup column
+  and every kind of broadcast evidence is covered by its own failing case.
+- `B8` is proven end to end against crash-shaped state: a sidecar holding a
+  `submitting` reservation over written setup is copied, a real
+  `reset_voting_session_state` is run against the copy, and the setup is
+  required to survive. It does. That is a live check of the SDK's guard, not a
+  check of the harness.
+- What no hermetic test can show is whether a *real* resumed round ever changes
+  a frozen column, or whether the second crash in each recrash pair fires at the
+  seam it names. Both need staging.
+
+### A complete three-axis run
+
+`make recovery-conformance NEXTEST_PROFILE=ci`, against `svote-1` on
+2026-09-12: **151 tests, 151 passed, 0 failed**, in 5864s. Roughly forty rounds
+provisioned across the three matrices and their controls.
+
+| Axis | Result |
+| --- | --- |
+| Crash | **24/24** — all 19 stages plus all 5 crash-during-recovery cases. `signerless-target-recovery` was added after this run and is verified separately. |
+| Hang | **7 passed, 1 skipped** — `lightwalletd` by name and with its reason, as always |
+| Fleet | **5/5** |
+
+The `ci` profile is the right one for a whole-suite run: `agent` sets
+`fail-fast`, so one failing matrix would mask the other two.
+
+Two numbers are worth more than the pass line.
+
+**Every hang target ended itself**, well inside its budget — 78s for
+`transaction-lookup`, 91s for `share-post`, 119s for `commitment-tree-read`,
+156s for `delegate-and-cast-post`, 179s for `helper-preflight`, 182s for
+`pir-query`, 534s for `share-status`. A target that quietly stopped hanging
+would show up here as a changed number rather than as a green result.
+
+**`B7` was non-vacuous in every single case.** Twenty-two compared 26 frozen
+setup columns across all three bundles; two early stages compared 9, which is
+correct — at `before-delegation` only a few setup columns exist to be frozen
+yet. Zero would have been the vacuous-pass shape, and the recrash cases fail
+outright on it.
+
+### First live results
+
+Run against `svote-1` on 2026-09-12, and quoted from the run rather than from an
+exit code.
+
+| Case | Result | What the sidecar showed |
+| --- | --- | --- |
+| `before-broadcast-twice` | pass, 196s | 66 frozen setup columns identical across 3 opens; reservations 1 -> 2, no second generation |
+| `commit-then-plans` | pass, 137s | 86 columns across 3 opens; second crash landed with two batches already confirmed |
+| `before-broadcast-thrice` | pass, 266s | 3 crashes at one boundary, **126 columns across 4 opens**, reservations 1 -> 2 -> 3, every one surviving |
+| `hashless-then-shares` | pass, 135s | 86 columns across 3 opens. Failed on its first live run and passes on the fix: the armed resume now waits out a `ChainRecoveryStalled`, re-drives, confirms all three batches and reaches the share seam. |
+| `plans-then-shares` | pass, 101s | 86 columns across 3 opens. Replaced `share-acceptance-twice`; its first crash leaves initial delivery unstarted, so the share seam is reachable on the resume. |
+
+All five pass. The two that did not on their first run are recorded below rather
+than quietly corrected, because what they cost is the argument for running this
+suite rather than reading it.
+
+`B8` produced its first live result on `before-broadcast`: **20 columns frozen by
+the abandoned reservation, none of them taken by a real
+`reset_voting_session_state`.** The same run reported a legal pre-broadcast
+rebuild on the two bundles that had not broadcast — their `padded_note_secrets`
+were cleared, which is exactly what that call is for. An earlier draft of this
+check asserted that nothing was rebuilt at all, and it would have failed this
+run; reporting rather than asserting on unfrozen bundles is what the
+broadcast-evidence condition is for.
+
+`B1` was observed directly rather than inferred: the resumed runs reported
+`AmbiguousDispatch` — "an unclassified submission reservation survived process
+interruption" — after one crash and again after three.
+
+### What the first live runs cost, and bought
+
+Two cases failed, and both were this package's fault rather than the SDK's.
+Neither was visible from reading the code, which is the argument for running a
+conformance suite rather than reviewing one.
+
+- **A stall is not a dead seam.** `run_until_crash` retried only on
+  infrastructure failure, so a resumed round that ended at
+  `ChainRecoveryStalled` — waiting for the chain to include the dispatch its
+  first crash left — was reported as a crash seam that had stopped firing, with
+  a message claiming the round had finished. It had not. `attempt_crash` now
+  reads the outcome and gives a stalled recovery the same wait-and-re-drive
+  `run_to_quiescence` already applies. The rule is one sentence and holds for a
+  first crash as much as a later one: *a run that ended because the chain has
+  not advanced is not evidence that a seam stopped firing.*
+- **`after-share-accepted` cannot be armed after delivery has begun.**
+  `share-acceptance-twice` crashed at the first `ShareOutcome` and armed the same
+  stage on the resume, on the reasoning that a round places 144 shares so plenty
+  remain. Twice, the resumed run reached `BackgroundShareWorkOnly` — terminal
+  success — without the seam firing. What a resume owes once delivery has begun
+  is *recovery* of those shares, which is not the path the seam sits on. The
+  case was replaced by `plans-then-shares`, whose first crash at
+  `after-helper-plans` leaves initial delivery entirely unstarted, and
+  `tests/recrash_taxonomy.rs` now refuses any case that arms a share seam after
+  a first crash inside delivery. The rule is stated as the observation supports;
+  which events the driver emits on which path was not traced. Both corrected
+  cases then reached their second seam and passed, which is the evidence that
+  the fixes let the cases do their job rather than hiding the symptom.
+
+So read the passing rows as live results, and the rest as the boundary of what
+has been run.
+
+### Signer-less target recovery, and why it never ran
+
+`delegate_cast_recovery` is an immutable table rather than a cache because a
+combined batch's spend-auth signature is meant to be *sufficient*: a wallet that
+still holds the sidecar but can no longer produce signing material — a hardware
+signer that is gone, a seed the host cannot re-derive — must still be able to
+drive that batch to confirmation. `signerless-target-recovery` is the exercise
+that checks it, in a child started with no voter mnemonic, no delegation driver,
+no signer and no hotkey.
+
+It was originally a step inside every crash stage, and **it ran at none of
+them.** A full 19-stage run skipped it at all eight stages where its durable
+precondition held. The cause is structural rather than incidental:
+
+- the child is given one dispatch and `RoundDriver` executes the plan in order,
+  so the exercise is possible only when the plan owes nothing but the target;
+- steps are ordered "delegation first, then vote and share submission"
+  (`round_orchestration_invariants.md`);
+- every crash seam fires on the **first** POST of its class, and the round
+  drives bundles in order, so the crash always landed on bundle 0 while the two
+  later bundles still owed `Delegate`.
+
+The plan therefore read `Delegate{1}`, `Delegate{2}`, then the target's
+`AdvanceVoteBatch{0}` — present, but third. `examples/plan_probe.rs` prints
+exactly that for any archived sidecar. The original check asserted the target
+came *first* and failed the whole stage when it did not, which is what blocked
+both sharp stages; relaxing it to "among the steps" would only have moved the
+failure, since the driver would then ask a signer-less child to delegate.
+
+**The fix is at the seam, not the assertion.** `CrashTransport` takes a skip
+count, so this one exercise lets the earlier bundles' batches through and dies
+on the last. Its siblings are already confirmed, so the only work the round
+still owes is the target's own batch. The skip is zero everywhere else, so no
+other stage changes. Nothing is trimmed and no guard is loosened — an earlier
+attempt built the precondition by deleting the untouched bundles from a copy,
+which produced the right plan but tested the claim against a round shape no
+wallet would hold, and the worker rightly refused the altered layout.
+
+Live, against `svote-1`: bundle 2's batch, authorized before the crash,
+**confirmed with no mnemonic, signer or hotkey**, with 60 frozen setup columns
+identical across the run and no second generation. The round then resumed
+normally and converged to the control, so a signer-less recovery does not leave
+the round unfinishable.
+
+### The sharp submission cases
+
+`before-broadcast` and `after-broadcast-unread` are where a bug costs a voter a
+note. Three things are checked, in increasing strength:
+
+1. the crashed bundle is planned for *advancement*, never re-delegation;
+2. reservation counts are reported per stage and asserted monotonic — every
+   committed POST increments one, so the count is how many times the wallet
+   committed to sending;
+3. where the stage captured the response, the confirmed transaction hash must
+   equal the dispatched one. A round that quietly sent a replacement would
+   confirm a *different* hash while looking equally healthy, which counting
+   alone cannot detect.
+
+A stalled recovery is not a verdict: the specification separates
+`ChainRecoveryStalled` from `ChainTerminal` because running again later may
+resolve it, so the matrix waits and re-drives rather than failing.
+
+Neither is a stale vote-tree cache. A crash can leave the cached
+vote-commitment tree disagreeing with a delegation that confirmed; the tree sync
+detects that, **discards the cache**, and fails the pass so the next one
+re-syncs from scratch. That is the SDK repairing itself, so the matrix
+re-drives. The rule is deliberately narrow — matched on that one condition —
+because a broader one would retry past real findings.
+
+### Reaching the tracking window
+
+`ChainOutcome` is reported once per step, at the end, and carries the
+episode's *terminal* outcome — not one event per poll. Under the shipped
+45-pass policy an episode polls until the submission confirms, so a stage
+waiting to observe one *still tracking* can never fire. The run therefore arms a
+single-pass chain policy for `after-tracking` and chain stall injections; other crash stages keep the
+shipped cadence, so the control it is compared against is unaffected.
+
+### Reaching after-vote-commit
+
+`after-vote-commit` names a narrow boundary — a committed vote whose helper
+plans are not yet durable — and the progress stream does not mark it: casting
+goes from `VoteCommit(Signing)` straight to `HelperPlansPrepared`, which is
+already the *next* stage's boundary.
+
+The seam is not in the event stream but in the work. Vote completion probes the
+helper fleet between those two commits, and that probe is a real network round
+trip through the transport this suite already wraps, so a crash on it lands
+squarely in the window with no production change.
+
+The stage was documented as unreachable and skipped in every run before this
+was noticed. Nothing is excused from firing now: a stage that does not crash
+where it claims to fails the matrix.
+
+## What this suite cannot cover
+
+- **Which route resolves a hashless dispatch.** A crash between dispatch and
+  response leaves no candidate hash, and recovery may resolve it either by
+  scanning the tree or by re-POSTing the same generation and being handed the
+  hash back. Both are specified. Requiring the tree route appeared to work for a
+  long time only because the crash boundary was wrong: aborting after the whole
+  response had been read let the chain include the transaction first, so the
+  tree won the race. At the real boundary the retry usually wins, and waiting
+  for block inclusion before resuming does not change it. The route is printed
+  every run so a change is visible; the safety claim rests on no second
+  generation being built, which is asserted.
+
+- **Atomic vote batches.** `ATOMIC_VOTE_BATCHES_ENABLED = false`
+  (`zcash_voting/src/lib.rs`) while no deployed chain serves `cast-vote-batch`,
+  so a fresh staging round only ever produces singleton casts. Batch
+  classification and recovery stay covered by unit tests. When the route ships,
+  the vote stages gain a batch variant and the atomicity invariant becomes
+  testable here; nothing else changes.
+- **The mid-ZKP-2 proof.** Nothing is durable between `prepare_vote_work` and
+  `persist_prepared_vote_work`, so `after-vote-proof` costs minutes of
+  re-proving. The suite asserts that this is *only* a cost — no durable damage,
+  no orphaned lock, no partial tree.
+- **Rewinding staging.** A delegation consumed on the vote chain stays
+  consumed, which is why every mutative stage needs its own round. See
+  [Round consumption](#round-consumption-and-what-that-costs).
+- **Helpers that disagree.** Every answering synthetic helper is routed to the
+  same staging primary, so the fleet has ten identities and one opinion. A
+  scenario where one helper accepts a share and another rejects the same share
+  is not expressible here, and neither is a helper that returns a *wrong*
+  answer. What the fleet models is reachability and placement, not byzantine
+  behaviour.
+- **Lightwalletd hangs.** The one request class not reached through the shared
+  route: `lwd.rs` dials tonic directly rather than through an injected
+  transport. The target exists and is skipped by name with its reason printed,
+  so the gap is visible in every run rather than absent from the taxonomy.
+- **Whether a bound is the *right* bound.** The hang matrix asserts that a
+  request ends, not that it ends promptly. A stalled run still drives a whole
+  round — three delegations and nine votes, each with a Halo2 proof — bracketed
+  by two share-tracking phases bounded at eight minutes each, so sixteen minutes
+  of a helper-path run has nothing to do with how long the armed request took.
+  The budget is floored at thirty minutes for that reason, and the cost is a
+  weak upper bound: a deadline that is applied but far too long would pass here.
+  The floor is not negotiable in the other direction — without it,
+  `share-status`, whose bound is ten seconds, would be reported as an unbounded
+  request on every run, for time its round spent elsewhere. That false finding
+  would discredit the one claim this axis exists to make.
+
+## Environment
+
+| | |
+| --- | --- |
+| Zcash | **testnet**, via `https://testnet.zec.rocks:443` |
+| Vote chain | `svote-1` (staging), RPC `https://stage.vote-rpc-primary.valargroup.org` |
+| Coordinator | `sv1z4rawnk8ny0pzsewyzm3egdd7296fr8p20fkf8`, derived at `m/44'/133'/0'/0/0` |
+
+Two things here are easy to get wrong, and both fail in ways that look like
+recovery bugs rather than configuration:
+
+- **Stardust is mainnet-only.** Every Stardust host reports `chainName:
+  "main"`, and no testnet Stardust exists. Pointed at one, the voter wallet
+  finds no notes and the run reports "no eligible notes".
+- **Read the published config, never a local checkout.** The
+  `token-holder-voting-config` working copy can be stale; its `stage/pir.json`
+  named a snapshot height that was a plausible *mainnet* height while the
+  published one was unambiguously testnet.
+
+`VOTE_SDK_VOTER_TEST` holds **11 notes, which bundle into 3**. That shape is
+deliberate and worth not breaking.
+
+Bundling packs notes value-descending, five to a bundle
+(`BUNDLE_NOTE_SLOTS = 5`), so 11 notes fill 5/5/1. The privacy trim then tries
+to shed the smallest bundle down to `DEFAULT_MAX_PRIVACY_BUNDLES = 2`, but it
+may only spend `DEFAULT_PRIVACY_DROP_BPS` — 1% of selected value. With
+near-equal notes the last bundle is about 9% of the balance, far over budget,
+so the trim breaks immediately and all three survive. The lone note in bundle 3
+must still be worth at least `BALLOT_DIVISOR` (0.125 TAZ) by itself or step 4
+drops it as sub-ballot.
+
+Three bundles rather than two is what makes the multi-bundle invariants real:
+`E1` crashes one bundle mid-proof and asserts the others are untouched, which
+needs a bundle to spare. The cost is one extra delegation proof and one extra
+vote proof per proposal.
+
+Because bundling is value-sensitive, rebalancing this wallet can silently
+change the bundle count and quietly weaken `E1`. The suite asserts the layout
+it expects at provisioning time rather than trusting it.
+
+A wallet learns a round's parameters from the signed dynamic config: it fetches
+the document, verifies a `RoundAuthPayloadV2` signature over the round id,
+`ea_pk`, and PIR layout, and only then trusts the values. **This suite skips
+all of that** and reads the round straight off the chain that created it
+(`provisioning::fetch_round`).
+
+That trade is sound here and nowhere else. Config authentication answers "is
+this round genuine and endorsed" — a question about trusting a third party's
+document. The suite provisions the round itself, minutes earlier, with its own
+coordinator key, so it already knows the answer; signing a document to verify a
+fact it just created would exercise the config layer rather than recovery.
+
+What is *not* skipped is agreement: the parameters used to drive the round come
+from the chain's own record, so a provisioning mistake surfaces as a mismatch
+instead of being carried forward by a local copy.
+
+## Round consumption, and what that costs
+
+A delegation is consumed **on the vote chain**: once a bundle's delegation is
+registered for a round, that round's gov nullifier is spent and the bundle
+cannot delegate again. The Zcash notes themselves are untouched — TX1 is a
+PCZT-only signing artifact and is never broadcast — so the voting wallet never
+needs re-funding. It is the *round* that is one-shot, not the money.
+
+Two consequences shape the suite:
+
+1. **A stage that gets a POST onto the wire consumes its round.** Those stages
+   need a freshly provisioned round. `touches_chain()` names whether the armed
+   run can do so before crashing.
+2. **Driving a resumed round to quiescence is itself mutative**, even when the
+   crash was pre-broadcast. A `before-broadcast` crash leaves a `Recovering`
+   row that resume will dispatch, which consumes the round just the same.
+
+Therefore every matrix case provisions a distinct round. Sharing a round among
+pre-POST crash stages would still let the first case's resume consume that
+round, making every later case observe chain effects that its sidecar does not
+own. There is no mock prover — the `test-fixtures` seeding helpers skip
+proving, which is exactly what this suite must not do — so this isolation is
+expensive but required for the terminal convergence oracle.
+
+New conformance rounds close one hour after provisioning, rather than remaining
+active for fourteen days. Existing on-chain rounds retain their original expiry.
+
+## Current adaptation verification
+
+`make recovery-conformance-unit NEXTEST_PROFILE=ci` passed 142 hermetic tests.
+Before rebasing onto `main` with #312, the SDK default suite passed 1,632 tests
+(nine configured skips). A complete
+19-stage crash matrix and all five helper-fleet scenarios have passed during
+adaptation. Focused recovery also confirmed all 144 shares without changing
+previously confirmed chain-submission rows after a background tracking pause.
+
+The setup-preservation checks (`B7`, `B8`) and the crash-during-recovery cases
+are **hermetically verified and not yet run against staging.** What that covers
+and what it does not is worth stating exactly, because the two are easy to
+conflate:
+
+- The comparison itself is proven to catch a real regression: flipping one byte
+  of `van_comm_rand` in a migrated sidecar fails with the column named
+  (`a_single_flipped_byte_in_a_real_sidecar_is_caught`), and every setup column
+  and every kind of broadcast evidence is covered by its own failing case.
+- `B8` is proven end to end against crash-shaped state: a sidecar holding a
+  `submitting` reservation over written setup is copied, a real
+  `reset_voting_session_state` is run against the copy, and the setup is
+  required to survive. It does. That is a live check of the SDK's guard, not a
+  check of the harness.
+- What no hermetic test can show is whether a *real* resumed round ever changes
+  a frozen column, or whether the second crash in each recrash pair fires at the
+  seam it names. Both need staging.
+
+### A complete three-axis run
+
+`make recovery-conformance NEXTEST_PROFILE=ci`, against `svote-1` on
+2026-09-12: **151 tests, 151 passed, 0 failed**, in 5864s. Roughly forty rounds
+provisioned across the three matrices and their controls.
+
+| Axis | Result |
+| --- | --- |
+| Crash | **24/24** — all 19 stages plus all 5 crash-during-recovery cases. `signerless-target-recovery` was added after this run and is verified separately. |
+| Hang | **7 passed, 1 skipped** — `lightwalletd` by name and with its reason, as always |
+| Fleet | **5/5** |
+
+The `ci` profile is the right one for a whole-suite run: `agent` sets
+`fail-fast`, so one failing matrix would mask the other two.
+
+Two numbers are worth more than the pass line.
+
+**Every hang target ended itself**, well inside its budget — 78s for
+`transaction-lookup`, 91s for `share-post`, 119s for `commitment-tree-read`,
+156s for `delegate-and-cast-post`, 179s for `helper-preflight`, 182s for
+`pir-query`, 534s for `share-status`. A target that quietly stopped hanging
+would show up here as a changed number rather than as a green result.
+
+**`B7` was non-vacuous in every single case.** Twenty-two compared 26 frozen
+setup columns across all three bundles; two early stages compared 9, which is
+correct — at `before-delegation` only a few setup columns exist to be frozen
+yet. Zero would have been the vacuous-pass shape, and the recrash cases fail
+outright on it.
+
+### First live results
+
+Run against `svote-1` on 2026-09-12, and quoted from the run rather than from an
+exit code.
+
+| Case | Result | What the sidecar showed |
+| --- | --- | --- |
+| `before-broadcast-twice` | pass, 196s | 66 frozen setup columns identical across 3 opens; reservations 1 -> 2, no second generation |
+| `commit-then-plans` | pass, 137s | 86 columns across 3 opens; second crash landed with two batches already confirmed |
+| `before-broadcast-thrice` | pass, 266s | 3 crashes at one boundary, **126 columns across 4 opens**, reservations 1 -> 2 -> 3, every one surviving |
+| `hashless-then-shares` | pass, 135s | 86 columns across 3 opens. Failed on its first live run and passes on the fix: the armed resume now waits out a `ChainRecoveryStalled`, re-drives, confirms all three batches and reaches the share seam. |
+| `plans-then-shares` | pass, 101s | 86 columns across 3 opens. Replaced `share-acceptance-twice`; its first crash leaves initial delivery unstarted, so the share seam is reachable on the resume. |
+
+All five pass. The two that did not on their first run are recorded below rather
+than quietly corrected, because what they cost is the argument for running this
+suite rather than reading it.
+
+`B8` produced its first live result on `before-broadcast`: **20 columns frozen by
+the abandoned reservation, none of them taken by a real
+`reset_voting_session_state`.** The same run reported a legal pre-broadcast
+rebuild on the two bundles that had not broadcast — their `padded_note_secrets`
+were cleared, which is exactly what that call is for. An earlier draft of this
+check asserted that nothing was rebuilt at all, and it would have failed this
+run; reporting rather than asserting on unfrozen bundles is what the
+broadcast-evidence condition is for.
+
+`B1` was observed directly rather than inferred: the resumed runs reported
+`AmbiguousDispatch` — "an unclassified submission reservation survived process
+interruption" — after one crash and again after three.
+
+### What the first live runs cost, and bought
+
+Two cases failed, and both were this package's fault rather than the SDK's.
+Neither was visible from reading the code, which is the argument for running a
+conformance suite rather than reviewing one.
+
+- **A stall is not a dead seam.** `run_until_crash` retried only on
+  infrastructure failure, so a resumed round that ended at
+  `ChainRecoveryStalled` — waiting for the chain to include the dispatch its
+  first crash left — was reported as a crash seam that had stopped firing, with
+  a message claiming the round had finished. It had not. `attempt_crash` now
+  reads the outcome and gives a stalled recovery the same wait-and-re-drive
+  `run_to_quiescence` already applies. The rule is one sentence and holds for a
+  first crash as much as a later one: *a run that ended because the chain has
+  not advanced is not evidence that a seam stopped firing.*
+- **`after-share-accepted` cannot be armed after delivery has begun.**
+  `share-acceptance-twice` crashed at the first `ShareOutcome` and armed the same
+  stage on the resume, on the reasoning that a round places 144 shares so plenty
+  remain. Twice, the resumed run reached `BackgroundShareWorkOnly` — terminal
+  success — without the seam firing. What a resume owes once delivery has begun
+  is *recovery* of those shares, which is not the path the seam sits on. The
+  case was replaced by `plans-then-shares`, whose first crash at
+  `after-helper-plans` leaves initial delivery entirely unstarted, and
+  `tests/recrash_taxonomy.rs` now refuses any case that arms a share seam after
+  a first crash inside delivery. The rule is stated as the observation supports;
+  which events the driver emits on which path was not traced. Both corrected
+  cases then reached their second seam and passed, which is the evidence that
+  the fixes let the cases do their job rather than hiding the symptom.
+
+So read the passing rows as live results, and the rest as the boundary of what
+has been run.
+
+### Signer-less target recovery: the blocker and the finding
+
+`before-broadcast` and `after-broadcast-unread` used to fail outright here,
+and the cause was not crash recovery. Confirmed against **unmodified `main`
+(9f3bb48)** with every change in this document stashed: the same six refusals,
+23s against 24s.
+
+Both the blocker and the larger finding behind it — that the exercise had never
+run at any stage — are described in full under
+[Signer-less target recovery, and why it never ran](#signer-less-target-recovery-and-why-it-never-ran),
+along with the seam-level fix that makes it run and its first live result.
 
 Final validation is in progress; no complete full-suite result is claimed yet.
 Live runs build the worker explicitly and use

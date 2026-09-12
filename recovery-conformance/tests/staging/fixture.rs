@@ -355,6 +355,7 @@ pub fn config_for(
         account_uuid: fixture_account(),
         endpoints: endpoints_with_fleet(&fixture.deployment, &faults.fleet),
         target: default_target(),
+        broadcast_skip: 0,
         mode,
         crash_log: sidecar.with_extension(log_suffix),
         outcome: sidecar.with_extension("outcome.json"),

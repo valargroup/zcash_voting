@@ -18,6 +18,7 @@ use recovery_conformance::assertions::{
 use recovery_conformance::child::{run_to_quiescence, run_until_the_stall_resolves};
 use recovery_conformance::round_run::proposal_ids;
 use recovery_conformance::run_config::RunMode;
+use recovery_conformance::setup_preservation::assert_delegation_setup_preserved;
 use recovery_conformance::stall::{StallPlan, StallPoint, StallRecord, StallTarget};
 
 #[path = "fixture.rs"]
@@ -362,6 +363,12 @@ async fn exercise(
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
     assert_no_second_generation(&after_stall, &terminal)
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+    // A hang is ended by a deadline rather than by a crash, so the round keeps
+    // running underneath it. That makes an in-place setup rewrite more reachable
+    // here than after an abort, not less.
+    let setup = assert_delegation_setup_preserved(&after_stall.setup, &terminal.setup)
+        .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+    eprintln!("  {target}: delegation setup {setup}");
     eprintln!(
         "  {target}: reservations {} -> {} (stall -> terminal)",
         after_stall.total_reservations(),
