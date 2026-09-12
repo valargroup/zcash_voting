@@ -15,8 +15,8 @@ use super::{
     },
     state::{SubmissionObservation, SubmissionRecordState},
     store::{
-        ChainSubmissionStore, ConfirmationCommit, StoreAdmission, StoreAdvancementRequest,
-        StoredChainSubmission,
+        preserve_loaded_state, ChainSubmissionStore, ConfirmationCommit, StoreAdmission,
+        StoreAdvancementRequest, StoredChainSubmission,
     },
     ChainPostDispatch, ChainSubmissionDiagnostic, ChainSubmissionDiagnosticKind,
     ChainSubmissionFailure, ChainSubmissionFailureKind, ChainSubmissionResult,
@@ -177,9 +177,21 @@ where
             .await?;
 
         let work_allowed = interruption(&operation, control).is_none();
-        let admission = self
-            .store
-            .admit(&request, work_allowed, 1, self.clock.now_seconds()?)?;
+        let now = self.clock.now_seconds()?;
+        let mut admission = self.store.admit(&request, work_allowed, 1, now)?;
+        if let StoreAdmission::AbandonedReservation(record) = &admission {
+            // Normalization records possible dispatch, but is not a recovery
+            // scan. Re-admit once under the same lease so an exact-tree pass
+            // actually reconciles before the episode can report it stalled.
+            if recovery == ChainRecoveryMode::ExactTree
+                && interruption(&operation, control).is_none()
+            {
+                admission = self
+                    .store
+                    .admit(&request, true, 1, now)
+                    .map_err(|failure| preserve_loaded_state(failure, Some(record)))?;
+            }
+        }
         match admission {
             StoreAdmission::NoAuthoritativeState => match interruption(&operation, control) {
                 Some(Interruption::Cancelled) => Ok(ChainSubmissionResult::Cancelled),
@@ -192,7 +204,8 @@ where
                     "admission returned no state for an active operation",
                 )),
             },
-            StoreAdmission::Authoritative(record) => record.public_result(),
+            StoreAdmission::Authoritative(record)
+            | StoreAdmission::AbandonedReservation(record) => record.public_result(),
             StoreAdmission::Ready {
                 derived,
                 record,
@@ -509,7 +522,10 @@ where
                         reserved = record;
                     }
                     StoreAdmission::Ready { record, .. }
-                    | StoreAdmission::Authoritative(record) => return record.public_result(),
+                    | StoreAdmission::Authoritative(record)
+                    | StoreAdmission::AbandonedReservation(record) => {
+                        return record.public_result()
+                    }
                     _ => {
                         return Err(ChainSubmissionFailure::without_state(
                             ChainSubmissionFailureKind::InvariantViolation,

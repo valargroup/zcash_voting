@@ -423,7 +423,7 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
                 .is_some_and(|record| matches!(record.state(), SubmissionRecordState::Submitting))
             {
                 normalizes_abandoned_reservation = true;
-                return Ok(StoreAdmission::Authoritative(normalize_abandoned(
+                return Ok(StoreAdmission::AbandonedReservation(normalize_abandoned(
                     tx,
                     existing.expect("submitting record was just observed"),
                     now,

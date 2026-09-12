@@ -26,7 +26,7 @@ fn restart_normalizes_unclassified_reservation_without_redispatch() {
         let admission = store
             .admit(&StoreAdvancementRequest::vote(identity()), true, 1, 20)
             .unwrap();
-        let StoreAdmission::Authoritative(record) = admission else {
+        let StoreAdmission::AbandonedReservation(record) = admission else {
             panic!("restart must not derive or reserve")
         };
         assert_eq!(record.durable_state(), ChainSubmissionState::Recovering);
@@ -58,7 +58,8 @@ fn abandoned_batch_normalizes_before_roster_derivation() {
         )
         .unwrap();
 
-    let StoreAdmission::Authoritative(record) = store.admit(&request, true, 1, 20).unwrap() else {
+    let StoreAdmission::AbandonedReservation(record) = store.admit(&request, true, 1, 20).unwrap()
+    else {
         panic!("abandoned batch reservation must normalize without derivation")
     };
     assert_eq!(record.durable_state(), ChainSubmissionState::Recovering);

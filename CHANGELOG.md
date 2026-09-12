@@ -63,6 +63,10 @@ This release is `zcash_voting` 4.0.0.
 
 ### Fixed
 
+- Resume interrupted chain submissions through an actual recovery check in the
+  first resumed run, instead of stopping after converting the abandoned
+  reservation to recovery state and requiring a manual retry.
+
 - Keep shared helper-delivery round-audit diagnostics round-scoped, including
   failures caused by other proposals, instead of blaming the triggering share.
 

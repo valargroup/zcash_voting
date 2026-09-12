@@ -1100,6 +1100,13 @@ exactly one pass. An episode re-polls after `Tracking`, escalates to
 work starts with `ExactTree` (`ChainAdvancePolicy::for_persisted_work`), as
 the resume planner requires.
 
+An active `ExactTree` pass that normalizes an abandoned `Submitting`
+reservation must then derive and reconcile it under the same lifecycle lease.
+Normalization alone is not an exhausted recovery attempt. This continuation is
+bounded to one re-admission, preserves generation and roster validation, and
+checks cancellation before continuing. `StatusOnly` still returns the newly
+normalized recovery state so its episode can escalate to `ExactTree`.
+
 ## Concurrency, generation locking, and cancellation
 
 The lock order is:
@@ -1737,6 +1744,11 @@ Public-lifecycle engine coverage is anchored by
 `failed_post_classification_reports_known_possible_dispatch`,
 `failed_tracking_reconciliation_reports_the_durable_state`,
 `tracking_deadline_survives_polling_and_coordinator_restart`,
+`the_first_resumed_episode_confirms_an_abandoned_vote_after_reopening`,
+`an_abandoned_reservation_scans_before_retransmitting_in_the_same_exact_pass`,
+`an_abandoned_reservation_with_an_incomplete_scan_never_retransmits`,
+`an_abandoned_reservation_does_not_reconcile_when_cancelled_or_status_only`,
+`interruption_after_normalization_prevents_readmission`,
 `chain_rejection_preserves_bound_recovery_and_redacts_diagnostics`,
 `recovery_retry_rejection_hash_is_not_candidate_evidence`,
 `committed_failure_moves_tracking_to_recovery_and_clears_recovery_candidate`,

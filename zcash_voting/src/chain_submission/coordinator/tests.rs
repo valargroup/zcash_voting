@@ -1,6 +1,7 @@
 //! Behavior-oriented conformance tests for one bounded lifecycle pass.
 
 mod ingress_timeout;
+mod interrupted_reservation;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use incrementalmerkletree::frontier::Frontier;
