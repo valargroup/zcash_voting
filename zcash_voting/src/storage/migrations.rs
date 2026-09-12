@@ -213,6 +213,19 @@ pub fn migrate(conn: &mut Connection) -> Result<(), VotingError> {
             if *from < upgraded {
                 continue;
             }
+            // Both rungs below rebuild `chain_submissions` in place, so both
+            // assume it is there. A sidecar that reached this version without
+            // it has no rows to carry across: create it at the shape this
+            // build describes — the shape both rebuilds converge on — rather
+            // than strand the wallet on a table that holds nothing.
+            if matches!(*from, 18 | 20) && !chain_submissions_present(&tx)? {
+                tx.execute_batch(include_str!("migrations/002_chain_submissions.sql"))
+                    .map_err(|e| {
+                        VotingError::from_sqlite("failed to create chain submissions", &e)
+                    })?;
+                upgraded = from + 1;
+                continue;
+            }
             // Preview builds already stored PCZTs at version 21. Preserve them.
             if *from == 21 && tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('bundles') WHERE name = 'delegation_pczt')",
@@ -304,6 +317,17 @@ fn reconcile_combined_preview(conn: &Connection) -> Result<bool, VotingError> {
     Ok(true)
 }
 
+/// Whether the sidecar holds the lifecycle table at all.
+fn chain_submissions_present(conn: &Connection) -> Result<bool, VotingError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema
+                        WHERE type = 'table' AND name = 'chain_submissions')",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(migration_error)
+}
+
 /// Compares the explicit schema objects that identify a preview database,
 /// including recovery constraints and triggers; table existence alone cannot
 /// establish migration compatibility.
@@ -353,6 +377,13 @@ fn preview_schema_fingerprint(
 fn ensure_current_chain_submission_schema(conn: &mut Connection) -> Result<(), VotingError> {
     if chain_submission_schema_matches_current(conn)? {
         return Ok(());
+    }
+    // An absent table is the same drift reached its limit, and the easiest
+    // case of it: there is nothing to carry across, so create it.
+    if !chain_submissions_present(conn)? {
+        conn.execute_batch(include_str!("migrations/002_chain_submissions.sql"))
+            .map_err(|e| VotingError::from_sqlite("failed to create chain submissions", &e))?;
+        return verify_current_chain_submission_schema(conn);
     }
     // Only constraint, index and trigger drift is repairable. The rebuild
     // carries rows across by name, so a table whose columns differ is drift

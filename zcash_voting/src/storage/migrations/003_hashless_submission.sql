@@ -1,9 +1,17 @@
-DROP TRIGGER chain_submissions_immutable_identity;
-DROP TRIGGER chain_submissions_monotonic_reservations;
-DROP TRIGGER chain_submissions_immutable_tracking_start;
-DROP INDEX chain_submissions_identity;
-DROP INDEX chain_submissions_candidate_owner;
-DROP INDEX chain_submissions_confirmation_hash_owner;
+-- v19 rebuilds `chain_submissions` so a submission can complete without ever
+-- having learned its transaction hash.
+--
+-- The drops are conditional because a version-18 sidecar may be missing one of
+-- these objects, or carry one under a name this build no longer uses. That
+-- drift is repairable and the repair runs after this step, so an unconditional
+-- DROP would abort the upgrade before it could — the argument
+-- `005_chain_submissions_proposal_range.sql` already makes for its own rung.
+DROP TRIGGER IF EXISTS chain_submissions_immutable_identity;
+DROP TRIGGER IF EXISTS chain_submissions_monotonic_reservations;
+DROP TRIGGER IF EXISTS chain_submissions_immutable_tracking_start;
+DROP INDEX IF EXISTS chain_submissions_identity;
+DROP INDEX IF EXISTS chain_submissions_candidate_owner;
+DROP INDEX IF EXISTS chain_submissions_confirmation_hash_owner;
 ALTER TABLE chain_submissions RENAME TO chain_submissions_v18;
 
 CREATE TABLE chain_submissions (

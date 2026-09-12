@@ -2061,3 +2061,223 @@ fn v22_unknown_combined_preview_rolls_back_without_losing_recovery() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sidecars no edit of the current schema could produce
+// ---------------------------------------------------------------------------
+//
+// Every other old-schema fixture in this file is built by string surgery on
+// today's `001_init.sql`, so it agrees with the migration ladder by
+// construction and cannot catch a rung that assumes a shape no build ever
+// wrote. The two below are dumps of sidecars the v3.0.0 and v3.1.0 releases
+// themselves wrote, through their own storage APIs and their own validation.
+
+const WALLET_FIXTURE: &str = "fixture-wallet";
+
+/// A sidecar missing the lifecycle table entirely is repaired, not refused.
+///
+/// This is the failure reported from the field, at version 20:
+///
+/// ```text
+/// failed to upgrade database schema from version 20 to 21: no such table: chain_submissions
+/// ```
+///
+/// No revision in this repository's history produces that state — every
+/// `chain_submissions` shape a build ever wrote carries the table — so what
+/// the reported database went through is unknown. The answer is the same
+/// either way: the rung rebuilds a table that holds nothing durable, so there
+/// is no honest reason to refuse the wallet over it.
+#[test]
+fn a_sidecar_missing_the_lifecycle_table_is_repaired() {
+    // Version 20 first: it is the rung the field failure named.
+    for version in [20, 18, 19, CURRENT_VERSION] {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&without_chain_submissions(&v23_schema()))
+            .unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        queries::insert_round(
+            &conn,
+            "wallet",
+            crate::Network::Testnet,
+            &test_params(),
+            None,
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap_or_else(|error| panic!("version {version}: {error}"));
+
+        let migrated: u32 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(migrated, CURRENT_VERSION, "version {version}");
+        assert!(
+            chain_submission_schema_matches_current(&conn).unwrap(),
+            "version {version}"
+        );
+    }
+}
+
+/// The sidecar a wallet holds after a full round on v3.0.0 reaches this build
+/// with every unrebuildable artifact intact.
+///
+/// v3.0.0 is `LAUNCH_VERSION`, the oldest sidecar upgraded in place rather than
+/// reset, so this walks the whole in-place ladder.
+#[test]
+fn a_completed_v3_0_0_round_upgrades_to_the_current_schema() {
+    let round = assert_released_round_survives_upgrade(include_str!(
+        "historical/v3_0_0_completed_round.sql"
+    ));
+    // Version 13 predates persisted helper plans, so the version 19 to 20 rung
+    // finds no `immediate` marker to adopt.
+    assert_eq!(round.immediate_share_designations, 0);
+}
+
+/// The same, from the last shape a release shipped before the chain-submission
+/// lifecycle existed — which is what a production wallet upgrading to this
+/// build most likely holds.
+#[test]
+fn a_completed_v3_1_0_round_upgrades_to_the_current_schema() {
+    let round = assert_released_round_survives_upgrade(include_str!(
+        "historical/v3_1_0_completed_round.sql"
+    ));
+    // The persisted plan's `immediate` marker becomes a designation row of its
+    // own at version 20, and the plan itself survives the rungs that rewrite
+    // the vote it is bound to.
+    assert_eq!(round.immediate_share_designations, 1);
+    assert_eq!(round.helper_share_plans, 1);
+}
+
+/// What a migrated release fixture is left holding, for the assertions that
+/// differ between releases.
+struct UpgradedRound {
+    immediate_share_designations: u32,
+    helper_share_plans: u32,
+}
+
+/// Migrates one dump written by a real release and asserts that everything a
+/// round cannot rebuild survived, that the result is indistinguishable from a
+/// fresh sidecar, and that reopening is a no-op.
+///
+/// Both fixtures describe the same round — two bundles, one completed and one
+/// delegated but not yet cast, a skipped proposal — so one body can check both
+/// and each test asserts only what its own release could carry.
+fn assert_released_round_survives_upgrade(dump: &str) -> UpgradedRound {
+    let (temp, db) = open_sidecar_from_dump(dump);
+    let conn = db.conn();
+
+    let version: u32 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, CURRENT_VERSION);
+
+    // Bundle 1 is the dangerous case: delegated, not yet cast. Its
+    // `van_comm_rand` cannot be re-sampled and its governance nullifiers are
+    // already spent, so losing them loses the round's weight for good.
+    for bundle in 0..2u32 {
+        let (van_comm_rand, gov_nullifiers, delegation_tx_hash): (Vec<u8>, Vec<u8>, String) = conn
+            .query_row(
+                "SELECT van_comm_rand, gov_nullifiers_blob, delegation_tx_hash FROM bundles
+                  WHERE wallet_id = ?1 AND bundle_index = ?2",
+                rusqlite::params![WALLET_FIXTURE, bundle],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(van_comm_rand.len(), 32, "bundle {bundle}");
+        assert_eq!(gov_nullifiers.len(), 64, "bundle {bundle}");
+        assert_eq!(
+            delegation_tx_hash,
+            format!("{bundle:0>64}"),
+            "bundle {bundle}"
+        );
+    }
+
+    // The cast vote keeps its chain evidence, and the skipped proposal its
+    // intent.
+    let (tx_hash, position): (String, u32) = conn
+        .query_row(
+            "SELECT tx_hash, vc_tree_position FROM votes
+              WHERE wallet_id = ?1 AND bundle_index = 0 AND proposal_id = 1",
+            rusqlite::params![WALLET_FIXTURE],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(tx_hash, "a".repeat(64));
+    assert_eq!(position, 91);
+    let skipped: bool = conn
+        .query_row(
+            "SELECT skipped FROM ballot_intent WHERE wallet_id = ?1 AND proposal_id = 3",
+            rusqlite::params![WALLET_FIXTURE],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(skipped);
+    assert_eq!(dump_table(&conn, "keystone_signatures").len(), 2);
+    assert_eq!(dump_table(&conn, "witnesses").len(), 2);
+
+    // Cached PIR proofs reach the bundle-independent cache — carried by the
+    // version 14 to 15 rung, or already there — so none is refetched mid-round.
+    let count = |table: &str| -> u32 {
+        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(count("pir_proof_cache"), 2);
+
+    // A migrated sidecar and a fresh one must be indistinguishable.
+    let mut fresh = Connection::open_in_memory().unwrap();
+    migrate(&mut fresh).unwrap();
+    assert_eq!(schema_objects(&conn), schema_objects(&fresh));
+
+    let round = UpgradedRound {
+        immediate_share_designations: count("round_immediate_share"),
+        helper_share_plans: count("helper_share_plans"),
+    };
+
+    drop(conn);
+    drop(db);
+    // Reopening is a no-op, not another rebuild.
+    crate::storage::VotingDb::open(temp.path()).unwrap();
+    round
+}
+
+/// Opens a sidecar the way a wallet does, from a file, so the pragmas and the
+/// schema repair pass run exactly as they do in a host.
+fn open_sidecar_from_dump(dump: &str) -> (TempDb, crate::storage::VotingDb) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let path = std::env::temp_dir()
+        .join(format!(
+            "zcash_voting_dump_{}_{unique}.sqlite",
+            std::process::id()
+        ))
+        .to_string_lossy()
+        .into_owned();
+    let temp = TempDb(path);
+    let seed = Connection::open(temp.path()).unwrap();
+    seed.execute_batch(dump).unwrap();
+    drop(seed);
+    let db = crate::storage::VotingDb::open(temp.path()).unwrap();
+    (temp, db)
+}
+
+/// Every schema object, normalized, so a migrated database can be compared
+/// against a fresh one as a whole rather than table by table.
+fn schema_objects(conn: &Connection) -> Vec<(String, String, String)> {
+    let mut statement = conn
+        .prepare(
+            "SELECT type, name, sql FROM sqlite_schema
+              WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+              ORDER BY type, name",
+        )
+        .unwrap();
+    let objects = statement
+        .query_map([], |row| {
+            let sql: String = row.get(2)?;
+            Ok((row.get(0)?, row.get(1)?, normalize_schema_sql(&sql)))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    objects
+}
