@@ -925,7 +925,7 @@ report invalid or unfinished entries as not ready.
 | Concurrent status GETs per share | 4 (from `SHARE_STATUS_MAX_CONCURRENT_POLLS`) | `poll_share_helpers` |
 | Total status quorum search for one share | 10 seconds (from `SHARE_STATUS_POLL_BUDGET_MILLISECONDS`) | `poll_share_helpers` |
 | One helper POST | 30 seconds | `HelperClient` |
-| Active initial share workflows across the process | 32 | shared `vote/share_delivery` queue |
+| Active initial share workflows across the process | 50 | shared `vote/share_delivery` queue |
 | Concurrent initial POSTs across the process | 128 (from `SHARE_HELPER_MAX_CONCURRENT_POSTS`) | `ConfirmedVote::submit_prepared_shares` |
 | Total initial fan-out per share | 60 seconds | committed share delivery |
 | Minimum budget to start an initial POST | 1 second | committed share delivery |
@@ -1138,12 +1138,12 @@ fresh delivery. `a_finished_pipeline_refills_while_an_original_bundle_remains_bl
 covers rolling bundle admission; the existing delivery queue conformance tests
 continue to own sibling-progress and partial-report behavior.
 
-Up to 32 share tasks across all wallets and committed votes in the process may
-hold a delivery permit at once. Admission uses one process-wide budget of 128
-units, charging each share `max(4, planned target_count)` units atomically. Thus
-up to 32 shares with targets of four or fewer, or 12 shares with targets of ten,
-can run at once; mixed fleets share the same budget. The charge uses the validated
-persisted plan and is retained until outcomes are journaled, including across
+Up to 50 share tasks across all wallets and committed votes in the process may
+hold a delivery permit at once. Admission uses one process-wide budget of 6400
+units, charging each share `max(128, 50 * planned target_count)` units atomically.
+Thus up to 50 shares with targets of two or fewer, 32 shares with targets of four,
+or 12 shares with targets of ten can run at once; mixed fleets share the same
+budget. The charge uses the validated persisted plan and is retained until outcomes are journaled, including across
 fallback waves. Waiting for this budget occurs before share preparation and the
 fan-out deadline, and cancellation releases the complete charge. This bounds the
 aggregate planned fan-out of admitted queue workflows to 128 without changing
@@ -1293,14 +1293,14 @@ are `stale_handle_cannot_prepare_same_commitment_replacement`,
 `planning_rejects_incomplete_duplicate_and_omitting_rosters_before_persistence`,
 `later_lower_choice_blocks_stale_submission_and_a_second_immediate_plan`,
 `delayed_immediate_plan_is_rejected_before_network`, and
-`share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pending_shares`.
+`four_target_admission_ceiling_is_thirty_two_and_queued_cancellation_returns_pending_shares`.
 These replace the former wallet-example planner and per-share delivery tests.
 
 Cross-proposal queue regressions live in
 `share_tracking/tests/delivery_queue/`:
 
-- `completed_slots_refill_across_three_proposals_without_a_barrier` and
-  `batch_and_singleton_calls_share_the_process_wide_thirty_two_slots` pin refill
+- `completed_slots_refill_across_four_proposals_without_a_barrier` and
+  `batch_and_singleton_calls_share_the_process_wide_fifty_slots` pin refill
   and shared admission;
 - `thirty_seven_proposals_finish_faster_with_identical_durable_results`
   compares the production queue to sequential singleton calls under identical
@@ -1706,7 +1706,7 @@ Regression tests: `cancellation_aborts_bounded_in_flight_status_polls`,
 `cancelled_pass_reports_cancellation_and_keeps_durable_effects`,
 `cancellation_aborts_initial_wait_for_live_share_operation`,
 `cancellation_aborts_wait_for_live_share_operation`,
-`share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pending_shares`,
+`four_target_admission_ceiling_is_thirty_two_and_queued_cancellation_returns_pending_shares`,
 `cancellation_before_request_is_not_scored`,
 `late_cancellation_does_not_replace_final_failed_poll`, and
 `late_cancellation_does_not_replace_final_failed_resubmission`.
@@ -2015,8 +2015,9 @@ is covered by `queued_delivery_rejects_a_deleted_round_before_posting`,
 `queued_delivery_leaves_a_replacement_generation_untouched`,
 `queued_delivery_requires_its_attempt_reservation`, and
 `queued_delivery_does_not_validate_against_a_different_wallet`.
-`helper_fanout_bounds_admitted_workflows` covers both the 32-share/four-target
-boundary and the 12-share/ten-target boundary across two commitments.
+`helper_fanout_bounds_admitted_workflows` covers the 50-share/one-target boundary
+across four commitments, plus the 32-share/four-target and 12-share/ten-target
+boundaries across two commitments.
 `slow_successful_fanout_keeps_queued_shares_outside_the_deadline` delivers all
 320 placements through 25-second successful POSTs without generating ambiguity.
 `mixed_fleet_admission_cancellation_releases_the_full_charge` covers shared
@@ -2221,7 +2222,7 @@ must not replace generation checks with cached state or weaken reservations.
 `delivering_one_share_does_not_decode_unrelated_round_rows` guards against
 reintroducing full-round decoding in a per-share operation;
 `full_ballot_delivers_592_shares_with_bounded_admission` exercises a 37-proposal
-ballot, durable acceptance and the 32-delivery limit. Existing queued-deletion,
+ballot, durable acceptance and the 50-delivery limit. Existing queued-deletion,
 wallet-scope, generation-replacement and confirmation-race tests remain binding.
 
 ## Attempt-bound helper ingress timeout receipts

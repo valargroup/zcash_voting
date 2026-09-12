@@ -1341,7 +1341,8 @@ async fn quota_rejects_strict_and_legacy_tampering_but_legacy_metadata_propagate
 }
 
 #[tokio::test(start_paused = true)]
-async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pending_shares() {
+async fn four_target_admission_ceiling_is_thirty_two_and_queued_cancellation_returns_pending_shares(
+) {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     let _global_limit_guard = GLOBAL_BATCH_LIMIT_TEST_LOCK.lock().await;
@@ -1353,7 +1354,7 @@ async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pendin
     let second = crate::vote::CommittedVote::recover(&second_db, ROUND_ID, 0, 1).unwrap();
     let queued_db = db_with_unique_recoverable_vote();
     let queued = crate::vote::CommittedVote::recover(&queued_db, ROUND_ID, 0, 1).unwrap();
-    let configured = vec![helper(1)];
+    let configured: Vec<_> = (1..=8).map(helper).collect();
     let fleet = HelperFleetPreflight::from_readiness(&configured, &configured).unwrap();
     saturating
         .prepare_share_delivery(&saturating_db, planning_params(&fleet))
@@ -1365,9 +1366,11 @@ async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pendin
         .prepare_share_delivery(&queued_db, planning_params(&fleet))
         .unwrap();
     let transport = Arc::new(MockTransport::default());
-    let post_url = format!("{}/shielded-vote/v1/shares", helper(1));
-    for _ in 0..32 {
-        transport.queue_post_after(&post_url, Duration::from_secs(1), json_status("queued"));
+    for url in &configured {
+        let post_url = format!("{url}/shielded-vote/v1/shares");
+        for _ in 0..32 {
+            transport.queue_post_after(&post_url, Duration::from_secs(1), json_status("queued"));
+        }
     }
     let client = client_with(transport.clone());
     let cancel_queued = Arc::new(AtomicBool::new(false));
@@ -1393,7 +1396,7 @@ async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pendin
             // Preparation is asynchronous: a smaller queued commitment can
             // otherwise finish first and occupy the slots this test means to
             // saturate with the two full commitments.
-            while transport.call_count("/shares") < 32 {
+            while transport.call_count("/shares") < 128 {
                 tokio::task::yield_now().await;
             }
             let result = queued_vote
@@ -1410,10 +1413,10 @@ async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pendin
     };
     let never_cancel_saturating = never_cancel();
     let observe_ceiling = async {
-        while transport.call_count("/shares") < 32 {
+        while transport.call_count("/shares") < 128 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(transport.call_count("/shares"), 32);
+        assert_eq!(transport.call_count("/shares"), 128);
         while queued_cancel_checks.load(Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
         }
@@ -1449,7 +1452,7 @@ async fn share_task_ceiling_is_thirty_two_and_queued_cancellation_returns_pendin
     assert!(queued_report.cancelled);
     assert!(queued_report.deliveries.is_empty());
     assert_eq!(queued_report.pending_share_indices, vec![0, 1]);
-    assert_eq!(transport.call_count("/shares"), 32);
+    assert_eq!(transport.call_count("/shares"), 128);
     assert_eq!(
         saturating_report
             .deliveries
