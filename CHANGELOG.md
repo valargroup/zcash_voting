@@ -62,6 +62,13 @@ This release is `zcash_voting` 4.0.0.
   in that order before `zcash_voting 4.0.0`.
 
 ### Fixed
+- Hardened voting sidecar migration against schema drift. A sidecar whose
+  chain-submission schema no longer matches what its recorded version describes
+  is now repaired and upgraded rather than refused, including the reported
+  failure to open with `no such table: chain_submissions`. Delegation, vote,
+  share and recovery state is carried across untouched; only unrecognized
+  submission-tracking rows are discarded, which costs a chain re-poll and no
+  voting weight.
 
 - Keep shared helper-delivery round-audit diagnostics round-scoped, including
   failures caused by other proposals, instead of blaming the triggering share.
