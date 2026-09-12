@@ -99,7 +99,8 @@ impl SubmissionRecordState {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SubmissionObservation {
     ReserveFreshSubmission,
-    DefinitelyUnsent,
+    /// This attempt could not broadcast; earlier dispatch evidence remains authoritative.
+    DefinitelyNotDispatched,
     UsableCandidateHash(CandidateTransactionHash),
     PossiblyDispatched(ChainSubmissionDiagnostic),
     DefiniteRejection(ChainSubmissionDiagnostic),
@@ -121,7 +122,7 @@ pub(super) enum SubmissionObservation {
 
 /// Applies one observation without performing I/O.
 ///
-/// `None` represents an absent row. A definitely-unsent first attempt removes
+/// `None` represents an absent row. A definitely-not-dispatched first attempt removes
 /// its fresh reservation and is the only transition back to `None`.
 pub(super) fn apply_submission_observation(
     current: Option<SubmissionRecordState>,
@@ -133,7 +134,7 @@ pub(super) fn apply_submission_observation(
     match (current, observation) {
         (None, Observation::ReserveFreshSubmission) => Ok(Some(State::Submitting)),
 
-        (Some(State::Submitting), Observation::DefinitelyUnsent) => Ok(None),
+        (Some(State::Submitting), Observation::DefinitelyNotDispatched) => Ok(None),
         (Some(State::Submitting), Observation::UsableCandidateHash(candidate)) => {
             Ok(Some(State::Tracking {
                 candidate_transaction_hash: candidate,
@@ -242,7 +243,7 @@ pub(super) fn apply_submission_observation(
             Observation::ContinueRecovery
             | Observation::PossiblyDispatched(_)
             | Observation::DefiniteRejection(_)
-            | Observation::DefinitelyUnsent,
+            | Observation::DefinitelyNotDispatched,
         ) => Ok(Some(state)),
         (
             Some(
@@ -324,7 +325,7 @@ impl SubmissionObservation {
     fn name(&self) -> &'static str {
         match self {
             Self::ReserveFreshSubmission => "reserve_fresh_submission",
-            Self::DefinitelyUnsent => "definitely_unsent",
+            Self::DefinitelyNotDispatched => "definitely_not_dispatched",
             Self::UsableCandidateHash(_) => "usable_candidate_hash",
             Self::PossiblyDispatched(_) => "possibly_dispatched",
             Self::DefiniteRejection(_) => "definite_rejection",
@@ -416,7 +417,7 @@ mod tests {
     fn definitely_unsent_first_attempt_removes_reservation() {
         let submitting = apply(None, SubmissionObservation::ReserveFreshSubmission);
         assert_eq!(
-            apply(submitting, SubmissionObservation::DefinitelyUnsent),
+            apply(submitting, SubmissionObservation::DefinitelyNotDispatched),
             None
         );
     }
@@ -735,7 +736,7 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     enum ObservationKind {
         ReserveFreshSubmission,
-        DefinitelyUnsent,
+        DefinitelyNotDispatched,
         UsableCandidateHash,
         PossiblyDispatched,
         DefiniteRejection,
@@ -754,7 +755,7 @@ mod tests {
     impl ObservationKind {
         const ALL: [Self; 15] = [
             Self::ReserveFreshSubmission,
-            Self::DefinitelyUnsent,
+            Self::DefinitelyNotDispatched,
             Self::UsableCandidateHash,
             Self::PossiblyDispatched,
             Self::DefiniteRejection,
@@ -773,7 +774,7 @@ mod tests {
         fn observation(self) -> SubmissionObservation {
             match self {
                 Self::ReserveFreshSubmission => SubmissionObservation::ReserveFreshSubmission,
-                Self::DefinitelyUnsent => SubmissionObservation::DefinitelyUnsent,
+                Self::DefinitelyNotDispatched => SubmissionObservation::DefinitelyNotDispatched,
                 Self::UsableCandidateHash => {
                     SubmissionObservation::UsableCandidateHash(candidate(1))
                 }
@@ -819,7 +820,7 @@ mod tests {
             State::Absent => matches!(observation, Observation::ReserveFreshSubmission),
             State::Submitting => matches!(
                 observation,
-                Observation::DefinitelyUnsent
+                Observation::DefinitelyNotDispatched
                     | Observation::UsableCandidateHash
                     | Observation::PossiblyDispatched
                     | Observation::DefiniteRejection
@@ -837,7 +838,7 @@ mod tests {
             ),
             State::RecoveringWithoutCandidate => matches!(
                 observation,
-                Observation::DefinitelyUnsent
+                Observation::DefinitelyNotDispatched
                     | Observation::UsableCandidateHash
                     | Observation::PossiblyDispatched
                     | Observation::DefiniteRejection
@@ -848,7 +849,7 @@ mod tests {
             ),
             State::RecoveringWithCandidate => matches!(
                 observation,
-                Observation::DefinitelyUnsent
+                Observation::DefinitelyNotDispatched
                     | Observation::UsableCandidateHash
                     | Observation::PossiblyDispatched
                     | Observation::DefiniteRejection

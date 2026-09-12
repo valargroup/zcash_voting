@@ -124,6 +124,10 @@ impl ChainHttpRequest {
         }
     }
 
+    pub(crate) fn add_header(&mut self, name: &str, value: String) {
+        self.headers.push((name.to_owned(), value));
+    }
+
     pub fn url(&self) -> &str {
         &self.url
     }

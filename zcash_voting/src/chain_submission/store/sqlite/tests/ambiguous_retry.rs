@@ -86,3 +86,42 @@ fn definite_rejection_recovery_refuses_an_ambiguous_retry() {
     );
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn non_dispatch_after_ambiguity_survives_database_reopen() {
+    let (path, store, generation) = hashless_recovering_store(
+        "ingress-timeout-after-ambiguity",
+        SubmissionObservation::PossiblyDispatched(
+            ChainSubmissionDiagnostic::from_redacted_message(
+                ChainSubmissionDiagnosticKind::AmbiguousDispatch,
+                "response lost after broadcast",
+            ),
+        ),
+    );
+    store.reserve_ambiguous_retry(&generation, 12).unwrap();
+    let record = store
+        .reconcile(
+            &generation,
+            SubmissionObservation::DefinitelyNotDispatched,
+            None,
+            13,
+        )
+        .unwrap();
+    assert_eq!(record.durable_state(), ChainSubmissionState::Recovering);
+    drop(store);
+    let reopened = SqliteChainSubmissionStore::new(open_prepared(&path));
+    let StoreAdmission::Ready { record, .. } = reopened
+        .admit(&StoreAdvancementRequest::vote(identity()), true, 1, 14)
+        .unwrap()
+    else {
+        panic!("earlier ambiguity must remain recoverable")
+    };
+    assert_eq!(record.durable_state(), ChainSubmissionState::Recovering);
+    assert_eq!(record.committed_post_reservations(), 2);
+    assert_eq!(
+        record.diagnostic().unwrap().kind(),
+        ChainSubmissionDiagnosticKind::AmbiguousDispatch
+    );
+    drop(reopened);
+    let _ = std::fs::remove_file(path);
+}

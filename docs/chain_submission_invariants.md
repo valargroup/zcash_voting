@@ -2031,3 +2031,45 @@ is exercised on both sides of dispatch by
 `combined_post_stalls_on_the_selected_side_of_dispatch`. Live tree-read stalls
 start from a real hashless dispatch because a fresh combined cast does not need
 the initial tree synchronization of a standalone delegation.
+
+### Versioned REST ingress timeout receipts
+
+A POST may opt into the v1 REST ingress contract with a fresh cryptographically
+random 32-byte lowercase-hex `X-Vote-Ingress-Attempt-V1` token. This is per
+attempt, not a transaction identity, idempotency key, or diagnostic request ID.
+Entropy failure disables recognition for that attempt without preventing POST.
+The trusted configured HTTPS ingress must not replay mutation requests, cache
+these receipts, or synthesize a receipt after forwarding work for broadcast.
+This is an explicit extension of the trusted Vote API contract, not a proof
+against a malicious gateway. Token binding rejects stale receipts; it does not
+authenticate the gateway independently of the configured TLS endpoint.
+
+Only HTTP 408, JSON content type, and the complete, supported, duplicate-free
+schema below with the exact current token proves **this attempt** did not invoke
+broadcast. Unknown fields/versions, missing or mismatched tokens, generic 408s,
+malformed or oversized responses, and lost responses remain ambiguous.
+
+```json
+{"error":{"version":1,"code":"request_body_timeout","dispatch":"not_started","attempt":"<current 64-character token>"}}
+```
+
+The server emits this only when its synchronous original request-body read
+times out and returns without invoking broadcast or scheduling asynchronous
+work. The REST listener must disable CometBFT JSON-RPC batch preprocessing,
+retain bounded body size/read deadlines, and allow this failure to reach the
+REST handler. Consensus JSON-RPC batch limits remain unchanged.
+
+The client classifies this as `NotDispatchedByServer`, distinct from the
+transport's `DefinitelyUnsent`. Both feed the lifecycle's
+`DefinitelyNotDispatched` observation: a fresh reservation may be removed,
+but earlier `Recovering` evidence cannot be erased. The same generation, retry
+budget, endpoint rotation, cancellation and configured backoff apply. A receipt
+is not chain rejection and must not retire a combined generation. Existing
+route-answer ambiguity rules continue to apply to all other errors.
+
+Conformance: `only_a_complete_matching_ingress_timeout_is_non_dispatch_evidence`,
+`ingress_timeouts_respect_budget_and_preserve_previous_ambiguity`, and
+`non_dispatch_after_ambiguity_survives_database_reopen`, and
+`cancellation_during_ingress_timeout_backoff_does_not_retry`. The vote-sdk
+`TestRESTListenerStalledUploadReturnsBoundTimeout` exercises the real outer
+listener and `TestIngressTimeoutNeverBroadcasts` covers all four mutation routes.
