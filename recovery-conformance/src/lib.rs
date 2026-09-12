@@ -28,8 +28,10 @@ pub mod helper_fleet;
 pub mod matrix_coverage;
 pub mod precompute;
 pub mod provisioning;
+pub mod recrash;
 pub mod round_run;
 pub mod run_config;
+pub mod setup_preservation;
 pub mod signing;
 pub mod stage_config;
 pub mod stages;
@@ -37,5 +39,7 @@ pub mod stall;
 pub mod wallet_sync;
 
 pub use helper_fleet::{HelperAvailability, HelperFleetPlan, SYNTHETIC_HELPER_URLS};
+pub use recrash::RecrashCase;
+pub use setup_preservation::{assert_delegation_setup_preserved, BundleSetup, SetupComparison};
 pub use stages::{BroadcastPoint, CrashStage, CrashTrigger, SubmissionKind};
 pub use stall::{StallPlan, StallPoint, StallTarget};

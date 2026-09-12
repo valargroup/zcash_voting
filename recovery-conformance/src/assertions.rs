@@ -64,6 +64,13 @@ pub struct DurableSnapshot {
     /// how many shares have an unresolved attempt; this says which helpers
     /// hold which share, which is what a fleet scenario asserts about.
     pub deliveries: Vec<ShareDelivery>,
+    /// Per-bundle delegation setup, fingerprinted.
+    ///
+    /// Deliberately absent from [`DurableSnapshot::shape`]: setup differs
+    /// between any two rounds by construction, so it is only ever compared
+    /// against an earlier snapshot of the *same* round. See
+    /// [`crate::setup_preservation`].
+    pub setup: Vec<crate::setup_preservation::BundleSetup>,
 }
 
 /// One durable chain submission.
@@ -276,6 +283,7 @@ impl DurableSnapshot {
                 > 0,
             cached_tree: count("cached_tree_state") > 0,
             deliveries: read_deliveries(&connection)?,
+            setup: crate::setup_preservation::BundleSetup::read_all(&connection)?,
         })
     }
 
@@ -454,7 +462,13 @@ pub fn assert_stage_state(
         // half that matters for safety — the row is **still there**. A row that
         // vanished would let the next pass reserve a fresh first attempt and
         // build a second transaction over the same notes.
-        S::BeforeBroadcast => {
+        // `BeforeVoteBroadcast` joins it because it *is* it: since delegations
+        // and casts became one combined batch the two names produce an
+        // identical trigger, so they crash at the same instruction and leave
+        // the same row. Asserting less under one of the two names would mean
+        // the same durable state is checked strictly or loosely depending on
+        // which name the matrix happened to select.
+        S::BeforeBroadcast | S::BeforeVoteBroadcast => {
             anyhow::ensure!(
                 snapshot
                     .submissions
@@ -472,8 +486,19 @@ pub fn assert_stage_state(
                 stage,
                 "re-delegating would spend the bundle's notes a second time",
             )?;
+            // Carried over from `before-vote-broadcast`, which used to assert
+            // only this. A combined batch commits every vote before it reserves
+            // the POST, so a reservation with no vote behind it means the
+            // commit was lost.
+            anyhow::ensure!(
+                snapshot.votes > 0,
+                "{stage}: no durable vote behind the submission"
+            );
         }
-        S::AfterBroadcastUnread | S::AfterBroadcastRead | S::AfterTracking => {
+        S::AfterBroadcastUnread
+        | S::AfterVoteBroadcast
+        | S::AfterBroadcastRead
+        | S::AfterTracking => {
             anyhow::ensure!(plan.next_steps.iter().any(|step| matches!(step, NextStep::AdvanceVoteBatch { bundle_index, .. } if *bundle_index == bundle)), "{stage}: combined recovery must advance the complete batch");
             forbid_step(
                 plan,
@@ -486,6 +511,13 @@ pub fn assert_stage_state(
             anyhow::ensure!(
                 !snapshot.submissions.is_empty(),
                 "{stage}: no durable submission row, so the dispatch left no evidence"
+            );
+            // Carried over from `after-vote-broadcast`, which used to assert
+            // only this. A combined batch commits every vote before it
+            // broadcasts, so it holds at each of these boundaries.
+            anyhow::ensure!(
+                snapshot.votes > 0,
+                "{stage}: no durable vote behind the submission"
             );
         }
         // The delegation is confirmed and the vote has not been written.
@@ -533,7 +565,7 @@ pub fn assert_stage_state(
                 );
             }
         }
-        S::BeforeVoteBroadcast | S::AfterVoteBroadcast | S::AfterVoteConfirmed => {
+        S::AfterVoteConfirmed => {
             anyhow::ensure!(
                 snapshot.votes > 0,
                 "{stage}: no durable vote behind the submission"

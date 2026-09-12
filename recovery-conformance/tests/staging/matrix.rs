@@ -12,6 +12,9 @@ use recovery_conformance::assertions::{
 use recovery_conformance::child::{run_to_quiescence, run_until_crash};
 use recovery_conformance::round_run::{default_target, proposal_ids};
 use recovery_conformance::run_config::RunMode;
+use recovery_conformance::setup_preservation::{
+    assert_a_host_reset_preserved_crash_state, assert_delegation_setup_preserved,
+};
 use recovery_conformance::CrashStage;
 
 #[path = "fixture.rs"]
@@ -58,9 +61,12 @@ pub enum Run {
 
 pub struct Report {
     pub attempted: usize,
-    pub passed: Vec<CrashStage>,
-    pub failed: Vec<(CrashStage, String)>,
-    pub skipped: Vec<(CrashStage, String)>,
+    /// Case labels rather than stages: the matrix now runs crash-during-recovery
+    /// sequences alongside single stages, and a control failure is its own case
+    /// rather than a stage's.
+    pub passed: Vec<String>,
+    pub failed: Vec<(String, String)>,
+    pub skipped: Vec<(String, String)>,
 }
 
 impl Report {
@@ -110,7 +116,7 @@ async fn drive_matrix(fixture: Fixture) -> Report {
         Ok(control) => control,
         Err(error) => {
             report.failed.push((
-                CrashStage::BeforeDelegation,
+                "control".to_string(),
                 format!("control run failed: {error:#}"),
             ));
             report.attempted = 1;
@@ -119,13 +125,21 @@ async fn drive_matrix(fixture: Fixture) -> Report {
     };
     eprintln!("control terminal snapshot: {:?}", control.states());
 
+    // Each dimension has its own selector, and naming either one narrows the
+    // run to just what was named. Without that rule, re-running two stages
+    // after a small change would still provision five crash-during-recovery
+    // rounds nobody asked for — and a targeted run that quietly costs an extra
+    // hour is a targeted run people stop using.
     let selected = selected_stages();
+    let recrash = recovery_conformance::recrash::selected();
+    let targeted = selected.is_some() || recrash.is_some();
+
     for stage in CrashStage::ALL {
         let stage = *stage;
-        if let Some(selected) = &selected {
-            if !selected.contains(&stage) {
-                continue;
-            }
+        match &selected {
+            Some(selected) if !selected.contains(&stage) => continue,
+            None if targeted => continue,
+            _ => {}
         }
         report.attempted += 1;
         let started = Instant::now();
@@ -137,7 +151,9 @@ async fn drive_matrix(fixture: Fixture) -> Report {
         let round = match provision(&fixture).await {
             Ok(round) => round,
             Err(error) => {
-                report.skipped.push((stage, format!("no round: {error:#}")));
+                report
+                    .skipped
+                    .push((stage.to_string(), format!("no round: {error:#}")));
                 continue;
             }
         };
@@ -145,7 +161,7 @@ async fn drive_matrix(fixture: Fixture) -> Report {
         match exercise(&fixture, stage, &round, &control).await {
             Ok(()) => {
                 eprintln!("  PASS {stage} in {:.0}s", started.elapsed().as_secs_f64());
-                report.passed.push(stage);
+                report.passed.push(stage.to_string());
             }
             // Printed as they happen, not only in the final report. A matrix
             // run takes tens of minutes, and a verdict withheld until the end
@@ -155,14 +171,58 @@ async fn drive_matrix(fixture: Fixture) -> Report {
                     "  SKIP {stage} after {:.0}s: {why}",
                     started.elapsed().as_secs_f64()
                 );
-                report.skipped.push((stage, why));
+                report.skipped.push((stage.to_string(), why));
             }
             Err(Outcome::Failed(why)) => {
                 eprintln!(
                     "  FAIL {stage} after {:.0}s: {why}",
                     started.elapsed().as_secs_f64()
                 );
-                report.failed.push((stage, why));
+                report.failed.push((stage.to_string(), why));
+            }
+        }
+    }
+
+    // Crash-during-recovery. Runs after the single-stage matrix because it is
+    // the more expensive dimension — each case provisions a round and kills the
+    // child two or three times within it — and because a failure here is far
+    // easier to read once the single-fault stages are known green.
+    for case in recovery_conformance::recrash::ALL {
+        let case = *case;
+        match &recrash {
+            Some(selected) if !selected.contains(&case) => continue,
+            None if targeted => continue,
+            _ => {}
+        }
+        report.attempted += 1;
+        let started = Instant::now();
+        let round = match provision(&fixture).await {
+            Ok(round) => round,
+            Err(error) => {
+                report
+                    .skipped
+                    .push((case.name().to_string(), format!("no round: {error:#}")));
+                continue;
+            }
+        };
+        match exercise_recrash(&fixture, case, &round, &control).await {
+            Ok(()) => {
+                eprintln!("  PASS {case} in {:.0}s", started.elapsed().as_secs_f64());
+                report.passed.push(case.name().to_string());
+            }
+            Err(Outcome::Skipped(why)) => {
+                eprintln!(
+                    "  SKIP {case} after {:.0}s: {why}",
+                    started.elapsed().as_secs_f64()
+                );
+                report.skipped.push((case.name().to_string(), why));
+            }
+            Err(Outcome::Failed(why)) => {
+                eprintln!(
+                    "  FAIL {case} after {:.0}s: {why}",
+                    started.elapsed().as_secs_f64()
+                );
+                report.failed.push((case.name().to_string(), why));
             }
         }
     }
@@ -219,6 +279,22 @@ async fn exercise(
     // (b) capture the durable state the crash left
     let after_crash = DurableSnapshot::read(&sidecar)
         .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
+
+    // The two double-spend-adjacent stages leave exactly the state a host's
+    // reset must refuse: an abandoned reservation whose bytes may already be on
+    // the wire, over setup that can no longer be rebuilt. The SDK's own tests
+    // check that guard against fixture-assembled rows; this checks it against
+    // rows a killed process actually produced, which is the combination nothing
+    // else exercises.
+    if stage.is_sharp() {
+        let held = assert_a_host_reset_preserved_crash_state(
+            &sidecar,
+            &fixture_account(),
+            &round.round_id,
+        )
+        .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+        eprintln!("  {stage}: a host reset left {held}");
+    }
 
     // (f) plan twice in a fresh process-local database and require agreement
     let plan = deterministic_plan(
@@ -287,9 +363,41 @@ async fn exercise(
     }
 
     // First recover only this durable unit with no signer or hotkey available.
-    if after_crash.combined.iter().any(|b| {
+    //
+    // Two conditions, not one. The durable half says the target *is* a
+    // persisted combined unit awaiting its VAN position. The plan half says the
+    // round would actually work on it first, and that is what makes the
+    // exercise runnable at all: the signerless child holds no voter mnemonic,
+    // no delegation driver, no signer and no hotkey, and it is given a single
+    // dispatch — so if the plan leads with a `Delegate` for some other bundle,
+    // the child is asked for signing material it deliberately does not have.
+    //
+    // At a crash on the first bundle to broadcast that is exactly what happens.
+    // The round drives bundles in order, so the two later bundles still owe
+    // their delegations, and delegation outranks vote submission in the step
+    // ordering. The plan reads `Delegate{1}`, `Delegate{2}`, then the target's
+    // `AdvanceVoteBatch{0}` — the target is present but third. Treating that as
+    // a failure reported a stage as broken for the shape of its own round
+    // rather than for anything recovery did, and it blocked both sharp stages.
+    // It is skipped by name, with the plan printed, so an exercise that stops
+    // running is visible rather than silently absent.
+    let signerless_leads = matches!(
+        plan.next_steps.first(),
+        Some(zcash_voting::session::NextStep::AdvanceVoteBatch { bundle_index, proposal_id })
+            if *bundle_index == bundle && *proposal_id == default_target().proposal_id
+    );
+    let signerless_applies = after_crash.combined.iter().any(|b| {
         b.bundle_index == bundle && !b.authorizations.is_empty() && b.van_position.is_none()
-    }) {
+    });
+    if signerless_applies && !signerless_leads {
+        eprintln!(
+            "  {stage}: skipping signer-less target recovery: the plan leads with {:?} \
+             rather than the target batch, so a child with no signing material cannot \
+             execute its single dispatch",
+            plan.next_steps.first()
+        );
+    }
+    if signerless_applies && signerless_leads {
         let signerless = config_for(
             fixture,
             &sidecar,
@@ -356,6 +464,13 @@ async fn exercise(
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
     assert_terminal_rows_unchanged(&after_crash, &terminal)
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+    // The setup a delegation can never rebuild. Every assertion above asks what
+    // the round still owes; this asks what it still has, and a bundle that lost
+    // `van_comm_rand` would satisfy all of them while its voting weight was
+    // already stranded.
+    let setup = assert_delegation_setup_preserved(&after_crash.setup, &terminal.setup)
+        .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+    eprintln!("  {stage}: delegation setup {setup}");
 
     // Requirement 8 wants direct evidence that no second transaction was
     // POSTed, not an inference from eventual confirmation. The durable half is
@@ -474,4 +589,174 @@ fn selected_stages() -> Option<Vec<CrashStage>> {
         })
         .collect();
     (!stages.is_empty()).then_some(stages)
+}
+
+/// Runs one crash-during-recovery sequence end to end.
+///
+/// The shape is the ordinary exercise with one change that carries the whole
+/// point: the resume is itself armed, repeatedly, before any clean run is
+/// allowed. `run_until_crash` re-enters an existing sidecar the same way a
+/// resume does — `drive_round` skips setup once bundles exist — so a second
+/// armed run *is* a recovery run that happens to die partway through.
+///
+/// Each crash is held to the same anti-rot bar as a first one: `SIGABRT` plus a
+/// matching fsynced observation. A second seam that quietly stopped firing
+/// would leave this case asserting over an ordinary single-fault round while
+/// still reporting green, which is precisely the rot the matrix guards against.
+async fn exercise_recrash(
+    fixture: &Fixture,
+    case: recovery_conformance::RecrashCase,
+    round: &ProvisionedRound,
+    control: &DurableSnapshot,
+) -> Result<(), Outcome> {
+    let started = Instant::now();
+    let sidecar = fixture.workspace.join(format!("{}.db", case.name()));
+    let _ = std::fs::remove_file(&sidecar);
+
+    // One snapshot per open, so setup can be compared across *every* interval
+    // rather than only first-to-last. A value that drifted on a middle open and
+    // drifted back would otherwise pass.
+    let mut opens: Vec<(String, DurableSnapshot)> = Vec::new();
+
+    for (index, stage) in case.stages().enumerate() {
+        let mut armed = config_for(
+            fixture,
+            &sidecar,
+            round,
+            RunMode::Armed { stage },
+            MAX_DISPATCHES,
+            &Faults::none(),
+        );
+        // `CrashLog::create` truncates, and every crash after the first would
+        // otherwise erase the observations of the one before it — including the
+        // dispatched-response record the identity assertions read.
+        if index > 0 {
+            armed.crash_log = sidecar.with_extension(format!("recrash{index}.crashlog.jsonl"));
+        }
+
+        let crash = run_until_crash(&fixture.worker, &armed);
+        warm_from(fixture, &sidecar);
+        if let Err(error) = crash {
+            let detail = format!("{error:#}");
+            // A seam that stopped firing is a defect; staging running out of
+            // patience is not. `run_until_crash` already waits out a chain
+            // recovery that has not advanced, so anything still reporting
+            // "never reached" here really did finish the round.
+            if detail.contains("never reached") {
+                return Err(Outcome::Failed(format!(
+                    "{case}: crash {}/{} at {stage} never fired, so this case ran as an \
+                     ordinary single-fault round and proved nothing about recovery \
+                     durability: {detail}",
+                    index + 1,
+                    case.crashes()
+                )));
+            }
+            if detail.contains("before stage") {
+                return Err(Outcome::Skipped(format!(
+                    "{case}: staging never let crash {}/{} at {stage} fire: {detail}",
+                    index + 1,
+                    case.crashes()
+                )));
+            }
+            return Err(Outcome::Skipped(detail));
+        }
+
+        let snapshot = DurableSnapshot::read(&sidecar)
+            .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
+        eprintln!(
+            "  {case}: crash {}/{} at {stage}; reservations {}, states {:?}",
+            index + 1,
+            case.crashes(),
+            snapshot.total_reservations(),
+            snapshot.states()
+        );
+        // The plan is the oracle after every crash, not only the last. A
+        // sequence that produced an unplannable sidecar midway would otherwise
+        // surface as a confusing failure at the end.
+        deterministic_plan(
+            &sidecar,
+            &fixture_account(),
+            &round.round_id,
+            &proposal_ids(),
+        )
+        .map_err(|error| {
+            Outcome::Failed(format!("{case}: after crash {}: {error:#}", index + 1))
+        })?;
+        opens.push((format!("crash {}", index + 1), snapshot));
+    }
+
+    // Now let it finish.
+    let resumed = config_for(
+        fixture,
+        &sidecar,
+        round,
+        RunMode::Unarmed,
+        MAX_DISPATCHES,
+        &Faults::none(),
+    );
+    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    warm_from(fixture, &sidecar);
+    let outcome = outcome
+        .map_err(|error| Outcome::Failed(format!("{case}: resume never converged: {error:#}")))?;
+    if !outcome.is_terminal_success() {
+        return Err(Outcome::Failed(format!(
+            "{case}: resume ended at {} rather than quiescence; failures: {:?}",
+            outcome.quiescence, outcome.failures
+        )));
+    }
+
+    let terminal = DurableSnapshot::read(&sidecar)
+        .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
+    opens.push(("terminal".to_string(), terminal));
+
+    // Every consecutive interval, so a violation names the two opens it
+    // happened between rather than only the endpoints.
+    let mut compared_columns = 0;
+    for window in opens.windows(2) {
+        let (from, before) = &window[0];
+        let (to, after) = &window[1];
+        let setup = assert_delegation_setup_preserved(&before.setup, &after.setup)
+            .map_err(|error| Outcome::Failed(format!("{case}: {from} -> {to}: {error:#}")))?;
+        compared_columns += setup.compared_columns;
+        assert_reservations_monotonic(before, after)
+            .map_err(|error| Outcome::Failed(format!("{case}: {from} -> {to}: {error:#}")))?;
+        assert_no_second_generation(before, after)
+            .map_err(|error| Outcome::Failed(format!("{case}: {from} -> {to}: {error:#}")))?;
+        assert_terminal_rows_unchanged(before, after)
+            .map_err(|error| Outcome::Failed(format!("{case}: {from} -> {to}: {error:#}")))?;
+    }
+    // A sequence that compared no frozen setup examined none of the state this
+    // case exists to protect, and would hold trivially.
+    if compared_columns == 0 {
+        return Err(Outcome::Failed(format!(
+            "{case}: no frozen delegation setup was compared across {} opens, so the \
+             preservation claim held vacuously",
+            opens.len()
+        )));
+    }
+
+    let terminal = &opens.last().expect("opens is never empty").1;
+    assert_matches_control(terminal, control)
+        .map_err(|error| Outcome::Failed(format!("{case}: {error:#}")))?;
+    recovery_conformance::combined::assert_combined_terminal(terminal, &proposal_ids())
+        .map_err(|error| Outcome::Failed(format!("{case}: {error:#}")))?;
+
+    let settled = deterministic_plan(
+        &sidecar,
+        &fixture_account(),
+        &round.round_id,
+        &proposal_ids(),
+    )
+    .map_err(|error| Outcome::Failed(format!("{case}: {error:#}")))?;
+    assert_idempotent(&settled).map_err(|error| Outcome::Failed(format!("{case}: {error:#}")))?;
+
+    eprintln!(
+        "  {case}: {} crashes, {compared_columns} setup columns held across {} opens, \
+         in {:.0}s — {}",
+        case.crashes(),
+        opens.len(),
+        started.elapsed().as_secs_f64(),
+        case.asks()
+    );
+    Ok(())
 }

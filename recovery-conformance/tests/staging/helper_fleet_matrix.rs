@@ -22,6 +22,7 @@ use recovery_conformance::child::{run_to_quiescence, run_until_crash, CrashLog};
 use recovery_conformance::helper_fleet::{FleetScenario, HelperContacts};
 use recovery_conformance::round_run::{helper_backend, proposal_ids};
 use recovery_conformance::run_config::RunMode;
+use recovery_conformance::setup_preservation::assert_delegation_setup_preserved;
 use zcash_voting::share_policy::share_submission_target_count;
 
 #[path = "fixture.rs"]
@@ -387,6 +388,12 @@ async fn exercise(
     // --- the invariants the fleet exists to make checkable
     assert_acceptances_never_downgraded(&after_first, &terminal)
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+    // A fleet flip changes only where shares go, never what a delegation is
+    // made of. A scenario that rewrote setup while repairing a deficit would
+    // look like a healthy repair from every other assertion here.
+    let setup = assert_delegation_setup_preserved(&after_first.setup, &terminal.setup)
+        .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
+    eprintln!("  {scenario}: delegation setup {setup}");
     assert_no_contact_outside_the_fleet(&second_urls, &contacted)
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
     // Per share, not fleet-wide: a run legitimately POSTs different shares to

@@ -124,6 +124,7 @@ fn snapshot(bundle: CombinedBundle) -> recovery_conformance::assertions::Durable
         pczt_persisted: true,
         cached_tree: false,
         deliveries: Vec::new(),
+        setup: Vec::new(),
     }
 }
 

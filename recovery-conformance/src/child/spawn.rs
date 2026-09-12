@@ -199,6 +199,14 @@ pub fn run_until_crash(worker: &Path, config: &RoundRunConfig) -> Result<CrashRu
                 // the target bundle hit an environmental failure, and deleting
                 // the sidecar would discard the only recovery evidence.
             }
+            Err(AttemptFailure::ChainRecoveryStalled(quiescence)) => {
+                eprintln!(
+                    "  attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS} for {stage}: chain recovery \
+                     stalled before the seam; waiting for the chain to advance"
+                );
+                last = Some(format!("chain recovery stalled at {quiescence}"));
+                std::thread::sleep(CHAIN_ADVANCE_WAIT);
+            }
             Err(AttemptFailure::Fatal(error)) => return Err(error),
         }
     }
@@ -210,6 +218,10 @@ pub fn run_until_crash(worker: &Path, config: &RoundRunConfig) -> Result<CrashRu
 
 enum AttemptFailure {
     Infrastructure(String),
+    /// The run ended because the chain had not advanced far enough, not
+    /// because the seam stopped firing. Worth waiting out and re-driving with
+    /// the stage still armed.
+    ChainRecoveryStalled(String),
     Fatal(anyhow::Error),
 }
 
@@ -235,10 +247,34 @@ fn attempt_crash(
             ))
         }
         CrashOutcome::StageNeverReached | CrashOutcome::Completed => {
+            // "The stage did not fire" and "the round finished" are not the
+            // same statement, and on a resumed sidecar they routinely differ.
+            // A round recovering an ambiguous dispatch ends at
+            // `ChainRecoveryStalled` long before it reaches a share or a second
+            // broadcast, so reporting that as a dead seam would fail a case for
+            // the chain's timing rather than for anything the wallet did. The
+            // specification separates `ChainRecoveryStalled` from
+            // `ChainTerminal` precisely because running again later may resolve
+            // it, which is the same rule `run_to_quiescence` already applies.
+            let outcome = RunOutcome::read(&config.outcome).ok();
+            if let Some(outcome) = &outcome {
+                if outcome.quiescence_kind == "ChainRecoveryStalled"
+                    || (outcome.quiescence_kind == "TargetRecoveryPending"
+                        && outcome.failures.is_empty())
+                {
+                    return Err(AttemptFailure::ChainRecoveryStalled(
+                        outcome.quiescence.clone(),
+                    ));
+                }
+            }
             return Err(AttemptFailure::Fatal(anyhow::anyhow!(
-                "stage {stage} was never reached; the round finished without its crash; the test would have \
-                 asserted against a completed round rather than a crashed one"
-            )))
+                "stage {stage} was never reached and the round ended at {}; the round \
+                 finished without its crash, so the test would have asserted against a \
+                 completed round rather than a crashed one",
+                outcome
+                    .map(|outcome| outcome.quiescence_kind)
+                    .unwrap_or_else(|| "an unreported quiescence".to_string())
+            )));
         }
         CrashOutcome::Failed { code } => {
             return Err(AttemptFailure::Fatal(anyhow::anyhow!(

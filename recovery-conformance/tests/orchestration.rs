@@ -80,6 +80,7 @@ fn snapshot(submissions: Vec<(&str, i64, &str, &str, i64)>) -> DurableSnapshot {
         pczt_persisted: true,
         cached_tree: false,
         deliveries: Vec::new(),
+        setup: Vec::new(),
     }
 }
 
