@@ -35,6 +35,18 @@ pub struct CrashTransport<T> {
     /// `None` for a run that should not crash in the transport, which is every
     /// run whose stage is event-triggered, plus the uncrashed control run.
     armed: Option<ArmedBroadcast>,
+    /// Matching POSTs to let through before dying on one.
+    ///
+    /// Zero — every stage but one — means the first POST of the armed class,
+    /// which for a round that drives bundles in order is always bundle 0. That
+    /// is the right boundary for asking what a crash leaves behind, and the
+    /// wrong one for asking what a round can still finish *without a signer*:
+    /// with earlier bundles undelegated the plan leads with their `Delegate`,
+    /// and a signer-less child is then asked for material it does not have.
+    /// Letting the earlier bundles through first lands the crash on a round
+    /// whose only outstanding work is the target's own batch.
+    skip: usize,
+    seen: std::sync::atomic::AtomicUsize,
     log: Arc<CrashLog>,
 }
 
@@ -47,7 +59,10 @@ struct ArmedBroadcast {
 
 impl<T> CrashTransport<T> {
     /// Wraps `inner`, arming it only if `stage` is broadcast-triggered.
-    pub fn new(inner: T, stage: Option<CrashStage>, log: Arc<CrashLog>) -> Self {
+    ///
+    /// `skip` matching POSTs are let through before the armed one; see
+    /// [`CrashTransport::skip`].
+    pub fn new(inner: T, stage: Option<CrashStage>, log: Arc<CrashLog>, skip: usize) -> Self {
         let armed = stage.and_then(|stage| match stage.trigger() {
             CrashTrigger::Broadcast { submission, point } => Some(ArmedBroadcast {
                 stage,
@@ -56,7 +71,13 @@ impl<T> CrashTransport<T> {
             }),
             CrashTrigger::Event => None,
         });
-        Self { inner, armed, log }
+        Self {
+            inner,
+            armed,
+            skip,
+            seen: std::sync::atomic::AtomicUsize::new(0),
+            log,
+        }
     }
 
     /// The armed point, if this POST is the one to die on.
@@ -67,7 +88,15 @@ impl<T> CrashTransport<T> {
     /// bundle on every run.
     fn armed_for(&self, url: &str) -> Option<ArmedBroadcast> {
         let armed = self.armed?;
-        (submission_kind(url)? == armed.submission).then_some(armed)
+        if submission_kind(url)? != armed.submission {
+            return None;
+        }
+        // Counted only for POSTs of the armed class, so unrelated traffic
+        // cannot consume the skip and move the crash to a different bundle.
+        let seen = self
+            .seen
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        (seen >= self.skip).then_some(armed)
     }
 }
 

@@ -247,6 +247,7 @@ async fn drive(
         HyperTransport::with_shared_route(Arc::clone(&route)),
         armed,
         Arc::clone(&log),
+        config.broadcast_skip,
     );
 
     let chain_stall = matches!(

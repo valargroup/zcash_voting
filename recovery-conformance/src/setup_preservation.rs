@@ -412,7 +412,7 @@ pub fn assert_a_host_reset_preserved_crash_state(
     account_uuid: &str,
     round_id: &str,
 ) -> Result<SetupComparison> {
-    let copy = SidecarCopy::of(sidecar)?;
+    let copy = crate::sidecar_copy::SidecarCopy::of(sidecar, "reset-probe")?;
     let before = read_setup(copy.path())?;
 
     let database = zcash_voting::round::VotingDb::open_path(copy.path())
@@ -443,38 +443,4 @@ pub fn assert_a_host_reset_preserved_crash_state(
 fn read_setup(sidecar: &std::path::Path) -> Result<Vec<BundleSetup>> {
     let connection = Connection::open(sidecar).context("opening a sidecar to read setup")?;
     BundleSetup::read_all(&connection)
-}
-
-/// A standalone, consistent copy of a sidecar, removed on drop.
-///
-/// `VACUUM INTO` rather than a file copy: the sidecar is in WAL mode, so its
-/// committed state lives across three files and copying only the database would
-/// silently lose everything the crash had most recently committed — which is
-/// exactly the state under test.
-struct SidecarCopy(std::path::PathBuf);
-
-impl SidecarCopy {
-    fn of(sidecar: &std::path::Path) -> Result<Self> {
-        let path = sidecar.with_extension(format!("reset-probe-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let source =
-            Connection::open_with_flags(sidecar, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .context("opening the sidecar to copy it")?;
-        source
-            .execute("vacuum into ?1", [path.to_string_lossy().as_ref()])
-            .context("copying the sidecar for a host-reset probe")?;
-        Ok(Self(path))
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl Drop for SidecarCopy {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("db-wal"));
-        let _ = std::fs::remove_file(self.0.with_extension("db-shm"));
-    }
 }

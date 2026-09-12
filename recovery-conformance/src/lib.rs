@@ -32,6 +32,7 @@ pub mod recrash;
 pub mod round_run;
 pub mod run_config;
 pub mod setup_preservation;
+pub mod sidecar_copy;
 pub mod signing;
 pub mod stage_config;
 pub mod stages;

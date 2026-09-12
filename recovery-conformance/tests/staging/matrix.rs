@@ -183,6 +183,39 @@ async fn drive_matrix(fixture: Fixture) -> Report {
         }
     }
 
+    // Signer-less target recovery. One case rather than a step inside every
+    // stage; see `exercise_signerless` for why that had to change.
+    if !targeted || std::env::var_os("RECOVERY_CONFORMANCE_SIGNERLESS").is_some() {
+        report.attempted += 1;
+        let started = Instant::now();
+        let label = "signerless-target-recovery".to_string();
+        match provision(&fixture).await {
+            Err(error) => report
+                .skipped
+                .push((label, format!("no round: {error:#}"))),
+            Ok(round) => match exercise_signerless(&fixture, &round, &control).await {
+                Ok(()) => {
+                    eprintln!("  PASS {label} in {:.0}s", started.elapsed().as_secs_f64());
+                    report.passed.push(label);
+                }
+                Err(Outcome::Skipped(why)) => {
+                    eprintln!(
+                        "  SKIP {label} after {:.0}s: {why}",
+                        started.elapsed().as_secs_f64()
+                    );
+                    report.skipped.push((label, why));
+                }
+                Err(Outcome::Failed(why)) => {
+                    eprintln!(
+                        "  FAIL {label} after {:.0}s: {why}",
+                        started.elapsed().as_secs_f64()
+                    );
+                    report.failed.push((label, why));
+                }
+            },
+        }
+    }
+
     // Crash-during-recovery. Runs after the single-stage matrix because it is
     // the more expensive dimension — each case provisions a round and kills the
     // child two or three times within it — and because a failure here is far
@@ -360,60 +393,6 @@ async fn exercise(
     if stage.settles_on_chain_before_resume() {
         eprintln!("  {stage}: waiting {CHAIN_INCLUSION_WAIT:?} for the dispatched transaction");
         tokio::time::sleep(CHAIN_INCLUSION_WAIT).await;
-    }
-
-    // First recover only this durable unit with no signer or hotkey available.
-    //
-    // Two conditions, not one. The durable half says the target *is* a
-    // persisted combined unit awaiting its VAN position. The plan half says the
-    // round would actually work on it first, and that is what makes the
-    // exercise runnable at all: the signerless child holds no voter mnemonic,
-    // no delegation driver, no signer and no hotkey, and it is given a single
-    // dispatch — so if the plan leads with a `Delegate` for some other bundle,
-    // the child is asked for signing material it deliberately does not have.
-    //
-    // At a crash on the first bundle to broadcast that is exactly what happens.
-    // The round drives bundles in order, so the two later bundles still owe
-    // their delegations, and delegation outranks vote submission in the step
-    // ordering. The plan reads `Delegate{1}`, `Delegate{2}`, then the target's
-    // `AdvanceVoteBatch{0}` — the target is present but third. Treating that as
-    // a failure reported a stage as broken for the shape of its own round
-    // rather than for anything recovery did, and it blocked both sharp stages.
-    // It is skipped by name, with the plan printed, so an exercise that stops
-    // running is visible rather than silently absent.
-    let signerless_leads = matches!(
-        plan.next_steps.first(),
-        Some(zcash_voting::session::NextStep::AdvanceVoteBatch { bundle_index, proposal_id })
-            if *bundle_index == bundle && *proposal_id == default_target().proposal_id
-    );
-    let signerless_applies = after_crash.combined.iter().any(|b| {
-        b.bundle_index == bundle && !b.authorizations.is_empty() && b.van_position.is_none()
-    });
-    if signerless_applies && !signerless_leads {
-        eprintln!(
-            "  {stage}: skipping signer-less target recovery: the plan leads with {:?} \
-             rather than the target batch, so a child with no signing material cannot \
-             execute its single dispatch",
-            plan.next_steps.first()
-        );
-    }
-    if signerless_applies && signerless_leads {
-        let signerless = config_for(
-            fixture,
-            &sidecar,
-            round,
-            RunMode::RecoverCombined,
-            1,
-            &Faults::none(),
-        );
-        let recovered = run_to_quiescence(&fixture.worker, &signerless)
-            .map_err(|error| Outcome::Failed(format!("signerless recovery: {error:#}")))?;
-        if recovered.quiescence_kind != "TargetRecovered" || !recovered.failures.is_empty() {
-            return Err(Outcome::Failed(format!(
-                "signerless target recovery failed: {}",
-                recovered.quiescence
-            )));
-        }
     }
 
     // (h) resume to quiescence in a new process
@@ -757,6 +736,185 @@ async fn exercise_recrash(
         opens.len(),
         started.elapsed().as_secs_f64(),
         case.asks()
+    );
+    Ok(())
+}
+
+/// Advancing a durably authorized combined batch with no signing material.
+///
+/// The claim is worth stating precisely, because it is the reason
+/// `delegate_cast_recovery` is an immutable table rather than a cache: once a
+/// combined delegation-and-cast batch is durably authorized, the spend-auth
+/// signature it carries is *sufficient*. A wallet that still holds the sidecar
+/// but can no longer produce signing material — a hardware signer that is gone,
+/// a seed the host cannot re-derive — must still be able to drive that batch to
+/// confirmation. If it cannot, the authorization was never self-contained and
+/// the round's weight depends on key material the specification says it should
+/// not need.
+///
+/// # Why the crash lands on the last bundle
+///
+/// This used to be a step inside every stage, and across a full 19-stage run it
+/// ran at none of them. The signer-less child is given a single dispatch and no
+/// mnemonic, driver, signer or hotkey, and `RoundDriver` executes the plan in
+/// order — so the exercise is only possible when the plan owes nothing but the
+/// target. The specification orders steps "delegation first, then vote and
+/// share submission", and every crash seam fires on the *first* POST of its
+/// class, which for a round that drives bundles in order is always bundle 0.
+/// With two later bundles still owing `Delegate`, the target sorts third and
+/// the child is asked for material it deliberately does not have.
+///
+/// Letting the earlier bundles' batches through first fixes that at the source.
+/// The crash lands on the last bundle, whose siblings are already confirmed, so
+/// the only work the round still owes *is* the target's own batch — which is
+/// both the shape this claim needs and the shape a real wallet is in when it
+/// discovers its signer is gone.
+///
+/// Nothing is trimmed or reshaped to get there. An earlier attempt built the
+/// precondition by deleting the untouched bundles from a copy; it produced the
+/// right plan, but it meant testing the claim against a round no wallet would
+/// ever hold, and the worker rightly refused the altered layout.
+async fn exercise_signerless(
+    fixture: &Fixture,
+    round: &ProvisionedRound,
+    control: &DurableSnapshot,
+) -> Result<(), Outcome> {
+    let started = Instant::now();
+    let label = "signerless-target-recovery";
+    let sidecar = fixture.workspace.join("signerless-target-recovery.db");
+    let _ = std::fs::remove_file(&sidecar);
+
+    // The last bundle, and the crash that lets its siblings through first.
+    let bundle = (recovery_conformance::provisioning::EXPECTED_BUNDLE_COUNT - 1) as u32;
+    let stage = CrashStage::BeforeBroadcast;
+    let mut armed = config_for(
+        fixture,
+        &sidecar,
+        round,
+        RunMode::Armed { stage },
+        MAX_DISPATCHES,
+        &Faults::none(),
+    );
+    armed.broadcast_skip = bundle as usize;
+    armed.target.bundle_index = bundle;
+
+    let crash = run_until_crash(&fixture.worker, &armed);
+    warm_from(fixture, &sidecar);
+    if let Err(error) = crash {
+        let detail = format!("{error:#}");
+        if detail.contains("never reached") {
+            return Err(Outcome::Failed(format!(
+                "{label}: {stage} never fired on bundle {bundle}, so there was no authorized \
+                 target to recover: {detail}"
+            )));
+        }
+        return Err(Outcome::Skipped(detail));
+    }
+
+    let after_crash = DurableSnapshot::read(&sidecar)
+        .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
+    let authorized = after_crash.combined.iter().any(|b| {
+        b.bundle_index == bundle
+            && !b.authorizations.is_empty()
+            && b.van_position.is_none()
+    });
+    if !authorized {
+        return Err(Outcome::Failed(format!(
+            "{label}: the crash left no durable authorization on bundle {bundle}, so the \
+             exercise would have proven nothing"
+        )));
+    }
+
+    // The precondition, checked rather than assumed: the round owes the target
+    // and nothing that needs a signer.
+    let plan = deterministic_plan(
+        &sidecar,
+        &fixture_account(),
+        &round.round_id,
+        &proposal_ids(),
+    )
+    .map_err(|error| Outcome::Failed(format!("{label}: {error:#}")))?;
+    let leads = matches!(
+        plan.next_steps.first(),
+        Some(zcash_voting::session::NextStep::AdvanceVoteBatch { bundle_index, .. })
+            if *bundle_index == bundle
+    );
+    if !leads {
+        return Err(Outcome::Failed(format!(
+            "{label}: the round owes {:?} before the target batch, so a child with no signing \
+             material could not reach it",
+            plan.next_steps.first()
+        )));
+    }
+
+    let signerless = config_for(
+        fixture,
+        &sidecar,
+        round,
+        RunMode::RecoverCombined,
+        1,
+        &Faults::none(),
+    );
+    let mut signerless = signerless;
+    signerless.target.bundle_index = bundle;
+    let recovered = run_to_quiescence(&fixture.worker, &signerless)
+        .map_err(|error| Outcome::Failed(format!("{label}: signerless recovery: {error:#}")))?;
+    if recovered.quiescence_kind != "TargetRecovered" || !recovered.failures.is_empty() {
+        return Err(Outcome::Failed(format!(
+            "{label}: a durably authorized batch could not be advanced without signing \
+             material; ended at {} with failures {:?}",
+            recovered.quiescence, recovered.failures
+        )));
+    }
+
+    // It got there without rewriting the setup it was handed.
+    let recovered_snapshot = DurableSnapshot::read(&sidecar)
+        .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
+    let setup = assert_delegation_setup_preserved(&after_crash.setup, &recovered_snapshot.setup)
+        .map_err(|error| Outcome::Failed(format!("{label}: {error:#}")))?;
+    if setup.is_vacuous() {
+        return Err(Outcome::Failed(format!(
+            "{label}: no frozen setup was compared, so the preservation half held vacuously"
+        )));
+    }
+    assert_reservations_monotonic(&after_crash, &recovered_snapshot)
+        .map_err(|error| Outcome::Failed(format!("{label}: {error:#}")))?;
+    assert_no_second_generation(&after_crash, &recovered_snapshot)
+        .map_err(|error| Outcome::Failed(format!("{label}: {error:#}")))?;
+
+    eprintln!(
+        "  {label}: bundle {bundle}'s batch, authorized before the crash, confirmed with no \
+         mnemonic, signer or hotkey; {setup}"
+    );
+
+    // And the round still finishes normally afterwards, with a signer present
+    // for the work that genuinely needs one.
+    let resumed = config_for(
+        fixture,
+        &sidecar,
+        round,
+        RunMode::Unarmed,
+        MAX_DISPATCHES,
+        &Faults::none(),
+    );
+    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    warm_from(fixture, &sidecar);
+    let outcome = outcome
+        .map_err(|error| Outcome::Failed(format!("{label}: resume never converged: {error:#}")))?;
+    if !outcome.is_terminal_success() {
+        return Err(Outcome::Failed(format!(
+            "{label}: resume ended at {} rather than quiescence; failures: {:?}",
+            outcome.quiescence, outcome.failures
+        )));
+    }
+    let terminal = DurableSnapshot::read(&sidecar)
+        .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
+    assert_matches_control(&terminal, control)
+        .map_err(|error| Outcome::Failed(format!("{label}: {error:#}")))?;
+
+    eprintln!(
+        "  {label}: the round converged to the control afterwards, in {:.0}s",
+        started.elapsed().as_secs_f64()
     );
     Ok(())
 }
