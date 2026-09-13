@@ -260,12 +260,8 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
         let notes = self.execute_select_notes(observations)?;
         let voting_db = self.scoped_voting_db()?;
         let policy = voting_db.effective_bundle_policy(self.round_id(), self.bundle_policy)?;
-        let persisted_bundle_count = voting_db.get_bundle_count(self.round_id())?;
-        let effective_plan = crate::round::effective_round_bundle_plan_for_notes(
-            &notes,
-            policy,
-            persisted_bundle_count,
-        )?;
+        let effective_plan =
+            voting_db.effective_round_bundle_plan_for_notes(self.round_id(), &notes, policy)?;
         let surviving_note_count = effective_plan.plan.bundles.iter().map(Vec::len).sum();
         let eligibility = MinimumVotingEligibility {
             distinct_note_count: surviving_note_count,

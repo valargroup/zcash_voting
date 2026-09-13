@@ -468,11 +468,10 @@ impl VotingNoteSelectionResultView {
     ) -> Result<Self, VotingError> {
         let effective_policy =
             voting_db.effective_bundle_policy(round_id, BundlePolicy::default())?;
-        let persisted_bundle_count = voting_db.get_bundle_count(round_id)?;
-        Self::from_selected_with_policy_and_prefix(
+        Self::from_selected_with_policy_and_round(
             selected,
             effective_policy,
-            persisted_bundle_count,
+            Some((voting_db, round_id)),
         )
     }
 
@@ -481,13 +480,13 @@ impl VotingNoteSelectionResultView {
         selected: SelectedNotes,
         bundle_policy: BundlePolicy,
     ) -> Result<Self, VotingError> {
-        Self::from_selected_with_policy_and_prefix(selected, bundle_policy, 0)
+        Self::from_selected_with_policy_and_round(selected, bundle_policy, None)
     }
 
-    fn from_selected_with_policy_and_prefix(
+    fn from_selected_with_policy_and_round(
         selected: SelectedNotes,
         bundle_policy: BundlePolicy,
-        persisted_bundle_count: u32,
+        round: Option<(&crate::round::VotingDb, &str)>,
     ) -> Result<Self, VotingError> {
         let note_count =
             u32::try_from(selected.notes.len()).map_err(|_| VotingError::InvalidInput {
@@ -502,18 +501,21 @@ impl VotingNoteSelectionResultView {
         // the behavior this view had when it called `voting_power_with_policy`.
         // Persisted-prefix inconsistencies still fail: they describe stale or
         // incomplete round state rather than malformed caller-supplied notes.
-        let effective_plan = crate::note_bundling::canonical_note_bundle_plan_for_notes(
+        let canonical_plan = crate::note_bundling::canonical_note_bundle_plan_for_notes(
             &selected.voting_note_infos(),
             bundle_policy,
         )
-        .ok()
-        .map(|plan| {
-            crate::round::effective_round_bundle_plan_for_canonical_plan(
+        .ok();
+        let effective_plan = match (canonical_plan, round) {
+            (Some(plan), Some((voting_db, round_id))) => {
+                Some(voting_db.effective_round_bundle_plan_for_canonical_plan(round_id, plan)?)
+            }
+            (Some(plan), None) => Some(crate::round::EffectiveRoundBundlePlan {
                 plan,
-                persisted_bundle_count,
-            )
-        })
-        .transpose()?;
+                skipped_suffix: Default::default(),
+            }),
+            (None, _) => None,
+        };
         let eligible_weight_zatoshi = effective_plan
             .as_ref()
             .map_or(0, |effective_plan| effective_plan.plan.eligible_weight);
@@ -2745,6 +2747,60 @@ mod tests {
                 .to_string()
                 .contains("produces 1 delegation bundles, but 2 bundle rows are already persisted"),
             "{power_error}"
+        );
+    }
+
+    #[test]
+    fn round_reports_reject_a_reordered_persisted_prefix() {
+        let divisor = crate::governance::BALLOT_DIVISOR;
+        let note_value = divisor * 3 / 5;
+        let selected = SelectedNotes {
+            notes: (1..=4)
+                .map(|position| test_note_ref(note_value, note_value, position))
+                .collect(),
+            snapshot_height: 100,
+            anchor_tree_state: test_tree_state(100),
+        };
+        let params = target_round_params(42);
+        let voting_db = crate::round::VotingDb::open_in_memory().unwrap();
+        voting_db.set_wallet_id("selection-view-reordered-prefix");
+        voting_db
+            .ensure_round(Network::Regtest, &params, None)
+            .unwrap();
+        let policy = BundlePolicy::new(2).unwrap().with_max_privacy_bundles(None);
+        voting_db
+            .ensure_bundles_with_policy(
+                &params.vote_round_id,
+                &selected.voting_note_infos(),
+                policy,
+            )
+            .unwrap();
+
+        let mut reordered_selection = selected;
+        reordered_selection
+            .notes
+            .push(test_note_ref(2 * divisor, 2 * divisor, 99));
+        let power_error =
+            crate::voting_power_for_round(&reordered_selection, &voting_db, &params.vote_round_id)
+                .unwrap_err();
+        let view_error = VotingNoteSelectionResultView::from_selected_for_round(
+            reordered_selection,
+            &voting_db,
+            &params.vote_round_id,
+        )
+        .unwrap_err();
+
+        assert!(
+            power_error
+                .to_string()
+                .contains("notes do not match persisted setup"),
+            "{power_error}"
+        );
+        assert!(
+            view_error
+                .to_string()
+                .contains("notes do not match persisted setup"),
+            "{view_error}"
         );
     }
 

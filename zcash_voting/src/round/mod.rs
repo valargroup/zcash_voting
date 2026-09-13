@@ -195,12 +195,10 @@ pub fn note_bundles_for_round(
     round_id: &str,
 ) -> Result<Vec<Vec<NoteInfo>>, VotingError> {
     let policy = voting_db.effective_bundle_policy(round_id, BundlePolicy::default())?;
-    let persisted_bundle_count = voting_db.get_bundle_count(round_id)?;
-    Ok(
-        effective_round_bundle_plan_for_notes(notes, policy, persisted_bundle_count)?
-            .plan
-            .bundles,
-    )
+    Ok(voting_db
+        .effective_round_bundle_plan_for_notes(round_id, notes, policy)?
+        .plan
+        .bundles)
 }
 
 /// Returns the eligible note bundles for a round note set under an explicit policy.
@@ -211,22 +209,8 @@ pub fn note_bundles_with_policy(
     Ok(canonical_note_bundle_plan_for_notes(notes, policy)?.bundles)
 }
 
-/// Reconstructs the active round plan and accounts for a deleted trailing suffix.
-///
-/// A non-zero persisted bundle count is the authoritative prefix boundary. The
-/// stored policy still reconstructs the original canonical ordering, while the
-/// row count determines which bundles remain usable.
-pub(crate) fn effective_round_bundle_plan_for_notes(
-    notes: &[NoteInfo],
-    policy: BundlePolicy,
-    persisted_bundle_count: u32,
-) -> Result<EffectiveRoundBundlePlan, VotingError> {
-    let plan = canonical_note_bundle_plan_for_notes(notes, policy)?;
-    effective_round_bundle_plan_for_canonical_plan(plan, persisted_bundle_count)
-}
-
 /// Limits an already validated canonical plan to the round's persisted prefix.
-pub(crate) fn effective_round_bundle_plan_for_canonical_plan(
+fn limit_canonical_plan_to_persisted_prefix(
     mut plan: crate::note_bundling::ChunkResult,
     persisted_bundle_count: u32,
 ) -> Result<EffectiveRoundBundlePlan, VotingError> {
@@ -690,6 +674,36 @@ impl VotingDb {
         Ok(requested)
     }
 
+    /// Reconstructs the active plan and verifies it describes the persisted rows.
+    ///
+    /// A non-zero persisted bundle count is the authoritative prefix boundary,
+    /// but the count alone is insufficient: the retained canonical bundles must
+    /// also match the note identities stored for that prefix.
+    pub(crate) fn effective_round_bundle_plan_for_notes(
+        &self,
+        round_id: &str,
+        notes: &[NoteInfo],
+        policy: BundlePolicy,
+    ) -> Result<EffectiveRoundBundlePlan, VotingError> {
+        let plan = canonical_note_bundle_plan_for_notes(notes, policy)?;
+        self.effective_round_bundle_plan_for_canonical_plan(round_id, plan)
+    }
+
+    /// Limits a canonical plan to persisted rows and validates their identities.
+    pub(crate) fn effective_round_bundle_plan_for_canonical_plan(
+        &self,
+        round_id: &str,
+        plan: crate::note_bundling::ChunkResult,
+    ) -> Result<EffectiveRoundBundlePlan, VotingError> {
+        let persisted_bundle_count = self.get_bundle_count(round_id)?;
+        let effective_plan =
+            limit_canonical_plan_to_persisted_prefix(plan, persisted_bundle_count)?;
+        if persisted_bundle_count > 0 {
+            validate_persisted_bundle_notes(self, round_id, &effective_plan.plan.bundles)?;
+        }
+        Ok(effective_plan)
+    }
+
     /// Creates bundle rows for `notes`, or validates existing bundle rows.
     ///
     /// The note ordering, duplicate-nullifier handling, and weight quantization
@@ -820,16 +834,19 @@ impl VotingDb {
         }
 
         let policy = self.effective_bundle_policy(round_id, policy)?;
-        let effective_plan = effective_round_bundle_plan_for_notes(notes, policy, stored_count)
-            .map_err(|error| match error {
-                VotingError::InvalidInput { message }
-                    if message.contains("bundle rows are already persisted") =>
-                {
-                    VotingError::InvalidInput {
-                        message: format!("{message} for round {round_id}"),
+        let plan = canonical_note_bundle_plan_for_notes(notes, policy)?;
+        let effective_plan =
+            limit_canonical_plan_to_persisted_prefix(plan, stored_count).map_err(|error| {
+                match error {
+                    VotingError::InvalidInput { message }
+                        if message.contains("bundle rows are already persisted") =>
+                    {
+                        VotingError::InvalidInput {
+                            message: format!("{message} for round {round_id}"),
+                        }
                     }
+                    other => other,
                 }
-                other => other,
             })?;
         validate_persisted_bundle_notes(self, round_id, &effective_plan.plan.bundles)?;
         // Record the policy only after it reproduces the persisted prefix,
