@@ -952,9 +952,12 @@ after the valid complete scan. Malformed pages, cancellation, endpoint
 exhaustion, and transport interruption do not complete a pass, produce no
 authorization, and retain the candidate. Delayed indexing may produce a valid
 no-match pass and therefore permits the combined retirement-and-reservation;
-the same-generation and nullifier rules make a later commit safe. A responsive
-endpoint serving a supported snapshot cannot repeatedly stop at a local
-whole-pass budget: its complete traversal fits by construction.
+the same-generation and nullifier rules make a later commit safe. Structural
+support and completion are separate: metadata may declare any tree up to
+`2^24` leaves, but one pass completes only when the fixed snapshot can be
+served within the request, byte, and time ceilings above. A valid snapshot that
+exceeds the `1,000,000,000`-byte or `15`-minute operational budget fails
+closed, produces no authorization, and remains `Recovering`.
 
 Candidate retirement, its diagnostic update, and retry reservation are one
 immediate transaction. If that transaction fails, the candidate remains
@@ -1554,9 +1557,10 @@ Tests cover:
   encoding without weakening continuity validation;
 - an indivisible block above the `5,000`-leaf target remains recoverable within
   the fixed response and snapshot bounds;
-- a full `2^24`-leaf snapshot under deployed whole-block pagination fits the
-  `6,709` leaf-request, `53,680 MiB`, `120`-hour, and streaming-memory
-  ceilings without a smaller restart budget;
+- deployed whole-block pagination needs at most `6,709` leaf requests for a
+  full `2^24`-leaf snapshot, while every pass independently stops at
+  `1,000,000,000` response bytes or `15` minutes and leaves an incomplete valid
+  snapshot `Recovering` without authorization;
 - interrupted scans restart without durable cursors or partial evidence; and
 - tree confirmation never invents a hash.
 
