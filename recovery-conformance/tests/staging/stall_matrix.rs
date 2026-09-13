@@ -250,39 +250,19 @@ async fn exercise(
     // stall fired at all. Separating them keeps that evidence independent of the
     // order these two calls happen to be written in.
     armed.crash_log = sidecar.with_extension("stall.crashlog.jsonl");
-    let mut stalled = run_until_the_stall_resolves(&fixture.worker, &armed, budget)
+    let stalled = run_until_the_stall_resolves(&fixture.worker, &armed, budget)
         .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
-    if target == StallTarget::CommitmentTreeRead
-        && stalled.ended_itself
-        && StallRecord::from_observations(&stalled.observations).is_empty()
-        && stalled.outcome.as_ref().is_some_and(|outcome| {
-            outcome.quiescence_kind == "ChainRecoveryStalled" && outcome.failures.is_empty()
-        })
-    {
-        // Reopening an interrupted reservation first marks it Recovering and
-        // returns without network reconciliation. Re-enter exactly once to
-        // reach the scan, charging both invocations to the same stall budget.
-        let interrupted = DurableSnapshot::read(&sidecar)
-            .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
-        if !interrupted.submissions.iter().any(|submission| {
-            submission.bundle_index == i64::from(armed.target.bundle_index)
-                && submission.kind == "delegate_and_cast_vote_batch"
-                && submission.state == "recovering"
-                && !submission.has_candidate_hash
-        }) {
-            return Err(Outcome::Failed(
-                "tree recovery did not preserve the interrupted hashless generation".into(),
-            ));
-        }
-        let initialization_elapsed = stalled.elapsed;
-        let remaining = budget.checked_sub(initialization_elapsed).ok_or_else(|| {
-            Outcome::Failed("interrupted reservation exhausted the tree stall budget".into())
-        })?;
-        eprintln!("  {target}: interrupted reservation is recovering; re-entering for tree scan");
-        stalled = run_until_the_stall_resolves(&fixture.worker, &armed, remaining)
-            .map_err(|error| Outcome::Failed(format!("{error:#}")))?;
-        stalled.elapsed += initialization_elapsed;
-    }
+    // No re-entry here. This used to run the child a second time when the
+    // first ended at `ChainRecoveryStalled` without the armed tree read ever
+    // firing, on the reasoning that "reopening an interrupted reservation
+    // first marks it Recovering and returns without network reconciliation".
+    // That was not a property of the design; it was a defect, since fixed in
+    // the lifecycle so the first resumed pass performs the check it owes. The
+    // accommodation outlived it, and an accommodation for a fixed bug is how
+    // that bug returns unreported: the guard it keyed on -- a stalled run whose
+    // tree read never fired -- is the regression's own signature. A run that
+    // stalls without reading the chain is now a finding, asserted as `A6`
+    // inside `run_to_quiescence`.
     warm_from(fixture, &sidecar);
 
     // (1) the stall fired, and at the point it was asked to
@@ -337,9 +317,9 @@ async fn exercise(
         MAX_DISPATCHES,
         &Faults::none(),
     );
-    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    let resume = run_to_quiescence(&fixture.worker, &resumed);
     warm_from(fixture, &sidecar);
-    let outcome = outcome.map_err(|error| {
+    let resume = resume.map_err(|error| {
         let detail = format!("{error:#}");
         if detail.contains("Transport") || detail.contains("PIR") {
             Outcome::Skipped(format!("resume did not complete: {detail}"))
@@ -347,6 +327,8 @@ async fn exercise(
             Outcome::Failed(format!("resume never converged: {detail}"))
         }
     })?;
+    eprintln!("  {target}: resume {}", resume.summary());
+    let outcome = &resume.outcome;
     if !outcome.is_terminal_success() {
         return Err(Outcome::Failed(format!(
             "resume ended at {} rather than quiescence; failures: {:?}",

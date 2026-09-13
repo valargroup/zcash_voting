@@ -190,9 +190,7 @@ async fn drive_matrix(fixture: Fixture) -> Report {
         let started = Instant::now();
         let label = "signerless-target-recovery".to_string();
         match provision(&fixture).await {
-            Err(error) => report
-                .skipped
-                .push((label, format!("no round: {error:#}"))),
+            Err(error) => report.skipped.push((label, format!("no round: {error:#}"))),
             Ok(round) => match exercise_signerless(&fixture, &round, &control).await {
                 Ok(()) => {
                     eprintln!("  PASS {label} in {:.0}s", started.elapsed().as_secs_f64());
@@ -412,9 +410,9 @@ async fn exercise(
     // A resume that never completes is only a skip when the environment stopped
     // it. Retries that all end on the same non-transport error mean the round
     // does not converge, which is exactly what this matrix exists to catch.
-    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    let resume = run_to_quiescence(&fixture.worker, &resumed);
     warm_from(fixture, &sidecar);
-    let outcome = outcome.map_err(|error| {
+    let resume = resume.map_err(|error| {
         let detail = format!("{error:#}");
         if detail.contains("Transport") || detail.contains("PIR") {
             Outcome::Skipped(format!("resume did not complete: {detail}"))
@@ -422,6 +420,13 @@ async fn exercise(
             Outcome::Failed(format!("resume never converged: {detail}"))
         }
     })?;
+    // Reported, not asserted. How many children a resume costs is the number
+    // an earlier version of this suite discarded, and a regression that cost
+    // one extra converged on the second and passed. A ceiling is not encoded
+    // here because none has been observed live yet, and asserting a guess is
+    // how a matrix acquires a flake instead of a finding.
+    eprintln!("  {stage}: resume {}", resume.summary());
+    let outcome = &resume.outcome;
 
     // (i) fail on anything that is not a clean ending
     if !outcome.is_terminal_success() {
@@ -673,10 +678,12 @@ async fn exercise_recrash(
         MAX_DISPATCHES,
         &Faults::none(),
     );
-    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    let resume = run_to_quiescence(&fixture.worker, &resumed);
     warm_from(fixture, &sidecar);
-    let outcome = outcome
+    let resume = resume
         .map_err(|error| Outcome::Failed(format!("{case}: resume never converged: {error:#}")))?;
+    eprintln!("  {case}: resume {}", resume.summary());
+    let outcome = &resume.outcome;
     if !outcome.is_terminal_success() {
         return Err(Outcome::Failed(format!(
             "{case}: resume ended at {} rather than quiescence; failures: {:?}",
@@ -814,9 +821,7 @@ async fn exercise_signerless(
     let after_crash = DurableSnapshot::read(&sidecar)
         .map_err(|error| Outcome::Failed(format!("unreadable sidecar: {error:#}")))?;
     let authorized = after_crash.combined.iter().any(|b| {
-        b.bundle_index == bundle
-            && !b.authorizations.is_empty()
-            && b.van_position.is_none()
+        b.bundle_index == bundle && !b.authorizations.is_empty() && b.van_position.is_none()
     });
     if !authorized {
         return Err(Outcome::Failed(format!(
@@ -859,6 +864,8 @@ async fn exercise_signerless(
     signerless.target.bundle_index = bundle;
     let recovered = run_to_quiescence(&fixture.worker, &signerless)
         .map_err(|error| Outcome::Failed(format!("{label}: signerless recovery: {error:#}")))?;
+    eprintln!("  {label}: signerless recovery {}", recovered.summary());
+    let recovered = &recovered.outcome;
     if recovered.quiescence_kind != "TargetRecovered" || !recovered.failures.is_empty() {
         return Err(Outcome::Failed(format!(
             "{label}: a durably authorized batch could not be advanced without signing \
@@ -897,10 +904,12 @@ async fn exercise_signerless(
         MAX_DISPATCHES,
         &Faults::none(),
     );
-    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    let resume = run_to_quiescence(&fixture.worker, &resumed);
     warm_from(fixture, &sidecar);
-    let outcome = outcome
+    let resume = resume
         .map_err(|error| Outcome::Failed(format!("{label}: resume never converged: {error:#}")))?;
+    eprintln!("  {label}: resume {}", resume.summary());
+    let outcome = &resume.outcome;
     if !outcome.is_terminal_success() {
         return Err(Outcome::Failed(format!(
             "{label}: resume ended at {} rather than quiescence; failures: {:?}",

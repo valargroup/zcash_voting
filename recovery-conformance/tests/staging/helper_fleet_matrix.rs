@@ -219,10 +219,12 @@ async fn exercise(
     } else {
         // Cancellation after a delivery observation is the expected opening
         // boundary. A transport or setup failure is not evidence of an outage.
-        let outcome = run_to_quiescence(&fixture.worker, &opening);
+        let resume = run_to_quiescence(&fixture.worker, &opening);
         warm_from(fixture, &sidecar);
-        let outcome = outcome
-            .map_err(|error| Outcome::Failed(format!("outage opening failed: {error:#}")))?;
+        let resume =
+            resume.map_err(|error| Outcome::Failed(format!("outage opening failed: {error:#}")))?;
+        eprintln!("  {scenario}: opening {}", resume.summary());
+        let outcome = &resume.outcome;
         if outcome.quiescence_kind != "Cancelled" {
             return Err(Outcome::Failed(format!(
                 "outage opening missed its delivery boundary: {}",
@@ -352,9 +354,9 @@ async fn exercise(
         MAX_DISPATCHES,
         &Faults::fleet(second.clone()),
     );
-    let outcome = run_to_quiescence(&fixture.worker, &resumed);
+    let resume = run_to_quiescence(&fixture.worker, &resumed);
     warm_from(fixture, &sidecar);
-    let outcome = outcome.map_err(|error| {
+    let resume = resume.map_err(|error| {
         let detail = format!("{error:#}");
         if detail.contains("Transport") || detail.contains("PIR") {
             Outcome::Skipped(format!("resume did not complete: {detail}"))
@@ -362,6 +364,8 @@ async fn exercise(
             Outcome::Failed(format!("resume never converged: {detail}"))
         }
     })?;
+    eprintln!("  {scenario}: resume {}", resume.summary());
+    let outcome = &resume.outcome;
     if !outcome.is_terminal_success() {
         return Err(Outcome::Failed(format!(
             "resume ended at {} rather than quiescence; failures: {:?}",

@@ -1110,6 +1110,18 @@ bounded to one re-admission, preserves generation and roster validation, and
 checks cancellation before continuing. `StatusOnly` still returns the newly
 normalized recovery state so its episode can escalate to `ExactTree`.
 
+Stated as the general obligation: **a state transition is not a recovery
+attempt.** Every rule above describes what an interrupted row *becomes* — an
+abandoned `Submitting` row becomes `Recovering`, a tracking window that expires
+becomes `Recovering` — and a run that only performs the transition has advanced
+the record without advancing the submission. The first resumed pass under
+`ExactTree` owes the check itself, in that same pass, and reports
+`ChainRecoveryStalled` only once it has made one. The two endings are otherwise
+indistinguishable to a caller: both leave the row in `Recovering`, both are
+re-drivable, and both resolve on the next run. Only whether a request was made
+separates them, which is why the conformance harness records it rather than
+inferring it (`recovery-conformance`, invariant `A6`).
+
 ## Concurrency, generation locking, and cancellation
 
 The lock order is:
@@ -1754,6 +1766,7 @@ Public-lifecycle engine coverage is anchored by
 `an_abandoned_reservation_with_an_incomplete_scan_never_retransmits`,
 `an_abandoned_reservation_does_not_reconcile_when_cancelled_or_status_only`,
 `interruption_after_normalization_prevents_readmission`,
+`an_abandoned_vote_missing_from_the_tree_retransmits_in_the_first_resumed_pass`,
 `chain_rejection_preserves_bound_recovery_and_redacts_diagnostics`,
 `recovery_retry_rejection_hash_is_not_candidate_evidence`,
 `committed_failure_moves_tracking_to_recovery_and_clears_recovery_candidate`,

@@ -1330,3 +1330,73 @@ pub fn assert_a_stalled_submission_survived(
     );
     Ok(())
 }
+
+/// A run that reports a stalled recovery must have actually looked.
+///
+/// `A6`. `ChainRecoveryStalled` is not a verdict — the specification separates
+/// it from `ChainTerminal` because running again later may resolve it — so the
+/// harness waits and re-drives rather than failing. That licence belongs to a
+/// run whose exact-tree scan looked and found nothing, because the transaction
+/// may simply not be mined yet. It does not belong to a run that normalized an
+/// abandoned reservation and returned without asking the chain anything.
+///
+/// Those two endings are otherwise identical from the outside: both report
+/// `ChainRecoveryStalled`, both leave the row in `Recovering`, and the next
+/// process resolves both. Only the request count separates them, which is why
+/// re-driving without checking it let a real regression through — a first
+/// resumed run that performed no recovery check at all converged on the second
+/// run and the matrix reported a pass.
+///
+/// Scoped to the stalled step, not the run: a resumed round drives its other
+/// bundles to completion and a round-wide total would never be zero. See
+/// [`crate::chain_reads`] for how the attribution is made.
+pub fn assert_a_stall_attempted_recovery(outcome: &crate::run_config::RunOutcome) -> Result<()> {
+    if outcome.quiescence_kind != "ChainRecoveryStalled" {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        outcome.stalled_step_chain_reads > 0,
+        "A6 VIOLATED: the run reported a stalled chain recovery at {} having made no chain \
+         read for that step ({} elsewhere in the round). A stall is only re-drivable when \
+         the recovery looked and found nothing; a pass that normalized an abandoned \
+         reservation and returned owes its first recovery check in that same run, and \
+         waiting for the chain to advance cannot supply it",
+        outcome.quiescence,
+        outcome.chain_reads
+    );
+    Ok(())
+}
+
+/// A run re-driven for background share tracking must have completed a pass.
+///
+/// The same rule as [`assert_a_stall_attempted_recovery`], applied to the one
+/// other re-drive branch whose condition does not already name work the run
+/// did. `SuiteBudgetExpired` says the tracking phase ran out of time; it does
+/// not say the phase ever finished a pass, and a phase that expired having
+/// completed none is a wedged round rather than a slow one. Reopening for more
+/// confirmations only helps a phase that was making progress.
+///
+/// The other three branches are deliberately not held to this bar, because
+/// each already requires a named observation the run recorded:
+/// `needs_helper_recovery` requires a `HelperDeliveryIncomplete` failure, which
+/// a run that attempted no delivery cannot produce; `is_self_healing` requires
+/// the stale-tree-cache failure the SDK itself raised; and `is_environmental`
+/// requires a transport failure. Only a stall is reported by a run that may
+/// have done nothing at all.
+pub fn assert_a_background_resume_ran_a_pass(
+    outcome: &crate::run_config::RunOutcome,
+) -> Result<()> {
+    if !outcome.needs_background_recovery() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        outcome
+            .share_tracking
+            .last()
+            .is_some_and(|tracking| tracking.passes > 0),
+        "A6 VIOLATED: the run's last share-tracking phase expired against the suite budget \
+         having completed no pass at all, so reopening the sidecar repeats a phase that \
+         made no progress rather than resuming one that did"
+    );
+    Ok(())
+}

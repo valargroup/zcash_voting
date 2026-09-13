@@ -171,6 +171,7 @@ fn a_run_mixing_a_real_failure_with_a_stall_is_not_environmental() {
         ],
         dispatches: 0,
         share_tracking: Vec::new(),
+        ..RunOutcome::default()
     };
     assert!(!outcome.is_environmental());
 }
@@ -183,6 +184,7 @@ fn only_a_finished_round_counts_as_terminal_success() {
         failures: Vec::new(),
         dispatches: 0,
         share_tracking: Vec::new(),
+        ..RunOutcome::default()
     };
     assert!(ended("NoWorkLeft").is_terminal_success());
     // Background share work is the timer's to finish; the foreground round is
@@ -217,6 +219,7 @@ fn incomplete_helper_delivery_requires_a_bounded_resume_not_success() {
         }],
         dispatches: 1,
         share_tracking: Vec::new(),
+        ..RunOutcome::default()
     };
     assert!(outcome.needs_helper_recovery());
     assert!(!outcome.is_terminal_success());
@@ -296,6 +299,7 @@ fn background_share_work_is_a_finished_round_not_a_stalled_one() {
         failures: Vec::new(),
         dispatches: 0,
         share_tracking: Vec::new(),
+        ..RunOutcome::default()
     };
     assert!(background.is_terminal_success());
     assert!(!background.is_environmental());
@@ -312,6 +316,7 @@ fn a_stalled_chain_recovery_is_not_a_finished_round() {
         failures: Vec::new(),
         dispatches: 0,
         share_tracking: Vec::new(),
+        ..RunOutcome::default()
     };
     assert!(!stalled.is_terminal_success());
     // No failures recorded, so it must not be mistaken for an environment
@@ -483,6 +488,7 @@ fn only_the_last_recoverable_background_budget_pause_is_resumed() {
         failures: Vec::new(),
         dispatches: 0,
         share_tracking: vec![paused.clone()],
+        ..RunOutcome::default()
     };
     assert!(outcome.needs_background_recovery());
     for reason in [

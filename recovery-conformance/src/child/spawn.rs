@@ -23,6 +23,13 @@ const INFRASTRUCTURE_ATTEMPTS: usize = 6;
 pub struct CrashRun {
     pub sidecar: PathBuf,
     pub observations: Vec<Observation>,
+    /// Children spent before the seam fired.
+    ///
+    /// Reported rather than asserted on, for the same reason
+    /// [`ResumeTrace::attempts`] is: an armed run on a resumed sidecar may
+    /// legitimately need a second child while the chain catches up. A number
+    /// that starts climbing is the signal that something else changed.
+    pub redrives: usize,
 }
 
 impl CrashRun {
@@ -76,16 +83,80 @@ pub enum CrashOutcome {
     },
 }
 
+/// One resumed child, and why the harness did or did not stop there.
+#[derive(Clone, Debug)]
+pub struct ResumeAttempt {
+    /// The quiescence variant the child reported, or the environment failure
+    /// that ended it before it could report one.
+    pub ended_at: String,
+    /// Chain reads attributed to the step a stalled recovery ended on.
+    pub stalled_step_chain_reads: usize,
+    /// Every chain read the child made.
+    pub chain_reads: usize,
+    /// Why the harness re-drove, or `None` for the attempt it accepted.
+    pub redrive_reason: Option<String>,
+}
+
+/// Every child a resume spent, and the outcome the last of them wrote.
+///
+/// The attempt list exists because the count is the thing an earlier version of
+/// this suite discarded. `run_to_quiescence` re-drives a stalled or unfinished
+/// resume and asserts only the final outcome, so a regression that cost one
+/// extra process converged on the second and reported a pass. The count cannot
+/// be asserted until a live run establishes what is normal — a chain that has
+/// not advanced legitimately costs a re-drive — so it is reported every stage
+/// instead, while [`assert_a_stall_attempted_recovery`] carries the claim that
+/// can be made now.
+///
+/// [`assert_a_stall_attempted_recovery`]: crate::assertions::assert_a_stall_attempted_recovery
+#[derive(Clone, Debug)]
+pub struct ResumeTrace {
+    pub attempts: Vec<ResumeAttempt>,
+    pub outcome: RunOutcome,
+}
+
+impl ResumeTrace {
+    /// How many children this resume spent.
+    pub fn attempts(&self) -> usize {
+        self.attempts.len()
+    }
+
+    /// A one-line rendering for the per-stage report.
+    pub fn summary(&self) -> String {
+        let reasons: Vec<&str> = self
+            .attempts
+            .iter()
+            .filter_map(|attempt| attempt.redrive_reason.as_deref())
+            .collect();
+        let reads = self.outcome.chain_reads;
+        if reasons.is_empty() {
+            format!("{} attempt(s), {reads} chain read(s)", self.attempts())
+        } else {
+            format!(
+                "{} attempt(s), {reads} chain read(s), re-driven for: {}",
+                self.attempts(),
+                reasons.join("; ")
+            )
+        }
+    }
+}
+
 /// Drives a child to quiescence without arming a crash.
 ///
 /// Used both to resume a crashed sidecar and to build the uncrashed control.
-pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<RunOutcome> {
+///
+/// Returns every attempt it spent, not only the last. A resume that needed a
+/// second child because the chain had not advanced and one that needed it
+/// because the first child did no recovery work look identical in the final
+/// outcome; the first is legal and the second is the regression this records.
+pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<ResumeTrace> {
     anyhow::ensure!(
         config.armed_stage().is_none(),
         "run_to_quiescence was given an armed configuration"
     );
 
     let mut last = String::new();
+    let mut attempts: Vec<ResumeAttempt> = Vec::new();
     for attempt in 1..=INFRASTRUCTURE_ATTEMPTS {
         // The sidecar is never deleted between attempts, and never needs to be:
         // resuming is what a host does after any interruption, and the
@@ -111,10 +182,20 @@ pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<RunOu
                     || (outcome.quiescence_kind == "TargetRecoveryPending"
                         && outcome.failures.is_empty())
                 {
+                    // Before the sleep, and before the re-drive. Waiting out a
+                    // chain that has not advanced is the right answer for a
+                    // recovery that looked; it is never the answer for one that
+                    // did not, and re-driving such a run is exactly how this
+                    // harness absorbed a real regression instead of reporting
+                    // it.
+                    crate::assertions::assert_a_stall_attempted_recovery(&outcome)?;
                     last = outcome.quiescence.clone();
+                    record(&mut attempts, &outcome, Some(last.clone()));
                     eprintln!(
                         "  resume attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS}: chain recovery \
-                         stalled; waiting for the chain to advance"
+                         stalled after {} chain read(s) for the stalled step; waiting for the \
+                         chain to advance",
+                        outcome.stalled_step_chain_reads
                     );
                     std::thread::sleep(CHAIN_ADVANCE_WAIT);
                     continue;
@@ -125,6 +206,7 @@ pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<RunOu
                 // not a workaround.
                 if outcome.is_self_healing() && !outcome.is_terminal_success() {
                     last = describe_environment_failure(config);
+                    record(&mut attempts, &outcome, Some(last.clone()));
                     eprintln!(
                         "  resume attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS}: stale vote-tree \
                          cache discarded by the SDK; re-driving"
@@ -133,11 +215,14 @@ pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<RunOu
                 }
                 if outcome.is_environmental() && !outcome.is_terminal_success() {
                     last = describe_environment_failure(config);
+                    record(&mut attempts, &outcome, Some(last.clone()));
                     eprintln!("  resume attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS}: {last}");
                     continue;
                 }
                 if outcome.needs_background_recovery() {
+                    crate::assertions::assert_a_background_resume_ran_a_pass(&outcome)?;
                     last = "background share tracking exhausted the suite time budget".into();
+                    record(&mut attempts, &outcome, Some(last.clone()));
                     eprintln!(
                         "  resume attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS}: {last}; \
                          reopening the same sidecar for remaining confirmations"
@@ -150,16 +235,26 @@ pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<RunOu
                     // Background tracking settles existing rows; reopening the
                     // driver is what executes those remaining obligations.
                     last = format!("incomplete helper delivery: {:?}", outcome.failures);
+                    record(&mut attempts, &outcome, Some(last.clone()));
                     eprintln!(
                         "  resume attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS}: helper delivery \
                          incomplete; reopening the same sidecar for remaining obligations"
                     );
                     continue;
                 }
-                return Ok(outcome);
+                record(&mut attempts, &outcome, None);
+                return Ok(ResumeTrace { attempts, outcome });
             }
             CrashOutcome::InfrastructureFailure => {
                 last = describe_environment_failure(config);
+                // No outcome to read: the child never got far enough to write
+                // one, so the attempt is recorded from what the parent knows.
+                attempts.push(ResumeAttempt {
+                    ended_at: "InfrastructureFailure".to_string(),
+                    stalled_step_chain_reads: 0,
+                    chain_reads: 0,
+                    redrive_reason: Some(last.clone()),
+                });
                 eprintln!("  resume attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS}: {last}");
             }
             other => anyhow::bail!("unarmed run ended unexpectedly: {other:?}"),
@@ -172,8 +267,22 @@ pub fn run_to_quiescence(worker: &Path, config: &RoundRunConfig) -> Result<RunOu
     anyhow::bail!(
         "resume did not converge after {INFRASTRUCTURE_ATTEMPTS} attempts, all ending the \
          same way. This is a conformance failure rather than an environment one unless the \
-         message below is a transport error. Last: {last}"
+         message below is a transport error. Attempts: {:?}. Last: {last}",
+        attempts
+            .iter()
+            .map(|attempt| attempt.ended_at.as_str())
+            .collect::<Vec<_>>()
     )
+}
+
+/// Files one finished attempt, copying the evidence out of its outcome.
+fn record(attempts: &mut Vec<ResumeAttempt>, outcome: &RunOutcome, redrive_reason: Option<String>) {
+    attempts.push(ResumeAttempt {
+        ended_at: outcome.quiescence_kind.clone(),
+        stalled_step_chain_reads: outcome.stalled_step_chain_reads,
+        chain_reads: outcome.chain_reads,
+        redrive_reason,
+    });
 }
 
 /// Drives a child until it crashes at its armed stage, retrying runs the
@@ -188,23 +297,32 @@ pub fn run_until_crash(worker: &Path, config: &RoundRunConfig) -> Result<CrashRu
         .context("run_until_crash was given an unarmed configuration")?;
 
     let mut last = None;
+    let mut redrives = 0;
     for attempt in 1..=INFRASTRUCTURE_ATTEMPTS {
         match attempt_crash(worker, config, stage) {
-            Ok(run) => return Ok(run),
+            Ok(mut run) => {
+                run.redrives = redrives;
+                return Ok(run);
+            }
             Err(AttemptFailure::Infrastructure(reason)) => {
                 eprintln!("  attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS} for {stage}: {reason}");
                 last = Some(reason);
+                redrives += 1;
                 // Continue from the durable state this attempt left. Another
                 // bundle may have reserved or dispatched a submission before
                 // the target bundle hit an environmental failure, and deleting
                 // the sidecar would discard the only recovery evidence.
             }
-            Err(AttemptFailure::ChainRecoveryStalled(quiescence)) => {
+            Err(AttemptFailure::ChainRecoveryStalled(outcome)) => {
+                crate::assertions::assert_a_stall_attempted_recovery(&outcome)?;
                 eprintln!(
                     "  attempt {attempt}/{INFRASTRUCTURE_ATTEMPTS} for {stage}: chain recovery \
-                     stalled before the seam; waiting for the chain to advance"
+                     stalled after {} chain read(s) for the stalled step; waiting for the \
+                     chain to advance",
+                    outcome.stalled_step_chain_reads
                 );
-                last = Some(format!("chain recovery stalled at {quiescence}"));
+                last = Some(format!("chain recovery stalled at {}", outcome.quiescence));
+                redrives += 1;
                 std::thread::sleep(CHAIN_ADVANCE_WAIT);
             }
             Err(AttemptFailure::Fatal(error)) => return Err(error),
@@ -221,7 +339,12 @@ enum AttemptFailure {
     /// The run ended because the chain had not advanced far enough, not
     /// because the seam stopped firing. Worth waiting out and re-driving with
     /// the stage still armed.
-    ChainRecoveryStalled(String),
+    ///
+    /// Carries the whole outcome rather than its rendering so the same
+    /// evidence rule `run_to_quiescence` applies can be applied here: an armed
+    /// run that stalled without looking is the same finding whichever loop
+    /// observed it.
+    ChainRecoveryStalled(Box<RunOutcome>),
     Fatal(anyhow::Error),
 }
 
@@ -262,9 +385,9 @@ fn attempt_crash(
                     || (outcome.quiescence_kind == "TargetRecoveryPending"
                         && outcome.failures.is_empty())
                 {
-                    return Err(AttemptFailure::ChainRecoveryStalled(
-                        outcome.quiescence.clone(),
-                    ));
+                    return Err(AttemptFailure::ChainRecoveryStalled(Box::new(
+                        outcome.clone(),
+                    )));
                 }
             }
             return Err(AttemptFailure::Fatal(anyhow::anyhow!(
@@ -295,6 +418,7 @@ fn attempt_crash(
     Ok(CrashRun {
         sidecar: config.sidecar.clone(),
         observations,
+        redrives: 0,
     })
 }
 
@@ -340,6 +464,15 @@ pub fn run_until_the_stall_resolves(
     // Read even when the child was killed: a run that hung on its last request
     // may still have written an outcome for the work it completed first.
     let outcome = RunOutcome::read(&config.outcome).ok();
+    // Held to the same evidence rule as a re-driven resume, and for a sharper
+    // reason here: this axis arms a *read*, so a run that ended on a stalled
+    // recovery without issuing one did not merely fail to finish — it never
+    // reached the request the case exists to hang. Reporting that as "the
+    // armed class was never seen" would read as a gap in the taxonomy rather
+    // than as the lifecycle defect it is.
+    if let Some(outcome) = &outcome {
+        crate::assertions::assert_a_stall_attempted_recovery(outcome)?;
+    }
 
     Ok(StalledRun {
         observations,

@@ -35,6 +35,7 @@ use zcash_voting::{
     ShareTrackingHostSourceBridge, ShareTrackingQuiescence, ShareTrackingReporterBridge,
 };
 
+use crate::chain_reads::{ChainReadLedger, CountingRoute};
 use crate::child::{CrashHelperTransport, CrashLog, CrashReporter, CrashTarget, CrashTransport};
 use crate::helper_fleet::HelperFleetRoute;
 use crate::stall::{RequestClassifier, StallTarget, StallingRoute};
@@ -45,7 +46,14 @@ use crate::stall::{RequestClassifier, StallTarget, StallingRoute};
 /// every transport must be built on the *same* value: the fleet's availability
 /// and the armed stall have to apply to helper, chain, PIR, and tree traffic
 /// alike, and two separately constructed routes would silently disagree.
-type SuiteRoute = StallingRoute<HelperFleetRoute<zcash_voting::transport::DirectRoute>>;
+///
+/// `CountingRoute` sits outermost so a request armed to hang is still counted
+/// as asked, and — more importantly — so the vote-tree transport is counted at
+/// all: it is built from its own `HyperTransport` over this shared route rather
+/// than through `CrashTransport`, so the exact-tree scan never passes the chain
+/// wrapper. Counting at the route is the only layer every caller shares.
+type SuiteRoute =
+    CountingRoute<StallingRoute<HelperFleetRoute<zcash_voting::transport::DirectRoute>>>;
 use crate::environment::ZCASH_NETWORK;
 use crate::provisioning::fetch_round;
 use crate::run_config::{
@@ -224,15 +232,23 @@ async fn drive(
     // which is what makes a bound the SDK claims into a bound this suite can
     // watch it keep. With an empty plan each is a pass-through, so a control
     // run and a faulted run share one code path.
-    let route = Arc::new(StallingRoute::new(
-        HelperFleetRoute::new(
-            zcash_voting::transport::DirectRoute::default(),
-            config.fleet.clone(),
+    let classifier = RequestClassifier::new(config.endpoints.pir_urls.clone());
+    // Shared with the reporter below: the route sees the requests and the
+    // reporter sees which step made them, and neither is enough on its own.
+    let chain_reads = Arc::new(ChainReadLedger::new());
+    let route = Arc::new(CountingRoute::new(
+        StallingRoute::new(
+            HelperFleetRoute::new(
+                zcash_voting::transport::DirectRoute::default(),
+                config.fleet.clone(),
+                Arc::clone(&log),
+            ),
+            config.stall.clone(),
+            classifier.clone(),
             Arc::clone(&log),
         ),
-        config.stall.clone(),
-        RequestClassifier::new(config.endpoints.pir_urls.clone()),
-        Arc::clone(&log),
+        classifier,
+        Arc::clone(&chain_reads),
     ));
     let route_for_helpers = Arc::clone(&route);
     let helper_client = HelperClient::new(
@@ -370,6 +386,13 @@ async fn drive(
         {
             control.cancel();
         }
+        // Before the crash reporter, and unconditionally: an armed run dies
+        // inside `report`, so anything recorded afterwards would be lost, and
+        // a step that is selected and then reads nothing is exactly the
+        // observation the ledger exists to make.
+        if let RoundDriveEvent::StepSelected { step } = &event {
+            chain_reads.select(step);
+        }
         crash_reporter.report(event);
     });
     let report = RoundDriver::new(&executor)
@@ -408,6 +431,10 @@ async fn drive(
             .collect(),
         dispatches: 0,
         share_tracking,
+        stalled_step_chain_reads: stalled_step(&report.quiescence)
+            .map(|step| chain_reads.reads_for(step))
+            .unwrap_or(0),
+        chain_reads: chain_reads.total(),
     };
     let mut outcome = outcome;
     if target_recovery {
@@ -468,6 +495,20 @@ fn policy(armed: bool, max_dispatches: usize) -> RoundDrivePolicy {
     RoundDrivePolicy {
         failure_isolation: FailureIsolation::StopRound,
         ..base
+    }
+}
+
+/// The step a stalled chain recovery ended on, if that is how the run ended.
+///
+/// `ChainTerminal` is deliberately excluded. It also names a step, but it is a
+/// verdict the host must act on rather than something a later run resolves, so
+/// the harness never re-drives it and never needs evidence that it looked.
+fn stalled_step(
+    quiescence: &zcash_voting::round_drive::RoundQuiescence,
+) -> Option<&zcash_voting::session::NextStep> {
+    match quiescence {
+        zcash_voting::round_drive::RoundQuiescence::ChainRecoveryStalled { step, .. } => Some(step),
+        _ => None,
     }
 }
 

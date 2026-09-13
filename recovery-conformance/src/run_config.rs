@@ -219,7 +219,7 @@ impl ShareTrackingSummary {
 }
 
 /// What an unarmed run ended up doing.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct RunOutcome {
     /// Debug rendering of `RoundQuiescence`.
     pub quiescence: String,
@@ -233,6 +233,26 @@ pub struct RunOutcome {
     /// parses, and an armed run never writes one at all.
     #[serde(default)]
     pub share_tracking: Vec<ShareTrackingSummary>,
+    /// Chain reads — status polls and exact-tree pages — made while the step
+    /// this run stalled on held the route.
+    ///
+    /// Zero on a run that did not stall, and meaningless there. On a run that
+    /// did, it is the difference between a recovery that looked and found
+    /// nothing and one that returned without asking: see
+    /// [`crate::chain_reads`].
+    ///
+    /// Deliberately scoped to the stalled step rather than to the run. A
+    /// resumed round drives its other bundles to completion and their traffic
+    /// would never be zero.
+    #[serde(default)]
+    pub stalled_step_chain_reads: usize,
+    /// Every chain read the run made, whichever step held the route.
+    ///
+    /// Reported rather than asserted on: it is the denominator that makes a
+    /// zero above legible — "no reads at all" and "plenty of reads, none for
+    /// this step" are different findings.
+    #[serde(default)]
+    pub chain_reads: usize,
 }
 
 impl RunOutcome {
