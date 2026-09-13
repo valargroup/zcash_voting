@@ -144,6 +144,11 @@ an old-valid delegation proof; advertised protocol versions and a PIR handshake
 alone did not establish verifier compatibility. The report records exact builds,
 artifact hashes, shared read-only dependencies, and cleanup evidence.
 
+The [v3.1.0 report](../docs/migration-compatibility-v3.1.0.md) records the same
+real-vote profile passing schema 17 → 24 migration, using v3.1.0’s native share
+delivery journal. Both snapshots passed again after the compatible isolated
+server hosts were deleted.
+
 ## External tally dependency
 
 The SDK sidecar stores the voter's choices and recovery history, not aggregate

@@ -93,3 +93,18 @@ also passed real transaction-denial and process-kill tests with retry.
 seven tests and deterministic concurrent-opening regression passed. Both
 release adapters built against their untouched pinned releases. The retained
 real v3.0.0 capture also passed the generalized replay as a regression check.
+
+The temporary primary (`600057785`) and secondary (`600057790`) were deleted
+only after both snapshots passed and a checksum-verified evidence copy existed
+outside `target/`. DigitalOcean returned 404 for both hosts; the dedicated
+firewall and tag were removed. `cleanup-report.json` binds deletion to the
+successful pre-deletion replay report. Full replay passed again after deletion
+at commit `5dafef2d`. The post-cleanup replay report SHA-256 is
+`32a183fd5fe3de2269c02e985102db3c0848d3394456b65a3547bc1eafcba0b0`. Earlier reports are archived by checksum before replacement.
+
+Reproduce that offline check from the repository root:
+
+```sh
+make migration-compat-replay RELEASE_TAG=v3.1.0 \
+  FIXTURE_DIR="$HOME/migration-evidence/zcash-voting-v3.1-to-main-20260913/completed-capture"
+```
