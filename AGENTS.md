@@ -117,12 +117,13 @@ wholesale as a side effect of an unrelated change.
 
 ## Release branches
 
-`main` is the development line for the next release. Each shipped major series
-is maintained on a `release/vMAJOR.x` branch, currently `release/v3.x`.
+`main` is the development line for the next release. Each shipped release series
+is maintained on a `release/vMAJOR.MINOR.x` branch, currently
+`release/v5.0.x`.
 
 Do not push a fix directly to a maintenance branch. Land it on `main` first,
-then apply the `A:backport/v3.x` label so Mergify opens a reviewed backport PR.
-Only semver-compatible changes may be backported.
+then apply the `A:backport/v5.0.x` label so Mergify opens a reviewed backport
+PR. Only semver-compatible changes may be backported.
 
 Read [`docs/release-branches.md`](docs/release-branches.md) before deciding
 which branch a change targets, applying a backport label, or cutting a new

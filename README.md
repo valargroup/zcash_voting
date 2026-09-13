@@ -54,9 +54,10 @@ the `make` targets, which give each feature permutation its own
 
 ## Releases and Branching
 
-`main` is the development line for the next release. Each shipped major series
-is maintained on a `release/vMAJOR.x` branch, and semver-compatible fixes reach
-those branches through reviewed automated backports rather than direct pushes.
+`main` is the development line for the next release. Each shipped release
+series is maintained on a `release/vMAJOR.MINOR.x` branch, and semver-compatible
+fixes reach those branches through reviewed automated backports rather than
+direct pushes.
 
 See [Release branches and backports](docs/release-branches.md) for the backport
 labels and the rules for what may ship on a maintenance line, and

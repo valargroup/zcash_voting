@@ -25,8 +25,8 @@ polling, or recovery, read
 
 ## Releases and backports
 
-`main` is the development line for the next release. Shipped major series are
-maintained on `release/vMAJOR.x` branches, and semver-compatible fixes reach them
-through reviewed automated backports rather than direct pushes. Read
+`main` is the development line for the next release. Shipped release series are
+maintained on `release/vMAJOR.MINOR.x` branches, and semver-compatible fixes
+reach them through reviewed automated backports rather than direct pushes. Read
 [Release branches and backports](docs/release-branches.md) before deciding where
 a change lands or applying a backport label.

@@ -7,11 +7,11 @@ defaults:
       label_conflicts: A:backport/conflict
 
 pull_request_rules:
-  - name: backport marked changes to release/v3.x
+  - name: backport marked changes to release/v5.0.x
     conditions:
       - base=main
-      - label=A:backport/v3.x
+      - label=A:backport/v5.0.x
     actions:
       backport:
         branches:
-          - release/v3.x
+          - release/v5.0.x

@@ -1,14 +1,14 @@
 # Release branches and backports
 
 `main` is the development line for the next release. A branch named
-`release/vMAJOR.x` is the maintenance line for a shipped major series, such as
-`release/v3.x` for the `v3` releases. The maintenance line exists so a fix can
-ship against an already-released version without also shipping whatever else has
-landed on `main` since.
+`release/vMAJOR.MINOR.x` is the maintenance line for a shipped release series,
+such as `release/v5.0.x` for the `v5.0` releases. The maintenance line exists so
+a fix can ship against an already-released version without also shipping
+whatever else has landed on `main` since.
 
 Cut a maintenance branch from the chosen release commit before the first release
 candidate on that line. Every release tag for the line should be reachable from
-its branch: `v3.1.0-rc.17` and `v3.1.0` both belong on `release/v3.x`. Nothing
+its branch: `v5.0.0-rc.1` and `v5.0.0` both belong on `release/v5.0.x`. Nothing
 enforces this in CI, so check it before tagging.
 
 Tags in this repository take two forms. `zcash_voting` releases are tagged
@@ -36,9 +36,9 @@ next release from `main`, not on the maintenance line.
 
 ## Backport flow
 
-Changes merge to `main` first. Apply `A:backport/v3.x` to the source PR when the
+Changes merge to `main` first. Apply `A:backport/v5.0.x` to the source PR when the
 change should also ship on the maintenance line. After the source PR merges,
-Mergify opens a separate PR against `release/v3.x` and assigns it to the source
+Mergify opens a separate PR against `release/v5.0.x` and assigns it to the source
 author.
 
 That backport PR is an ordinary PR. It runs the normal CI suite and needs human
@@ -47,18 +47,39 @@ opens the PR anyway and applies `A:backport/conflict` — resolve the conflict o
 the generated PR rather than pushing directly to the maintenance branch.
 
 Release-only metadata, such as a version bump for the maintenance line, may
-target `release/v3.x` directly. An emergency fix made directly on the branch
+target `release/v5.0.x` directly. An emergency fix made directly on the branch
 must be forwarded to `main` immediately afterward, or the next release will
 silently regress it.
 
 Applying a backport label never creates a tag, publishes a crate, or releases
 anything. Releases remain explicit tags cut by a human.
 
+## Opening a maintenance line
+
+Prepare a maintenance line in this order so Mergify never targets a branch whose
+policy is absent from `main`:
+
+1. Open a PR against `main` that updates this document, contributor guidance,
+   the pull request template, and `.github/mergify.yml` for the new line.
+2. Merge that PR, update the local `main` from `origin/main`, and record the
+   resulting commit.
+3. Create `release/vMAJOR.MINOR.x` at that exact commit and push the branch.
+4. Create its `A:backport/vMAJOR.MINOR.x` label with a description that names
+   the target branch.
+5. Verify that the branch and label exist on GitHub and that the Mergify rule on
+   `main` names both exactly.
+
+Do not apply the new backport label until the target branch exists. The branch
+cut commit must contain the matching Mergify rule, so future maintenance work
+and the source branch agree on the backport policy.
+
 ## Retiring a line
 
 When a maintenance line reaches end of life, remove its rule from
-`.github/mergify.yml` and delete its `A:backport/*` label. Keep only the
-currently supported release lines active.
+`.github/mergify.yml` and delete its `A:backport/*` label after confirming that
+no open PR still uses it. Keep only the currently supported release lines
+active. Historical release branches remain available; retiring a line does not
+delete its branch or tags.
 
 ## Requirements
 
