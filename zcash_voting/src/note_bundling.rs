@@ -414,7 +414,18 @@ pub fn voting_power_for_round(
     round_id: &str,
 ) -> Result<u64, VotingError> {
     let policy = voting_db.effective_bundle_policy(round_id, BundlePolicy::default())?;
-    Ok(voting_power_with_policy(notes, policy))
+    let persisted_bundle_count = voting_db.get_bundle_count(round_id)?;
+    let Some(plan) = canonical_note_bundle_plan_for_notes(&notes.voting_note_infos(), policy)
+        // Preserve the historical reporting behavior for malformed note rows.
+        .ok()
+    else {
+        return Ok(0);
+    };
+    Ok(
+        crate::round::effective_round_bundle_plan_for_canonical_plan(plan, persisted_bundle_count)?
+            .plan
+            .eligible_weight,
+    )
 }
 
 /// Returns quantized zatoshi voting power under an explicit bundle policy.

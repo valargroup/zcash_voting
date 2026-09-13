@@ -23,6 +23,12 @@ use super::{DelegationPipeline, WalletDbOpener};
 pub struct VotingEligibilityReport {
     pub eligibility: MinimumVotingEligibility,
     pub privacy_trim_dropped_value_zatoshi: u64,
+    /// Persisted trailing bundles intentionally removed from this round.
+    pub skipped_suffix_bundles: u32,
+    /// Notes contained in the intentionally removed trailing bundles.
+    pub skipped_suffix_notes: u32,
+    /// Raw value contained in the intentionally removed trailing bundles.
+    pub skipped_suffix_value_zatoshi: u64,
 }
 
 /// Decodes the anchor tree state a host fetched from lightwalletd.
@@ -252,14 +258,25 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
         observations: &crate::ObservationScope,
     ) -> Result<VotingEligibilityReport, VotingError> {
         let notes = self.execute_select_notes(observations)?;
-        let policy = self
-            .scoped_voting_db()?
-            .effective_bundle_policy(self.round_id(), self.bundle_policy)?;
-        let (eligibility, plan) =
-            crate::note_bundling::minimum_voting_eligibility_and_plan_for_notes(&notes, policy)?;
+        let voting_db = self.scoped_voting_db()?;
+        let policy = voting_db.effective_bundle_policy(self.round_id(), self.bundle_policy)?;
+        let persisted_bundle_count = voting_db.get_bundle_count(self.round_id())?;
+        let effective_plan = crate::round::effective_round_bundle_plan_for_notes(
+            &notes,
+            policy,
+            persisted_bundle_count,
+        )?;
+        let surviving_note_count = effective_plan.plan.bundles.iter().map(Vec::len).sum();
+        let eligibility = MinimumVotingEligibility {
+            distinct_note_count: surviving_note_count,
+            eligible_weight: effective_plan.plan.eligible_weight,
+        };
         Ok(VotingEligibilityReport {
             eligibility,
-            privacy_trim_dropped_value_zatoshi: plan.privacy_trim.dropped_value,
+            privacy_trim_dropped_value_zatoshi: effective_plan.plan.privacy_trim.dropped_value,
+            skipped_suffix_bundles: effective_plan.skipped_suffix.bundles,
+            skipped_suffix_notes: effective_plan.skipped_suffix.notes,
+            skipped_suffix_value_zatoshi: effective_plan.skipped_suffix.value_zatoshi,
         })
     }
 }

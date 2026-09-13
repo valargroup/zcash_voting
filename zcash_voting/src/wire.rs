@@ -203,6 +203,15 @@ pub struct VotingNoteSelectionResultView {
     /// bundle-quantized voting weight. Surface this distinction to the voter.
     #[serde(default)]
     pub privacy_trim: PrivacyTrim,
+    /// Number of persisted trailing bundles intentionally removed from the round.
+    #[serde(default)]
+    pub skipped_suffix_bundles: u32,
+    /// Number of selected notes in the intentionally removed trailing bundles.
+    #[serde(default)]
+    pub skipped_suffix_notes: u32,
+    /// Raw value in the intentionally removed trailing bundles.
+    #[serde(default)]
+    pub skipped_suffix_value_zatoshi: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
