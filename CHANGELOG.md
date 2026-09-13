@@ -43,6 +43,9 @@ This release is `zcash_voting` 4.0.0.
 
 ### Changed
 
+- Prepare Zakura's retained commitment tables immediately after delegation and
+  vote proving-key generation, so the first proof does not pay that setup cost.
+  The LRZ backend is unchanged.
 - Drive up to five bundle obligations concurrently with rolling refill,
   continuation priority, independent re-poll deadlines, and bundle-scoped
   executor exclusion. Completion events follow completion order; report
