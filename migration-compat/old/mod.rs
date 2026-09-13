@@ -1,6 +1,8 @@
-//! Host adapter compiled only against the unmodified v3.0.0 release.
+//! Host adapter compiled only against the selected unmodified SDK release.
+mod backend;
 mod confirmation;
 mod delegation;
+mod delivery;
 mod setup;
 mod transport;
 mod verification;
@@ -48,7 +50,7 @@ pub fn run() -> Result<()> {
             endpoint,
             std::sync::Arc::new(zcash_voting::HyperTransport::new()),
         )?;
-        println!("v3.0.0 PIR handshake passed");
+        println!("Released SDK PIR handshake passed");
         return Ok(());
     }
     let config: CaptureConfig = serde_json::from_slice(&std::fs::read(path)?)?;
@@ -58,7 +60,7 @@ pub fn run() -> Result<()> {
     );
     ensure!(
         config.helper_urls.len() == 1,
-        "capture profile requires the staging primary helper"
+        "capture profile requires one helper"
     );
     let status = transport::request(
         &format!("{}/status", config.chain_rpc.trim_end_matches('/')),

@@ -1,4 +1,5 @@
 //! Prepare the old wallet and all bundles before proving advances round phase.
+use super::backend::{wallet_rng, zcash_client_sqlite};
 use super::{wallet_sync, CaptureConfig};
 use anyhow::{ensure, Result};
 use zcash_voting::{delegate, round::VotingDb, session::Decision, Network, VotingHotkey};
@@ -10,7 +11,7 @@ pub(super) struct PreparedCapture {
         rusqlite::Connection,
         Network,
         zcash_client_sqlite::util::SystemClock,
-        rand::rngs::OsRng,
+        wallet_rng::rngs::OsRng,
     >,
     pub hotkey: VotingHotkey,
     pub bundles: Vec<delegate::PreparedDelegationBundle>,
@@ -38,14 +39,14 @@ pub(super) fn prepare(config: &CaptureConfig, seed: &[u8]) -> Result<PreparedCap
             lightwalletd_url: &config.lightwalletd,
             network: Network::Testnet,
             round_params: config.round_params.clone(),
-            round_name: "migration-v3.0.0",
+            round_name: "migration-compatibility",
         },
     ))?;
     let wallet_db = zcash_client_sqlite::WalletDb::for_path(
         &wallet.path,
         Network::Testnet,
         zcash_client_sqlite::util::SystemClock,
-        rand::rngs::OsRng,
+        wallet_rng::rngs::OsRng,
     )?;
     // Preparation is completed for every bundle before proving advances phase.
     let first = delegate::prepare_delegation_bundle(

@@ -2,7 +2,7 @@
 
 This suite distinguishes **a real historical voting database** from a database
 whose schema merely resembles an old release. The producer builds against
-v3.0.0 (`37a0ea9530a26d8b3e965db09fafc119441dee38`) without changing its source,
+the selected pinned release without changing its source,
 lockfile, or crypto dependencies. It does not enable `test-fixtures` or write
 SQL voting records. The added host adapter calls the release's wallet scanning,
 delegation, proving, signing, confirmation, and share APIs.
@@ -14,11 +14,15 @@ migration. Do not promote it to a live capture or hand-fill its missing fields.
 
 ## Running
 
-All entry points are Make targets, run from the repository root:
+All entry points are Make targets, run from the repository root. Add
+`RELEASE_TAG=v3.1.0` to build, capture, replay, and verify-old for schema 17;
+the default `RELEASE_TAG=v3.0.0` exercises schema 13. Pinned commits are
+`37a0ea9530a26d8b3e965db09fafc119441dee38` and
+`7e0ef89126155966f91a1eb6933cdeb48794acdd`, respectively:
 
 - `make migration-compat-build`: build the old producer and both history readers.
 - `make migration-compat-capture`: provision a new staging round, complete voting
-  with v3.0.0, capture both accepted and confirmed share states, and replay them.
+  with the selected release, capture both accepted and confirmed share states, and replay them.
   This uses real staging services and needs `VOTE_MANAGER_VOTE_SDK` and
   `VOTE_SDK_VOTER_TEST` in the runtime environment. For example:
 
@@ -40,7 +44,7 @@ All entry points are Make targets, run from the repository root:
   needed. Initial builds may fetch dependencies; history readers perform no
   network operations and on macOS run with network access denied by sandbox-exec.
 - `make migration-compat-verify-old FIXTURE_DB=/absolute/path/wallet.sqlite.voting`:
-  verify retained delegation proofs with v3.0.0's own verifier and reject a
+  verify retained delegation proofs with the selected release's own verifier and reject a
   damaged-proof control. This does not broadcast or alter the database.
 - `make migration-compat-unit`: test that the artifact comparator detects loss,
   same-length BLOB substitution, changed choices/recovery, and preserves WAL data.
@@ -49,8 +53,9 @@ All entry points are Make targets, run from the repository root:
   or kill child processes inside early, middle, and late migration transactions,
   and immediately after commit.
 
-The producer is a release build in `target/migration-compat/old-build`; main's
-reader uses `target/zakura`. The old tracked source and lockfile are checked
+The producer is a release build in `target/migration-compat/old-build`;
+v3.1.0 uses `target/migration-compat/old-build-v3.1.0`; main's reader uses
+`target/zakura`. The old tracked source and lockfile are checked
 against the pinned Git archive before each build. Both readers compile the exact
 same `history.rs`, so the baseline is not a second hand-coded approximation of
 what the old SDK returned. The capture/replay tools never enter `make test`'s
@@ -91,10 +96,15 @@ options respectively. It generates real delegation and vote proofs, sends actual
 transactions, and passes successful chain transaction events through the old
 confirmation APIs. The old verifier checks delegation proofs before dispatch.
 
-The capture profile uses 16 shares per vote, the staging primary helper, and the
+The capture profile uses 16 shares per vote, one configured helper, and the
 release's supported expedited scheduling (`last_moment_buffer_seconds=7200`).
 This exercises full recovery material, not a single-share shortcut. It does not
 claim coverage of normal delayed timing or multiple-helper availability.
+
+For v3.1.0 the adapter uses the release’s public `prepare_share_delivery`,
+`submit_prepared_shares`, and `confirm_pending_share` APIs, including their
+durable generation and attempt journal. The recording transport delegates to
+the real HTTP transport; it does not synthesize acceptance or confirmation.
 
 An HTTP failure never triggers another POST. Complete responses, including
 rejections, are retained in `http-evidence/`. An ambiguous attempt fails the run;

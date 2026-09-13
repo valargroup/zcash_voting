@@ -1,4 +1,5 @@
 //! Prove and submit old-release delegations; only real chain events confirm them.
+use super::backend::{orchard, pasta_curves, wallet_rng, zcash_keys};
 use super::{setup::PreparedCapture, transport, verification, CaptureConfig};
 use anyhow::{ensure, Context, Result};
 use pasta_curves::{group::ff::PrimeField, pallas};
@@ -41,7 +42,7 @@ pub(super) fn submit(
             .context("invalid alpha")?;
         let signature = orchard::keys::SpendAuthorizingKey::from(keys.orchard())
             .randomize(&alpha)
-            .sign(rand::rngs::OsRng, &request.sighash);
+            .sign(wallet_rng::rngs::OsRng, &request.sighash);
         bundle.prove(&db, &pir, &NoopProgressReporter)?;
         verification::verify(&VotingDb::wallet_sidecar_path(&wallet.path))?;
         let signed = bundle.signed_bundle(

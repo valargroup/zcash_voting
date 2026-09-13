@@ -17,7 +17,11 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = '37a0ea9530a26d8b3e965db09fafc119441dee38'
+RELEASES = {'v3.0.0': ('37a0ea9530a26d8b3e965db09fafc119441dee38', 13),
+            'v3.1.0': ('7e0ef89126155966f91a1eb6933cdeb48794acdd', 17)}
+RELEASE_TAG = os.environ.get('MIGRATION_RELEASE', 'v3.0.0')
+RELEASE, RELEASE_SCHEMA = RELEASES[RELEASE_TAG]
+OLD_BUILD = 'old-build' if RELEASE_TAG == 'v3.0.0' else 'old-build-v3.1.0'
 BUILD = ROOT / 'target' / 'migration-compat'
 
 
@@ -30,7 +34,7 @@ def checked(argv, **kwargs):
 
 
 def build_old():
-    checkout = BUILD / 'v3.0.0'
+    checkout = BUILD / RELEASE_TAG
     archive = subprocess.check_output(['git', 'archive', RELEASE], cwd=ROOT)
     with tarfile.open(fileobj=io.BytesIO(archive)) as contents:
         if not checkout.exists():
@@ -47,12 +51,15 @@ def build_old():
     shutil.copyfile(ROOT / 'migration-compat/history.rs', examples / 'migration_history_impl/mod.rs')
     (examples / 'migration_history.rs').write_text('#[path = "migration_history_impl/mod.rs"] mod history; fn main() -> anyhow::Result<()> { history::run() }\n')
     shutil.copytree(ROOT / 'migration-compat/old', examples / 'migration_capture', dirs_exist_ok=True)
+    if RELEASE_TAG == 'v3.1.0':
+        shutil.copyfile(ROOT / 'migration-compat/backends/v3_1.rs', examples / 'migration_capture/backend.rs')
+        shutil.copytree(ROOT / 'migration-compat/v3_1', examples / 'migration_capture', dirs_exist_ok=True)
     (examples / 'migration_capture.rs').write_text('#[path = "migration_capture/mod.rs"] mod capture; fn main() -> anyhow::Result<()> { capture::run() }\n')
     lock_hash = digest(checkout / 'Cargo.lock')
     checked(['cargo', 'build', '--locked', '--release', '-p', 'zcash_voting', '--example', 'migration_history', '--example', 'migration_capture'],
-            cwd=checkout, env=dict(os.environ, CARGO_TARGET_DIR=str(BUILD / 'old-build')))
+            cwd=checkout, env=dict(os.environ, CARGO_TARGET_DIR=str(BUILD / OLD_BUILD)))
     assert digest(checkout / 'Cargo.lock') == lock_hash, 'old lockfile changed'
-    return BUILD / 'old-build/release/examples'
+    return BUILD / OLD_BUILD / 'release/examples'
 
 
 def build_main():
@@ -132,9 +139,9 @@ def schema(path):
 def replay(directory, old_binary, main_binary):
     manifest = json.loads((directory / 'manifest.json').read_text())
     assert manifest['release_commit'] == RELEASE
-    assert manifest['provenance'] == 'live-v3.0.0', 'not a real release capture'
-    assert manifest['schema_version'] == 13, 'capture must originate at released schema 13'
-    assert manifest['lockfile_sha256'] == digest(BUILD / 'v3.0.0/Cargo.lock'), 'released lockfile identity differs'
+    assert manifest['provenance'] == f'live-{RELEASE_TAG}', 'not a real release capture'
+    assert manifest['schema_version'] == RELEASE_SCHEMA, 'capture schema does not match selected release'
+    assert manifest['lockfile_sha256'] == digest(BUILD / RELEASE_TAG / 'Cargo.lock'), 'released lockfile identity differs'
     assert digest(directory / 'config.json') == manifest['config_sha256'], 'capture configuration changed'
     assert digest(directory / 'evidence.json') == manifest['evidence_sha256'], 'capture evidence changed'
     for name, checksum in manifest['http_evidence_sha256'].items():
@@ -148,7 +155,7 @@ def replay(directory, old_binary, main_binary):
         source = directory / capture['database']
         assert digest(source) == capture['sha256'], 'capture checksum mismatch'
         with connect(source) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 13, 'source is not a released database'
+            assert db.execute('PRAGMA user_version').fetchone()[0] == RELEASE_SCHEMA, 'source is not a released database'
         before = snapshot(source)
         with tempfile.TemporaryDirectory(prefix='migration-replay-') as temp:
             wallet = Path(temp) / 'wallet.sqlite'
@@ -183,9 +190,18 @@ def replay(directory, old_binary, main_binary):
         checked(['make', 'migration-compat-faults', f'FIXTURE_DB={source}'], cwd=ROOT)
         assert digest(source) == capture['sha256'], 'original capture changed'
     assert reports, 'empty capture set'
-    report = {'release_commit': RELEASE, 'main_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+    report = {'release_commit': RELEASE, 'release_tag': RELEASE_TAG,
+              'base_main_commit': subprocess.check_output(['git', 'merge-base', 'HEAD', 'origin/main'], cwd=ROOT, text=True).strip(), 'main_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
               'main_reader_sha256': digest(main_binary), 'captures': reports, 'aggregate_tally': 'external dependency, not tested'}
-    (directory / 'replay-report.json').write_text(json.dumps(report, indent=2) + '\n')
+    report_path = directory / 'replay-report.json'
+    if report_path.exists():
+        previous = report_path.read_bytes()
+        archived = directory / f'replay-report-{hashlib.sha256(previous).hexdigest()}.json'
+        if archived.exists():
+            assert archived.read_bytes() == previous, 'archived replay report differs'
+        else:
+            archived.write_bytes(previous)
+    report_path.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 
 
@@ -220,9 +236,9 @@ def main():
             raise
         shutil.copyfile(config_path, directory / 'config.json')
         manifest = json.loads((directory / 'capture.json').read_text())
-        manifest.update(release_commit=RELEASE, provenance='live-v3.0.0', schema_version=13,
+        manifest.update(release_commit=RELEASE, provenance=f'live-{RELEASE_TAG}', schema_version=RELEASE_SCHEMA,
                         historical_roster=config['historical_roster'],
-                        http_evidence_sha256={p.name: digest(p) for p in sorted((directory / 'http-evidence').glob('*.json'))}, lockfile_sha256=digest(BUILD / 'v3.0.0/Cargo.lock'),
+                        http_evidence_sha256={p.name: digest(p) for p in sorted((directory / 'http-evidence').glob('*.json'))}, lockfile_sha256=digest(BUILD / RELEASE_TAG / 'Cargo.lock'),
                         producer_sha256=digest(old / 'migration_capture'),
                         profile={'helpers': 1, 'shares_per_vote': 16, 'last_moment_buffer_seconds': 7200},
                         config_sha256=digest(config_path), evidence_sha256=digest(directory / 'evidence.json'))

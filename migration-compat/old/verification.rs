@@ -1,5 +1,6 @@
-//! Check retained delegation proofs with the verifier shipped alongside v3.0.0.
+//! Check retained delegation proofs with the verifier shipped with the selected SDK release.
 //! Ledger roots come from the captured round, not from reconstructed prover input.
+use super::backend::{orchard, pasta_curves};
 use anyhow::{ensure, Context, Result};
 use pasta_curves::{group::ff::PrimeField, pallas};
 use voting_circuits::delegation::{derive_nullifier_domain, verify_delegation_proof, Instance};
@@ -62,6 +63,6 @@ pub fn verify(path: &std::path::Path) -> Result<()> {
         verified += 1;
     }
     ensure!(verified > 0, "no delegation proof to verify");
-    println!("v3.0.0 verifier accepted {verified} retained delegation proof(s); damaged controls rejected");
+    println!("Released verifier accepted {verified} retained delegation proof(s); damaged controls rejected");
     Ok(())
 }

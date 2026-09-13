@@ -132,3 +132,25 @@ pub fn confirm(rpc: &str, hash: &str) -> Result<(Value, Vec<TxEvent>)> {
     }
     anyhow::bail!("chain confirmation deadline exceeded")
 }
+
+/// Responses are retained only in the private capture directory, never stdout.
+#[allow(dead_code)]
+pub(super) fn record_helper_response(
+    url: &str,
+    method: &str,
+    status: u16,
+    body: &[u8],
+) -> Result<()> {
+    let directory = EVIDENCE_DIRECTORY
+        .get()
+        .context("response recording not initialized")?;
+    let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
+    std::fs::write(
+        directory.join(format!("{attempt:05}.json")),
+        serde_json::to_vec(&serde_json::json!({
+            "url":url, "method":method, "http_status":status, "transfer_complete":true,
+            "response":String::from_utf8_lossy(body)
+        }))?,
+    )?;
+    Ok(())
+}

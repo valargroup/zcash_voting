@@ -14,11 +14,9 @@ fn released_database() -> TempDb {
         let source =
             Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .unwrap();
-        assert_eq!(
-            source
-                .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
-                .unwrap(),
-            13
+        assert!(
+            matches!(released_version(&source), 13 | 17),
+            "unsupported capture schema"
         );
         source.execute("VACUUM INTO ?1", [temp.path()]).unwrap();
         return temp;
@@ -30,6 +28,29 @@ fn released_database() -> TempDb {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         .unwrap();
     temp
+}
+
+fn released_version(conn: &Connection) -> u32 {
+    conn.pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap()
+}
+
+fn fault_boundaries() -> [&'static str; 3] {
+    let database = released_database();
+    let conn = Connection::open(database.path()).unwrap();
+    if released_version(&conn) == 17 {
+        [
+            "chain_submissions",
+            "round_immediate_share",
+            "combined_cast_rejections",
+        ]
+    } else {
+        [
+            "pir_proof_cache",
+            "helper_share_plans",
+            "combined_cast_rejections",
+        ]
+    }
 }
 
 fn durable_rows(conn: &Connection) -> Vec<(String, Vec<Vec<String>>)> {
@@ -46,13 +67,10 @@ fn durable_rows(conn: &Connection) -> Vec<(String, Vec<Vec<String>>)> {
 
 #[test]
 fn denied_migration_statements_roll_back_all_prior_rungs() {
-    for boundary in [
-        "pir_proof_cache",
-        "helper_share_plans",
-        "combined_cast_rejections",
-    ] {
+    for boundary in fault_boundaries() {
         let temp = released_database();
         let mut conn = Connection::open(temp.path()).unwrap();
+        let original_version = released_version(&conn);
         let schema = schema_objects(&conn);
         let rows = durable_rows(&conn);
         conn.authorizer(Some(move |context: AuthContext<'_>| {
@@ -67,7 +85,7 @@ fn denied_migration_statements_roll_back_all_prior_rungs() {
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                 .unwrap(),
-            13
+            original_version
         );
         migrate(&mut conn).unwrap();
     }
@@ -105,12 +123,7 @@ fn migration_process_worker() {
 
 #[test]
 fn killed_migration_process_preserves_the_released_database() {
-    for boundary in [
-        "pir_proof_cache",
-        "helper_share_plans",
-        "combined_cast_rejections",
-        "after-commit",
-    ] {
+    for boundary in fault_boundaries().into_iter().chain(["after-commit"]) {
         let temp = released_database();
         // Compute the committed expectation on another copy, keeping the crash
         // subject at the released schema until the child opens it.
@@ -120,7 +133,7 @@ fn killed_migration_process_preserves_the_released_database() {
             migrate(&mut conn).unwrap();
             CURRENT_VERSION
         } else {
-            13
+            released_version(&conn)
         };
         let schema = schema_objects(&conn);
         let rows = durable_rows(&conn);

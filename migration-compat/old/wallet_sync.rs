@@ -16,6 +16,7 @@
 //! chunk is collected in memory and then scanned; chunking is what keeps that
 //! buffer bounded across a range of tens of thousands of blocks.
 
+use super::backend::{wallet_rng, zcash_client_backend, zcash_client_sqlite};
 use anyhow::{Context, Result};
 use secrecy::SecretVec;
 
@@ -32,9 +33,9 @@ use zcash_voting::Network;
 /// How many blocks are fetched and scanned at a time.
 ///
 /// Bounds the in-memory buffer. Large enough that per-chunk overhead is
-/// negligible over tens of thousands of blocks, small enough that a testnet
-/// chunk stays comfortably small.
-const CHUNK_BLOCKS: u32 = 2_000;
+/// modest over tens of thousands of blocks, while avoiding HTTP/2 data-frame
+/// limits observed with 2,000-block streams in the v3.1.0 transport.
+const CHUNK_BLOCKS: u32 = 100;
 
 /// A wallet database ready for note selection.
 pub struct SyncedWallet {
@@ -106,7 +107,7 @@ pub async fn sync_wallet(
     let birthday = AccountBirthday::from_treestate(birthday_state, None)
         .map_err(|error| anyhow::anyhow!("building birthday: {error:?}"))?;
 
-    let mut wallet = WalletDb::for_path(db_path, network, SystemClock, rand::rngs::OsRng)
+    let mut wallet = WalletDb::for_path(db_path, network, SystemClock, wallet_rng::rngs::OsRng)
         .context("creating the wallet database")?;
 
     let secret = SecretVec::new(seed.to_vec());
@@ -134,9 +135,14 @@ pub async fn sync_wallet(
     while cursor <= to_height {
         let end = (cursor + u64::from(CHUNK_BLOCKS) - 1).min(to_height);
         let blocks = fetch_range(&mut client, cursor, end).await?;
-        if blocks.is_empty() {
-            break;
-        }
+        anyhow::ensure!(
+            blocks.len() as u64 == end - cursor + 1
+                && blocks
+                    .iter()
+                    .enumerate()
+                    .all(|(offset, block)| block.height == cursor + offset as u64),
+            "incomplete or non-contiguous block range {cursor}..={end}"
+        );
 
         let prior = zcash_voting::lwd::get_tree_state(&mut client, cursor - 1)
             .await
