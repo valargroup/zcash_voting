@@ -321,9 +321,9 @@ context. A reopen must return the same diagnostic until a later observation or
 terminal transition replaces it; persistence cannot silently discard it.
 
 Final ordered positions use a closed typed encoding, not descriptor JSON. All
-positions are `u64` in the lifecycle and must fit SQLite's signed integer range.
-Position zero is valid. Schema checks require a 32-byte digest for every row,
-and the generation digest is immutable.
+positions are represented as `u64` in the lifecycle and must be less than the
+`2^24` vote-commitment-tree capacity. Position zero is valid. Schema checks
+require a 32-byte digest for every row, and the generation digest is immutable.
 
 The row does not store:
 
@@ -999,8 +999,8 @@ number of entries, and entry `i` must equal
 
 Duplicate required attributes, both round aliases, conflicting values,
 multiple matching events, malformed values, incomplete or reordered batch
-lists, nonadjacent positions, or positions outside SQLite's range are not
-evidence.
+lists, nonadjacent positions, or any position at or beyond the `2^24`
+vote-commitment-tree capacity are not evidence.
 
 Immediately before confirmation, the lifecycle reloads and re-derives the
 locked generation. It rejects changed choice, membership, order, nullifier,
@@ -1722,7 +1722,8 @@ Generation and confirmation coverage is anchored by
 `batch_generation_digest_and_layout_preserve_action_order`,
 `expected_layouts_follow_signed_action_order`,
 `persisted_vote_generation_survives_confirmation_projection`,
-`typed_confirmation_uses_the_full_sqlite_position_range`,
+`confirmation_positions_are_bounded_by_tree_capacity_for_every_source`,
+`typed_confirmation_rejects_positions_outside_the_commitment_tree`,
 `typed_batch_confirmation_rolls_back_when_a_later_member_conflicts`,
 `records_vote_confirmation_atomically`, and
 `records_vote_batch_confirmation_replay_and_helper_positions`.
@@ -1757,6 +1758,10 @@ Public-lifecycle engine coverage is anchored by
 `recovery_retry_rejection_hash_is_not_candidate_evidence`,
 `committed_failure_moves_tracking_to_recovery_and_clears_recovery_candidate`,
 `hash_confirmation_updates_submission_and_projection_atomically`,
+`singleton_hash_confirmation_rejects_each_position_at_tree_capacity`,
+`singleton_hash_confirmation_accepts_the_last_adjacent_tree_positions`,
+`delegation_hash_confirmation_rejects_a_position_at_tree_capacity`,
+`adjacent_batch_hash_confirmation_rejects_a_layout_crossing_tree_capacity`,
 `failed_confirmation_rolls_back_submission_and_projection`,
 `cancellation_after_confirmation_commit_point_cannot_suppress_persistence`,
 `changed_generation_is_rejected_before_reconciliation`,

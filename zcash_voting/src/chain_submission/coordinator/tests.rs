@@ -13,7 +13,7 @@ use std::{
     },
 };
 use tokio::sync::Notify;
-use vote_commitment_tree::{MerkleHashVote, TREE_DEPTH};
+use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
 
 use super::*;
 use crate::{
@@ -950,6 +950,134 @@ async fn atomic_vote_batch_uses_shared_lifecycle_and_confirms_ordered_positions(
 }
 
 #[tokio::test]
+async fn singleton_hash_confirmation_rejects_each_position_at_tree_capacity() {
+    for (final_van_position, vote_commitment_position) in [
+        (TREE_CAPACITY, TREE_CAPACITY - 1),
+        (TREE_CAPACITY - 1, TREE_CAPACITY),
+    ] {
+        let identity = identity(1, 0);
+        let store = Arc::new(InMemoryChainSubmissionStore::default());
+        store.seed_derivation(derived(identity.clone(), 1));
+        let transport = Arc::new(ScriptedTransport::default());
+        transport.queue(Ok(accepted()));
+        transport.queue(Ok(vote_confirmed_at(
+            &identity,
+            final_van_position,
+            vote_commitment_position,
+        )));
+
+        let failure = coordinator(transport, Arc::clone(&store), ManualClock::new(100), 10)
+            .advance(
+                StoreAdvancementRequest::vote(identity.clone()),
+                &ManualControl::default(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(failure.kind(), ChainSubmissionFailureKind::Protocol);
+        assert_eq!(
+            store.record(&identity).unwrap().durable_state(),
+            ChainSubmissionState::Tracking
+        );
+        assert!(store.projection(&identity).is_none());
+    }
+}
+
+#[tokio::test]
+async fn singleton_hash_confirmation_accepts_the_last_adjacent_tree_positions() {
+    let identity = identity(1, 0);
+    let store = Arc::new(InMemoryChainSubmissionStore::default());
+    store.seed_derivation(derived(identity.clone(), 1));
+    let transport = Arc::new(ScriptedTransport::default());
+    transport.queue(Ok(accepted()));
+    transport.queue(Ok(vote_confirmed_at(
+        &identity,
+        TREE_CAPACITY - 2,
+        TREE_CAPACITY - 1,
+    )));
+
+    let result = coordinator(transport, Arc::clone(&store), ManualClock::new(100), 10)
+        .advance(
+            StoreAdvancementRequest::vote(identity.clone()),
+            &ManualControl::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(result, ChainSubmissionResult::Confirmed(_)));
+    let projection = store.projection(&identity).unwrap();
+    assert_eq!(projection.final_van_position(), TREE_CAPACITY - 2);
+    assert_eq!(projection.vote_commitment_positions(), &[TREE_CAPACITY - 1]);
+}
+
+#[tokio::test]
+async fn delegation_hash_confirmation_rejects_a_position_at_tree_capacity() {
+    let identity = delegation_identity(0);
+    let store = Arc::new(InMemoryChainSubmissionStore::default());
+    store.seed_derivation(derived_delegation(identity.clone(), 1));
+    let transport = Arc::new(ScriptedTransport::default());
+    transport.queue(Ok(accepted()));
+    transport.queue(Ok(delegation_confirmed_at(&identity, TREE_CAPACITY)));
+
+    let failure = coordinator(transport, Arc::clone(&store), ManualClock::new(100), 10)
+        .advance(
+            StoreAdvancementRequest::delegation(identity.clone(), [7; 64]),
+            &ManualControl::default(),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(failure.kind(), ChainSubmissionFailureKind::Protocol);
+    assert_eq!(
+        store.record(&identity).unwrap().durable_state(),
+        ChainSubmissionState::Tracking
+    );
+    assert!(store.projection(&identity).is_none());
+}
+
+#[tokio::test]
+async fn adjacent_batch_hash_confirmation_rejects_a_layout_crossing_tree_capacity() {
+    let proposals = vec![1, 2, 5];
+    for (identity, derived) in [
+        {
+            let identity = batch_identity(0);
+            let derived = derived_batch(identity.clone(), proposals.clone());
+            (identity, derived)
+        },
+        {
+            let identity = combined_identity(1);
+            let derived = derived_combined_batch(identity.clone(), proposals.clone());
+            (identity, derived)
+        },
+    ] {
+        let store = Arc::new(InMemoryChainSubmissionStore::default());
+        store.seed_derivation(derived);
+        let transport = Arc::new(ScriptedTransport::default());
+        transport.queue(Ok(accepted_batch(&identity)));
+        transport.queue(Ok(batch_confirmed_at(
+            &identity,
+            &proposals,
+            TREE_CAPACITY - proposals.len() as u64,
+        )));
+
+        let failure = coordinator(transport, Arc::clone(&store), ManualClock::new(100), 10)
+            .advance(
+                StoreAdvancementRequest::vote_batch(identity.clone(), proposals.clone()).unwrap(),
+                &ManualControl::default(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(failure.kind(), ChainSubmissionFailureKind::Protocol);
+        assert_eq!(
+            store.record(&identity).unwrap().durable_state(),
+            ChainSubmissionState::Tracking
+        );
+        assert!(store.projection(&identity).is_none());
+    }
+}
+
+#[tokio::test]
 async fn atomic_vote_batches_from_one_through_protocol_maximum_confirm() {
     for size in 1..=crate::vote::MAX_VOTE_BATCH_ACTIONS {
         let identity = batch_identity(size as u32);
@@ -1731,10 +1859,7 @@ fn accepted() -> ChainHttpResponse {
 }
 
 fn accepted_batch(identity: &ChainSubmissionIdentity) -> ChainHttpResponse {
-    let ChainSubmissionTarget::VoteBatch {
-        ordered_batch_digest,
-    } = identity.target()
-    else {
+    let Some(ordered_batch_digest) = identity.target().batch_digest() else {
         panic!("batch response requires a vote-batch identity")
     };
     ChainHttpResponse::json(
@@ -1803,6 +1928,14 @@ fn rejected_with_hash() -> ChainHttpResponse {
 }
 
 fn confirmed(identity: &ChainSubmissionIdentity) -> ChainHttpResponse {
+    vote_confirmed_at(identity, 7, 8)
+}
+
+fn vote_confirmed_at(
+    identity: &ChainSubmissionIdentity,
+    final_van_position: u64,
+    vote_commitment_position: u64,
+) -> ChainHttpResponse {
     let event = TxEvent {
         event_type: "cast_vote".to_string(),
         attributes: vec![
@@ -1812,7 +1945,7 @@ fn confirmed(identity: &ChainSubmissionIdentity) -> ChainHttpResponse {
             },
             TxEventAttribute {
                 key: "leaf_index".to_string(),
-                value: "7,8".to_string(),
+                value: format!("{final_van_position},{vote_commitment_position}"),
             },
         ],
     };
@@ -1832,20 +1965,37 @@ fn batch_confirmed(
     identity: &ChainSubmissionIdentity,
     ordered_proposal_ids: &[u32],
 ) -> ChainHttpResponse {
+    batch_confirmed_at(identity, ordered_proposal_ids, 7)
+}
+
+fn batch_confirmed_at(
+    identity: &ChainSubmissionIdentity,
+    ordered_proposal_ids: &[u32],
+    final_van_position: u64,
+) -> ChainHttpResponse {
     let proposal_ids = ordered_proposal_ids
         .iter()
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(",");
     let positions = (0..ordered_proposal_ids.len())
-        .map(|index| (8 + index as u64).to_string())
+        .map(|index| (final_van_position + index as u64 + 1).to_string())
         .collect::<Vec<_>>()
         .join(",");
     let nullifiers = std::iter::repeat_n(hex::encode([2; 32]), ordered_proposal_ids.len())
         .collect::<Vec<_>>()
         .join(",");
+    let batch_digest = identity
+        .target()
+        .batch_digest()
+        .expect("batch response requires a vote-batch identity");
+    let batch_event = if identity.target().is_combined() {
+        "delegate_and_cast_vote_batch"
+    } else {
+        "cast_vote_batch"
+    };
     let event = TxEvent {
-        event_type: "cast_vote_batch".to_string(),
+        event_type: batch_event.to_string(),
         attributes: vec![
             TxEventAttribute {
                 key: "vote_round_id".to_string(),
@@ -1853,7 +2003,7 @@ fn batch_confirmed(
             },
             TxEventAttribute {
                 key: "batch_digest".to_string(),
-                value: hex::encode([9; 32]),
+                value: hex::encode(batch_digest),
             },
             TxEventAttribute {
                 key: "batch_size".to_string(),
@@ -1861,7 +2011,7 @@ fn batch_confirmed(
             },
             TxEventAttribute {
                 key: "final_van_leaf_index".to_string(),
-                value: "7".to_string(),
+                value: final_van_position.to_string(),
             },
             TxEventAttribute {
                 key: "vote_commitment_leaf_indices".to_string(),
@@ -1875,6 +2025,10 @@ fn batch_confirmed(
                 key: "van_nullifiers".to_string(),
                 value: nullifiers,
             },
+            TxEventAttribute {
+                key: "nullifier_count".to_string(),
+                value: "1".to_string(),
+            },
         ],
     };
     ChainHttpResponse::json(
@@ -1887,6 +2041,13 @@ fn batch_confirmed(
 }
 
 fn delegation_confirmed(identity: &ChainSubmissionIdentity) -> ChainHttpResponse {
+    delegation_confirmed_at(identity, 7)
+}
+
+fn delegation_confirmed_at(
+    identity: &ChainSubmissionIdentity,
+    final_van_position: u64,
+) -> ChainHttpResponse {
     let event = TxEvent {
         event_type: "delegate_vote".to_string(),
         attributes: vec![
@@ -1896,7 +2057,7 @@ fn delegation_confirmed(identity: &ChainSubmissionIdentity) -> ChainHttpResponse
             },
             TxEventAttribute {
                 key: "leaf_index".to_string(),
-                value: "7".to_string(),
+                value: final_van_position.to_string(),
             },
         ],
     };

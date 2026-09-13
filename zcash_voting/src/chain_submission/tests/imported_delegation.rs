@@ -5,6 +5,7 @@ use std::{
 };
 
 use rusqlite::named_params;
+use vote_commitment_tree::TREE_CAPACITY;
 
 use crate::{
     chain_submission::{
@@ -193,6 +194,35 @@ async fn imported_delegation_confirmation_is_atomic_and_signer_free() {
         .query_row("SELECT state FROM chain_submissions", [], |row| row.get(0))
         .unwrap();
     assert_eq!(state, "confirmed");
+}
+
+#[tokio::test]
+async fn imported_delegation_rejects_a_position_at_tree_capacity() {
+    let db = imported_db();
+    let transport = Arc::new(PollOnlyTransport::default());
+    transport.queue_json(
+        200,
+        format!(
+            r#"{{"height":"42","code":0,"log":"","events":[{{"type":"delegate_vote","attributes":[{{"key":"vote_round_id","value":"{ROUND}","index":true}},{{"key":"leaf_index","value":"{TREE_CAPACITY}","index":true}}]}}]}}"#
+        ),
+    );
+
+    let failure = client(Arc::clone(&db), Arc::clone(&transport))
+        .advance_imported_delegation(request(), &ChainSubmissionControl::new(1))
+        .await
+        .unwrap_err();
+
+    assert_eq!(failure.kind(), ChainSubmissionFailureKind::Protocol);
+    assert_eq!(
+        failure.strongest_state().unwrap().state(),
+        crate::chain_submission::ChainSubmissionState::Tracking
+    );
+    assert!(db.load_van_position_u64(ROUND, 0).is_err());
+    let state: String = db
+        .conn()
+        .query_row("SELECT state FROM chain_submissions", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(state, "tracking");
 }
 
 #[tokio::test]

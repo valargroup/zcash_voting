@@ -5,7 +5,7 @@ use std::time::Duration;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use incrementalmerkletree::frontier::Frontier;
 use serde::Deserialize;
-use vote_commitment_tree::{MerkleHashVote, TREE_DEPTH};
+use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
 
 use super::{
     coordination::{CapturedSubmissionOperation, SubmissionOperationLease},
@@ -15,10 +15,9 @@ use super::{
     ChainSubmissionDiagnosticKind, ChainTransport, ChainTransportError,
 };
 
-const MAX_RECOVERY_LEAVES: u64 = 1 << TREE_DEPTH;
 const VOTE_SDK_PAGE_LEAF_TARGET: u64 = 5_000;
 const MAX_RECOVERY_LEAF_REQUESTS: usize =
-    maximum_whole_block_page_count(MAX_RECOVERY_LEAVES, VOTE_SDK_PAGE_LEAF_TARGET) as usize;
+    maximum_whole_block_page_count(TREE_CAPACITY, VOTE_SDK_PAGE_LEAF_TARGET) as usize;
 const MAX_RECOVERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 /// Independent transfer budget for one continuously locked recovery pass.
 ///
@@ -142,7 +141,7 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
     let snapshot = latest.tree.ok_or_else(|| {
         RecoveryScanFailure::Invalid(invalid("tree recovery latest response omitted tree state"))
     })?;
-    if snapshot.next_index > MAX_RECOVERY_LEAVES || snapshot.height > u32::MAX as u64 {
+    if snapshot.next_index > TREE_CAPACITY || snapshot.height > u32::MAX as u64 {
         return Err(RecoveryScanFailure::Invalid(invalid(
             "tree recovery snapshot exceeds protocol bounds",
         )));

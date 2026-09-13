@@ -1,6 +1,7 @@
 use std::fmt;
 
 use thiserror::Error;
+use vote_commitment_tree::TREE_CAPACITY;
 
 use super::CandidateTransactionHash;
 
@@ -209,7 +210,7 @@ impl ValidatedChainSubmissionConfirmation {
         final_van_position: u64,
         vote_commitment_positions: Vec<u64>,
     ) -> Result<Self, ChainSubmissionConfirmationError> {
-        validate_sqlite_positions(final_van_position, &vote_commitment_positions)?;
+        validate_tree_positions(final_van_position, &vote_commitment_positions)?;
         Ok(Self::Hash(ChainSubmissionConfirmation {
             source: ChainSubmissionConfirmationSource::Hash,
             transaction_hash: Some(transaction_hash),
@@ -223,7 +224,7 @@ impl ValidatedChainSubmissionConfirmation {
         final_van_position: u64,
         vote_commitment_positions: Vec<u64>,
     ) -> Result<Self, ChainSubmissionConfirmationError> {
-        validate_sqlite_positions(final_van_position, &vote_commitment_positions)?;
+        validate_tree_positions(final_van_position, &vote_commitment_positions)?;
         Ok(Self::Tree(ChainSubmissionConfirmation {
             source: ChainSubmissionConfirmationSource::Tree,
             transaction_hash: None,
@@ -240,25 +241,24 @@ impl ValidatedChainSubmissionConfirmation {
     }
 }
 
-fn validate_sqlite_positions(
+fn validate_tree_positions(
     final_van_position: u64,
     vote_commitment_positions: &[u64],
 ) -> Result<(), ChainSubmissionConfirmationError> {
-    let maximum_position = i64::MAX as u64;
-    if final_van_position > maximum_position
+    if final_van_position >= TREE_CAPACITY
         || vote_commitment_positions
             .iter()
-            .any(|position| *position > maximum_position)
+            .any(|position| *position >= TREE_CAPACITY)
     {
         return Err(ChainSubmissionConfirmationError::PositionOutOfRange);
     }
     Ok(())
 }
 
-/// Invalid terminal data that cannot be represented by the durable schema.
+/// Invalid terminal data that cannot identify leaves in the commitment tree.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ChainSubmissionConfirmationError {
-    #[error("chain tree positions must fit SQLite's signed integer range")]
+    #[error("chain tree positions must be below the commitment-tree capacity")]
     PositionOutOfRange,
 }
 
@@ -492,16 +492,37 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_accepts_zero_and_rejects_positions_outside_sqlite_range() {
-        assert!(ValidatedChainSubmissionConfirmation::from_tree(0, vec![0]).is_ok());
-        assert_eq!(
-            ValidatedChainSubmissionConfirmation::from_tree(i64::MAX as u64 + 1, vec![]),
-            Err(ChainSubmissionConfirmationError::PositionOutOfRange)
-        );
-        assert_eq!(
-            ValidatedChainSubmissionConfirmation::from_tree(0, vec![i64::MAX as u64 + 1]),
-            Err(ChainSubmissionConfirmationError::PositionOutOfRange)
-        );
+    fn confirmation_positions_are_bounded_by_tree_capacity_for_every_source() {
+        let transaction_hash = CandidateTransactionHash::from_bytes([3; 32]);
+        for result in [
+            ValidatedChainSubmissionConfirmation::from_hash(
+                transaction_hash,
+                TREE_CAPACITY - 1,
+                vec![0],
+            ),
+            ValidatedChainSubmissionConfirmation::from_tree(0, vec![TREE_CAPACITY - 1]),
+        ] {
+            assert!(result.is_ok());
+        }
+        for result in [
+            ValidatedChainSubmissionConfirmation::from_hash(
+                transaction_hash,
+                TREE_CAPACITY,
+                vec![],
+            ),
+            ValidatedChainSubmissionConfirmation::from_hash(
+                transaction_hash,
+                0,
+                vec![TREE_CAPACITY],
+            ),
+            ValidatedChainSubmissionConfirmation::from_tree(TREE_CAPACITY, vec![]),
+            ValidatedChainSubmissionConfirmation::from_tree(0, vec![TREE_CAPACITY]),
+        ] {
+            assert_eq!(
+                result,
+                Err(ChainSubmissionConfirmationError::PositionOutOfRange)
+            );
+        }
     }
 
     #[test]

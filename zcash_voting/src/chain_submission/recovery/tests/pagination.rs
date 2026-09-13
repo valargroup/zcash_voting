@@ -281,19 +281,19 @@ async fn oversized_atomic_block_is_accepted_above_the_page_target() {
 
 #[test]
 fn request_ceiling_covers_full_tree_without_deriving_resource_budgets() {
-    assert_eq!(MAX_RECOVERY_LEAVES, 16_777_216);
+    assert_eq!(TREE_CAPACITY, 16_777_216);
     assert_eq!(VOTE_SDK_PAGE_LEAF_TARGET, 5_000);
     assert_eq!(MAX_RECOVERY_LEAF_REQUESTS, 6_709);
 
-    let requests_for_four_thousand_leaf_blocks = MAX_RECOVERY_LEAVES.div_ceil(4_000);
+    let requests_for_four_thousand_leaf_blocks = TREE_CAPACITY.div_ceil(4_000);
     assert_eq!(requests_for_four_thousand_leaf_blocks, 4_195);
     assert!(requests_for_four_thousand_leaf_blocks <= MAX_RECOVERY_LEAF_REQUESTS as u64);
 
     let paired_leaf_count = VOTE_SDK_PAGE_LEAF_TARGET + 1;
-    assert_eq!(MAX_RECOVERY_LEAVES / paired_leaf_count, 3_354);
-    assert_eq!(MAX_RECOVERY_LEAVES % paired_leaf_count, 3_862);
+    assert_eq!(TREE_CAPACITY / paired_leaf_count, 3_354);
+    assert_eq!(TREE_CAPACITY % paired_leaf_count, 3_862);
     assert_eq!(
-        maximum_whole_block_page_count(MAX_RECOVERY_LEAVES, VOTE_SDK_PAGE_LEAF_TARGET),
+        maximum_whole_block_page_count(TREE_CAPACITY, VOTE_SDK_PAGE_LEAF_TARGET),
         MAX_RECOVERY_LEAF_REQUESTS as u64
     );
 

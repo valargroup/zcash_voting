@@ -19,6 +19,11 @@ use crate::poseidon_hash;
 /// (~2,000 fewer constraints) and shrinks Merkle paths from 1,028 to 772 bytes.
 pub const TREE_DEPTH: usize = 24;
 
+/// Number of leaves addressable by the Vote Commitment Tree.
+///
+/// Valid zero-based leaf positions are strictly less than this capacity.
+pub const TREE_CAPACITY: u64 = 1 << TREE_DEPTH;
+
 /// Shard height for the underlying `ShardTree` (each shard covers 2^4 = 16 leaves).
 pub(crate) const SHARD_HEIGHT: u8 = 4;
 
