@@ -39,7 +39,7 @@ pub mod sync_api;
 
 pub use anchor::Anchor;
 pub use client::{SyncError, SyncLimits, TreeClient};
-pub use hash::{MerkleHashVote, TREE_DEPTH};
+pub use hash::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
 pub use path::{MerklePath, MERKLE_PATH_BYTES};
 pub use server::{AppendFromKvError, MemoryTreeServer, SyncableServer, TreeServer};
 pub use sync_api::TreeSyncApi;

@@ -9,6 +9,7 @@
 
 use rusqlite::{named_params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use vote_commitment_tree::TREE_CAPACITY;
 
 use crate::storage::queries;
 use crate::types::VotingError;
@@ -32,12 +33,13 @@ pub struct TxEventAttribute {
     pub value: String,
 }
 
-fn require_sqlite_position(position: u64, field: &str) -> Result<(), VotingError> {
-    i64::try_from(position)
-        .map(|_| ())
-        .map_err(|_| VotingError::InvalidInput {
-            message: format!("{field} {position} does not fit in SQLite i64"),
-        })
+fn require_tree_position(position: u64, field: &str) -> Result<(), VotingError> {
+    if position >= TREE_CAPACITY {
+        return Err(VotingError::InvalidInput {
+            message: format!("{field} {position} exceeds the commitment-tree capacity"),
+        });
+    }
+    Ok(())
 }
 
 /// Applies a delegation confirmation using the caller's transaction.
@@ -53,7 +55,7 @@ pub(crate) fn apply_delegation_confirmation_with_conn(
     tx_hash: Option<&str>,
     van_leaf_position: u64,
 ) -> Result<(), VotingError> {
-    require_sqlite_position(van_leaf_position, "VAN leaf position")?;
+    require_tree_position(van_leaf_position, "VAN leaf position")?;
     let (stored_hash, stored_van_position) =
         load_bundle_confirmation_fields(conn, round_id, wallet_id, bundle_index)?;
     if let Some(tx_hash) = tx_hash {
@@ -92,8 +94,8 @@ pub(crate) fn apply_vote_confirmation_with_conn(
     van_leaf_position: u64,
     vc_tree_position: u64,
 ) -> Result<(), VotingError> {
-    require_sqlite_position(van_leaf_position, "VAN leaf position")?;
-    require_sqlite_position(vc_tree_position, "vote commitment tree position")?;
+    require_tree_position(van_leaf_position, "VAN leaf position")?;
+    require_tree_position(vc_tree_position, "vote commitment tree position")?;
     crate::vote::ensure_singleton_vote_update_with_conn(
         conn,
         wallet_id,
@@ -142,9 +144,9 @@ pub(crate) fn apply_vote_batch_confirmation_with_conn(
     observed_proposal_ids: Option<&[u32]>,
     observed_nullifiers: Option<&[String]>,
 ) -> Result<(), VotingError> {
-    require_sqlite_position(van_leaf_position, "VAN leaf position")?;
+    require_tree_position(van_leaf_position, "VAN leaf position")?;
     for &position in vc_tree_positions {
-        require_sqlite_position(position, "vote commitment tree position")?;
+        require_tree_position(position, "vote commitment tree position")?;
     }
     if let Some(tx_hash) = tx_hash {
         require_tx_hash(tx_hash)?;
@@ -809,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_confirmation_uses_the_full_sqlite_position_range() {
+    fn typed_confirmation_rejects_positions_outside_the_commitment_tree() {
         let db = test_db();
         insert_bundle(&db, 0);
         let mut conn = db.conn();
@@ -823,10 +825,10 @@ mod tests {
             ROUND_ID,
             0,
             Some("tx-1"),
-            i64::MAX as u64 + 1,
+            TREE_CAPACITY,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("does not fit"));
+        assert!(error.to_string().contains("commitment-tree capacity"));
         tx.commit().unwrap();
         drop(conn);
 
@@ -840,7 +842,7 @@ mod tests {
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .unwrap();
-        let position = u64::from(u32::MAX) + 1;
+        let position = TREE_CAPACITY - 1;
         apply_delegation_confirmation_with_conn(&tx, WALLET_ID, ROUND_ID, 0, None, position)
             .unwrap();
         tx.commit().unwrap();
@@ -860,8 +862,11 @@ mod tests {
             position
         );
         assert_eq!(db.load_van_position_u64(ROUND_ID, 0).unwrap(), position);
-        assert!(queries::load_van_position(&db.conn(), ROUND_ID, WALLET_ID, 0).is_err());
-        assert!(db.load_van_position(ROUND_ID, 0).is_err());
+        assert_eq!(
+            queries::load_van_position(&db.conn(), ROUND_ID, WALLET_ID, 0).unwrap(),
+            position as u32
+        );
+        assert_eq!(db.load_van_position(ROUND_ID, 0).unwrap(), position as u32);
 
         let snapshot = crate::recovery::round_snapshot(&db, ROUND_ID).unwrap();
         assert_eq!(snapshot.delegation[0].van_leaf_position, Some(position));

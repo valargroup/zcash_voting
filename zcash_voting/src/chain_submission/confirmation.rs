@@ -26,8 +26,8 @@ const ROUND_ID_ATTRIBUTES: [&str; 2] = ["vote_round_id", "round_id"];
 /// Validates committed hash evidence against one locked generation.
 ///
 /// Lifecycle parsing is intentionally separate from the legacy public
-/// confirmation wire values: lifecycle positions use the complete SQLite
-/// `u64` range and are narrowed nowhere.
+/// confirmation wire values. Parsed positions remain `u64` until the validated
+/// confirmation constructor enforces the commitment tree's semantic capacity.
 pub(super) fn validate_hash_confirmation(
     derived: &DerivedChainSubmission,
     transaction_hash: super::CandidateTransactionHash,
