@@ -1,6 +1,6 @@
 //! Streaming exact commitment-tree recovery for sticky bound generations.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use incrementalmerkletree::frontier::Frontier;
@@ -20,10 +20,14 @@ const VOTE_SDK_PAGE_LEAF_TARGET: u64 = 5_000;
 const MAX_RECOVERY_LEAF_REQUESTS: usize =
     maximum_whole_block_page_count(MAX_RECOVERY_LEAVES, VOTE_SDK_PAGE_LEAF_TARGET) as usize;
 const MAX_RECOVERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_RECOVERY_TOTAL_BYTES: u64 =
-    (MAX_RECOVERY_LEAF_REQUESTS as u64 + 1) * MAX_RECOVERY_RESPONSE_BYTES as u64;
+/// Independent transfer budget for one continuously locked recovery pass.
+///
+/// This is deliberately not derived from the request ceiling: multiplying two
+/// individually generous limits would permit a hostile endpoint to retain the
+/// lifecycle lease while transferring tens of GiB of irrelevant JSON.
+const MAX_RECOVERY_TOTAL_BYTES: u64 = 1_000_000_000;
 const RECOVERY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-const RECOVERY_PASS_TIMEOUT: Duration = Duration::from_secs(120 * 60 * 60);
+const RECOVERY_PASS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Maximum pages produced by vote-sdk's greedy, whole-block pagination.
 ///
@@ -121,14 +125,20 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
     interrupted: impl Fn() -> bool,
     observations: &crate::ObservationScope,
 ) -> Result<RecoveryScanOutcome<'a>, RecoveryScanFailure> {
-    let started = Instant::now();
+    let recovery_deadline = tokio::time::Instant::now() + RECOVERY_PASS_TIMEOUT;
     let endpoint = protocol.endpoints().first().ok_or_else(|| {
         RecoveryScanFailure::Invalid(invalid("tree recovery has no configured endpoint"))
     })?;
     let round = hex::encode(derived.generation().identity().vote_round_id());
     let latest_url = format!("{endpoint}/shielded-vote/v1/commitment-tree/{round}/latest");
-    let (latest, latest_bytes): (LatestResponse, usize) =
-        get_json_with_size(protocol.transport(), latest_url, &interrupted, observations).await?;
+    let (latest, latest_bytes): (LatestResponse, usize) = get_json_with_size(
+        protocol.transport(),
+        latest_url,
+        recovery_deadline,
+        &interrupted,
+        observations,
+    )
+    .await?;
     let snapshot = latest.tree.ok_or_else(|| {
         RecoveryScanFailure::Invalid(invalid("tree recovery latest response omitted tree state"))
     })?;
@@ -154,7 +164,9 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
     let mut from_height = 0_u64;
     let mut previous_height = None;
     let mut leaf_request_count = 0_usize;
-    let mut total_bytes = latest_bytes as u64;
+    let mut total_bytes = 0_u64;
+    charge_recovery_bytes(&mut total_bytes, latest_bytes)?;
+    let mut unpaired_nonfinal_page_leaves = None;
     let mut match_start = None;
 
     while next_index < snapshot.next_index {
@@ -162,7 +174,7 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             return Err(RecoveryScanFailure::Interrupted);
         }
         if leaf_request_count >= MAX_RECOVERY_LEAF_REQUESTS
-            || started.elapsed() > RECOVERY_PASS_TIMEOUT
+            || tokio::time::Instant::now() >= recovery_deadline
         {
             return Err(RecoveryScanFailure::Invalid(invalid(
                 "tree recovery exhausted its bounded pass",
@@ -172,15 +184,16 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             "{endpoint}/shielded-vote/v1/commitment-tree/{round}/leaves?from_height={from_height}&to_height={}",
             snapshot.height
         );
-        let (page, bytes): (LeavesResponse, usize) =
-            get_json_with_size(protocol.transport(), url, &interrupted, observations).await?;
+        let (page, bytes): (LeavesResponse, usize) = get_json_with_size(
+            protocol.transport(),
+            url,
+            recovery_deadline,
+            &interrupted,
+            observations,
+        )
+        .await?;
         leaf_request_count += 1;
-        total_bytes = total_bytes.saturating_add(bytes as u64);
-        if total_bytes > MAX_RECOVERY_TOTAL_BYTES {
-            return Err(RecoveryScanFailure::Invalid(invalid(
-                "tree recovery responses exceed the total byte limit",
-            )));
-        }
+        charge_recovery_bytes(&mut total_bytes, bytes)?;
         let page_leaf_count: usize = page.blocks.iter().map(|block| block.leaves.len()).sum();
         if page_leaf_count as u64 > snapshot.next_index.saturating_sub(next_index) {
             return Err(RecoveryScanFailure::Invalid(invalid(
@@ -239,6 +252,20 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             }
         }
         if next_index < snapshot.next_index {
+            if page_leaf_count == 0 {
+                return Err(RecoveryScanFailure::Invalid(invalid(
+                    "tree recovery page made no leaf progress",
+                )));
+            }
+            if let Some(previous_page_leaves) = unpaired_nonfinal_page_leaves.take() {
+                if previous_page_leaves + (page_leaf_count as u64) < VOTE_SDK_PAGE_LEAF_TARGET + 1 {
+                    return Err(RecoveryScanFailure::Invalid(invalid(
+                        "tree recovery pages violate the pagination progress bound",
+                    )));
+                }
+            } else {
+                unpaired_nonfinal_page_leaves = Some(page_leaf_count as u64);
+            }
             if page.next_from_height <= from_height || page.next_from_height > snapshot.height {
                 return Err(RecoveryScanFailure::Invalid(invalid(
                     "tree recovery pagination cursor is invalid",
@@ -251,7 +278,7 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             )));
         }
     }
-    if started.elapsed() > RECOVERY_PASS_TIMEOUT {
+    if tokio::time::Instant::now() >= recovery_deadline {
         return Err(RecoveryScanFailure::Invalid(invalid(
             "tree recovery exhausted its bounded pass",
         )));
@@ -280,6 +307,7 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
 async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
     transport: &T,
     url: String,
+    recovery_deadline: tokio::time::Instant,
     interrupted: &impl Fn() -> bool,
     observations: &crate::ObservationScope,
 ) -> Result<(R, usize), RecoveryScanFailure> {
@@ -295,9 +323,16 @@ async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
             RECOVERY_REQUEST_TIMEOUT,
             MAX_RECOVERY_RESPONSE_BYTES,
         );
-        let response = tokio::time::timeout(RECOVERY_REQUEST_TIMEOUT, transport.chain_get(request))
+        let request_deadline =
+            (tokio::time::Instant::now() + RECOVERY_REQUEST_TIMEOUT).min(recovery_deadline);
+        let response = tokio::time::timeout_at(request_deadline, transport.chain_get(request))
             .await
             .map_err(|_| {
+                if tokio::time::Instant::now() >= recovery_deadline {
+                    return RecoveryScanFailure::Invalid(invalid(
+                        "tree recovery exhausted its bounded pass",
+                    ));
+                }
                 RecoveryScanFailure::Transport(ChainTransportError::possibly_dispatched(
                     "tree recovery request timed out",
                 ))
@@ -337,6 +372,19 @@ async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
     };
     timer.finish_http(outcome, error_kind, http_status, None);
     result
+}
+
+fn charge_recovery_bytes(
+    total_bytes: &mut u64,
+    response_bytes: usize,
+) -> Result<(), RecoveryScanFailure> {
+    *total_bytes = total_bytes.saturating_add(response_bytes as u64);
+    if *total_bytes > MAX_RECOVERY_TOTAL_BYTES {
+        return Err(RecoveryScanFailure::Invalid(invalid(
+            "tree recovery responses exceed the total byte limit",
+        )));
+    }
+    Ok(())
 }
 
 fn decode_leaf(encoded: &str, label: &str) -> Result<MerkleHashVote, RecoveryScanFailure> {

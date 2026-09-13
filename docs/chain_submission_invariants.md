@@ -920,9 +920,9 @@ as zero before those validations. Recovery uses the following fixed ceilings:
 - `16,777,216` leaves, the full `2^24` vote-commitment-tree capacity;
 - `6,709` leaf-range requests under vote-sdk's `5,000`-leaf page target, with
   each block returned atomically even when the block exceeds that target;
-- `8 MiB` per response and `53,680 MiB` across the complete pass, including
+- `8 MiB` per response and `1,000,000,000` bytes across the complete pass, including
   the initial snapshot-metadata response;
-- `60 seconds` per request and `120 hours` across the complete pass; and
+- `60 seconds` per request and `15 minutes` across the complete pass; and
 - `16 MiB` working memory beyond the expected layout and transport buffers.
 
 The tree's documented month-scale design point is approximately one million
@@ -932,12 +932,12 @@ the complete tree is never retained in memory. The request ceiling follows the
 deployed greedy whole-block pagination contract: two consecutive non-final
 pages contain at least `5,001` leaves, so a full tree requires at most `6,709`
 leaf requests. A server that advances through empty pages or otherwise departs
-from that contract remains bounded and fails closed if it exhausts the request
-ceiling. Before reading leaves, validated snapshot metadata must show that a
-complete traversal fits. There is no smaller whole-pass work budget that can
-repeatedly truncate a supported snapshot. Metadata claiming more than `2^24`
-leaves is malformed and no leaf scan starts. Cancellation is checked between
-requests and before the confirmation commit point.
+from that contract fails closed immediately. Independent byte and time budgets
+bound how long a valid but unusually large or slow snapshot can retain lifecycle
+locks. Exhausting either budget leaves the generation `Recovering` and produces
+no retry authorization. Metadata claiming more than `2^24` leaves is malformed
+and no leaf scan starts. Cancellation is checked between requests and before the
+confirmation commit point.
 
 Finding one member is insufficient. Singleton outputs must be adjacent and in
 order. A batch must contain the final successor VAN followed immediately by
@@ -952,9 +952,12 @@ after the valid complete scan. Malformed pages, cancellation, endpoint
 exhaustion, and transport interruption do not complete a pass, produce no
 authorization, and retain the candidate. Delayed indexing may produce a valid
 no-match pass and therefore permits the combined retirement-and-reservation;
-the same-generation and nullifier rules make a later commit safe. A responsive
-endpoint serving a supported snapshot cannot repeatedly stop at a local
-whole-pass budget: its complete traversal fits by construction.
+the same-generation and nullifier rules make a later commit safe. Structural
+support and completion are separate: metadata may declare any tree up to
+`2^24` leaves, but one pass completes only when the fixed snapshot can be
+served within the request, byte, and time ceilings above. A valid snapshot that
+exceeds the `1,000,000,000`-byte or `15`-minute operational budget fails
+closed, produces no authorization, and remains `Recovering`.
 
 Candidate retirement, its diagnostic update, and retry reservation are one
 immediate transaction. If that transaction fails, the candidate remains
@@ -1554,9 +1557,10 @@ Tests cover:
   encoding without weakening continuity validation;
 - an indivisible block above the `5,000`-leaf target remains recoverable within
   the fixed response and snapshot bounds;
-- a full `2^24`-leaf snapshot under deployed whole-block pagination fits the
-  `6,709` leaf-request, `53,680 MiB`, `120`-hour, and streaming-memory
-  ceilings without a smaller restart budget;
+- deployed whole-block pagination needs at most `6,709` leaf requests for a
+  full `2^24`-leaf snapshot, while every pass independently stops at
+  `1,000,000,000` response bytes or `15` minutes and leaves an incomplete valid
+  snapshot `Recovering` without authorization;
 - interrupted scans restart without durable cursors or partial evidence; and
 - tree confirmation never invents a hash.
 

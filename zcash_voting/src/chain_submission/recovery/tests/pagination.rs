@@ -138,7 +138,7 @@ async fn empty_checkpoint_with_contradictory_root_is_rejected() {
 }
 
 #[tokio::test]
-async fn cursor_progressing_empty_page_is_accepted() {
+async fn cursor_progressing_empty_page_is_rejected() {
     let leaves = [[3; 32], [4; 32]];
     let mut frontier: Frontier<MerkleHashVote, { TREE_DEPTH as u8 }> = Frontier::empty();
     for leaf in &leaves {
@@ -169,17 +169,65 @@ async fn cursor_progressing_empty_page_is_accepted() {
         ),
     ];
 
-    let (outcome, urls) = scan_responses(responses, None).await.unwrap();
+    let failure = scan_responses(responses, None)
+        .await
+        .err()
+        .expect("height progress without leaf progress must not retain the recovery lease");
 
-    assert!(matches!(
-        outcome,
-        RecoveryScanOutcome::Match {
-            final_van_position: 0,
-            vote_commitment_positions
-        } if vote_commitment_positions == vec![1]
-    ));
-    assert!(urls[1].contains("from_height=0&to_height=2"));
-    assert!(urls[2].contains("from_height=1&to_height=2"));
+    assert!(matches!(failure, RecoveryScanFailure::Invalid(_)));
+}
+
+#[tokio::test]
+async fn consecutive_low_progress_pages_are_rejected() {
+    let leaves = [[3; 32], [4; 32], [5; 32]];
+    let mut frontier: Frontier<MerkleHashVote, { TREE_DEPTH as u8 }> = Frontier::empty();
+    let mut roots = Vec::new();
+    for leaf in &leaves {
+        assert!(frontier.append(MerkleHashVote::from_bytes(leaf).unwrap()));
+        roots.push(BASE64_STANDARD.encode(frontier.root().to_bytes()));
+    }
+    let responses = vec![
+        ChainHttpResponse::json(
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "tree": { "next_index": 3, "root": roots[2], "height": 3 }
+            }))
+            .unwrap(),
+        ),
+        ChainHttpResponse::json(
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "blocks": [{
+                    "height": 1,
+                    "start_index": 0,
+                    "leaves": [BASE64_STANDARD.encode(leaves[0])],
+                    "root": roots[0]
+                }],
+                "next_from_height": 1
+            }))
+            .unwrap(),
+        ),
+        ChainHttpResponse::json(
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "blocks": [{
+                    "height": 2,
+                    "start_index": 1,
+                    "leaves": [BASE64_STANDARD.encode(leaves[1])],
+                    "root": roots[1]
+                }],
+                "next_from_height": 2
+            }))
+            .unwrap(),
+        ),
+    ];
+
+    let failure = scan_responses(responses, None)
+        .await
+        .err()
+        .expect("sparse pages must not consume the honest pagination allowance");
+
+    assert!(matches!(failure, RecoveryScanFailure::Invalid(_)));
 }
 
 #[tokio::test]
@@ -232,7 +280,7 @@ async fn oversized_atomic_block_is_accepted_above_the_page_target() {
 }
 
 #[test]
-fn full_tree_capacity_fits_the_fixed_request_and_byte_ceilings() {
+fn request_ceiling_covers_full_tree_without_deriving_resource_budgets() {
     assert_eq!(MAX_RECOVERY_LEAVES, 16_777_216);
     assert_eq!(VOTE_SDK_PAGE_LEAF_TARGET, 5_000);
     assert_eq!(MAX_RECOVERY_LEAF_REQUESTS, 6_709);
@@ -250,13 +298,21 @@ fn full_tree_capacity_fits_the_fixed_request_and_byte_ceilings() {
     );
 
     let maximum_http_responses = MAX_RECOVERY_LEAF_REQUESTS as u64 + 1;
-    assert_eq!(
-        maximum_http_responses * MAX_RECOVERY_RESPONSE_BYTES as u64,
-        MAX_RECOVERY_TOTAL_BYTES
-    );
-    assert_eq!(MAX_RECOVERY_TOTAL_BYTES, 56_287_559_680);
+    assert_eq!(MAX_RECOVERY_TOTAL_BYTES, 1_000_000_000);
+    assert!(MAX_RECOVERY_TOTAL_BYTES < maximum_http_responses * MAX_RECOVERY_RESPONSE_BYTES as u64);
+    assert_eq!(RECOVERY_PASS_TIMEOUT, Duration::from_secs(15 * 60));
     assert!(
-        maximum_http_responses * RECOVERY_REQUEST_TIMEOUT.as_secs()
-            <= RECOVERY_PASS_TIMEOUT.as_secs()
+        RECOVERY_PASS_TIMEOUT
+            < Duration::from_secs(maximum_http_responses * RECOVERY_REQUEST_TIMEOUT.as_secs())
     );
+}
+
+#[test]
+fn cumulative_response_budget_rejects_the_first_excess_byte() {
+    let mut total_bytes = MAX_RECOVERY_TOTAL_BYTES - 1;
+
+    let failure = charge_recovery_bytes(&mut total_bytes, 2)
+        .expect_err("the transfer budget must be independent of the request count");
+
+    assert!(matches!(failure, RecoveryScanFailure::Invalid(_)));
 }
