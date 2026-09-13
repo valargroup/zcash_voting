@@ -851,6 +851,9 @@ mod pir_tests {
             privacy_trim_dropped_bundles: 0,
             privacy_trim_dropped_notes: 0,
             privacy_trim_dropped_value_zatoshi: 0,
+            skipped_suffix_bundles: 0,
+            skipped_suffix_notes: 0,
+            skipped_suffix_value_zatoshi: 0,
         };
         let pir_client = pir_client::PirClientBlocking::with_transport(
             "https://pir.test",

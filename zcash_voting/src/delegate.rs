@@ -2859,6 +2859,9 @@ mod tests {
                 privacy_trim_dropped_bundles: 0,
                 privacy_trim_dropped_notes: 0,
                 privacy_trim_dropped_value_zatoshi: 0,
+                skipped_suffix_bundles: 0,
+                skipped_suffix_notes: 0,
+                skipped_suffix_value_zatoshi: 0,
             },
             bundle_note_infos,
             delegation_keys: DelegationKeys {

@@ -468,12 +468,25 @@ impl VotingNoteSelectionResultView {
     ) -> Result<Self, VotingError> {
         let effective_policy =
             voting_db.effective_bundle_policy(round_id, BundlePolicy::default())?;
-        Self::from_selected_with_policy(selected, effective_policy)
+        Self::from_selected_with_policy_and_round(
+            selected,
+            effective_policy,
+            Some((voting_db, round_id)),
+        )
     }
 
+    #[cfg(test)]
     fn from_selected_with_policy(
         selected: SelectedNotes,
         bundle_policy: BundlePolicy,
+    ) -> Result<Self, VotingError> {
+        Self::from_selected_with_policy_and_round(selected, bundle_policy, None)
+    }
+
+    fn from_selected_with_policy_and_round(
+        selected: SelectedNotes,
+        bundle_policy: BundlePolicy,
+        round: Option<(&crate::round::VotingDb, &str)>,
     ) -> Result<Self, VotingError> {
         let note_count =
             u32::try_from(selected.notes.len()).map_err(|_| VotingError::InvalidInput {
@@ -486,13 +499,33 @@ impl VotingNoteSelectionResultView {
         // same bundle set; recomputing the weight separately could drift.
         // Malformed note rows report zero weight rather than failing, matching
         // the behavior this view had when it called `voting_power_with_policy`.
-        let plan = crate::note_bundling::canonical_note_bundle_plan_for_notes(
+        // Persisted-prefix inconsistencies still fail: they describe stale or
+        // incomplete round state rather than malformed caller-supplied notes.
+        let canonical_plan = crate::note_bundling::canonical_note_bundle_plan_for_notes(
             &selected.voting_note_infos(),
             bundle_policy,
         )
         .ok();
-        let eligible_weight_zatoshi = plan.as_ref().map_or(0, |plan| plan.eligible_weight);
-        let privacy_trim = plan.map(|plan| plan.privacy_trim).unwrap_or_default();
+        let effective_plan = match (canonical_plan, round) {
+            (Some(plan), Some((voting_db, round_id))) => {
+                Some(voting_db.effective_round_bundle_plan_for_canonical_plan(round_id, plan)?)
+            }
+            (Some(plan), None) => Some(crate::round::EffectiveRoundBundlePlan {
+                plan,
+                skipped_suffix: Default::default(),
+            }),
+            (None, _) => None,
+        };
+        let eligible_weight_zatoshi = effective_plan
+            .as_ref()
+            .map_or(0, |effective_plan| effective_plan.plan.eligible_weight);
+        let privacy_trim = effective_plan
+            .as_ref()
+            .map(|effective_plan| effective_plan.plan.privacy_trim)
+            .unwrap_or_default();
+        let skipped_suffix = effective_plan
+            .map(|effective_plan| effective_plan.skipped_suffix)
+            .unwrap_or_default();
         let snapshot_height = selected.snapshot_height;
         let anchor_height = selected.anchor_tree_state.height;
         let notes = selected.notes.into_iter().map(Into::into).collect();
@@ -503,6 +536,9 @@ impl VotingNoteSelectionResultView {
             anchor_height,
             notes,
             privacy_trim,
+            skipped_suffix_bundles: skipped_suffix.bundles,
+            skipped_suffix_notes: skipped_suffix.notes,
+            skipped_suffix_value_zatoshi: skipped_suffix.value_zatoshi,
         })
     }
 }
@@ -2287,6 +2323,9 @@ mod tests {
             privacy_trim_dropped_bundles: 1,
             privacy_trim_dropped_notes: 4,
             privacy_trim_dropped_value_zatoshi: 900,
+            skipped_suffix_bundles: 2,
+            skipped_suffix_notes: 7,
+            skipped_suffix_value_zatoshi: 1_100,
         };
         assert_eq!(view.bundle_count, 2);
         assert_eq!(view.eligible_weight, 50);
@@ -2300,6 +2339,9 @@ mod tests {
         assert_eq!(json["privacy_trim_dropped_bundles"], 1);
         assert_eq!(json["privacy_trim_dropped_notes"], 4);
         assert_eq!(json["privacy_trim_dropped_value_zatoshi"], 900);
+        assert_eq!(json["skipped_suffix_bundles"], 2);
+        assert_eq!(json["skipped_suffix_notes"], 7);
+        assert_eq!(json["skipped_suffix_value_zatoshi"], 1_100);
         assert!(json.get("privacy_trim").is_none());
     }
 
@@ -2571,8 +2613,23 @@ mod tests {
         // Results cached before privacy trimming shipped must still decode.
         let mut legacy_json = serde_json::to_value(&view).unwrap();
         legacy_json.as_object_mut().unwrap().remove("privacy_trim");
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("skipped_suffix_bundles");
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("skipped_suffix_notes");
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("skipped_suffix_value_zatoshi");
         let decoded: VotingNoteSelectionResultView = serde_json::from_value(legacy_json).unwrap();
         assert_eq!(decoded.privacy_trim, Default::default());
+        assert_eq!(decoded.skipped_suffix_bundles, 0);
+        assert_eq!(decoded.skipped_suffix_notes, 0);
+        assert_eq!(decoded.skipped_suffix_value_zatoshi, 0);
     }
 
     #[test]
@@ -2616,13 +2673,135 @@ mod tests {
             2 * divisor
         );
 
+        voting_db
+            .delete_skipped_bundles(&params.vote_round_id, 1)
+            .unwrap();
         let resumed_round_view = VotingNoteSelectionResultView::from_selected_for_round(
-            selected,
+            selected.clone(),
             &voting_db,
             &params.vote_round_id,
         )
         .unwrap();
-        assert_eq!(resumed_round_view.eligible_weight_zatoshi, 2 * divisor);
+        assert_eq!(resumed_round_view.eligible_weight_zatoshi, divisor);
+        assert_eq!(resumed_round_view.skipped_suffix_bundles, 1);
+        assert_eq!(resumed_round_view.skipped_suffix_notes, 2);
+        assert_eq!(
+            resumed_round_view.skipped_suffix_value_zatoshi,
+            2 * note_value
+        );
+        assert_eq!(
+            crate::voting_power_for_round(&selected, &voting_db, &params.vote_round_id,).unwrap(),
+            divisor
+        );
+    }
+
+    #[test]
+    fn voting_note_selection_result_view_rejects_an_incomplete_persisted_plan() {
+        let divisor = crate::governance::BALLOT_DIVISOR;
+        let note_value = divisor * 3 / 5;
+        let selected = SelectedNotes {
+            notes: (1..=4)
+                .map(|position| test_note_ref(note_value, note_value, position))
+                .collect(),
+            snapshot_height: 100,
+            anchor_tree_state: test_tree_state(100),
+        };
+        let params = target_round_params(42);
+        let voting_db = crate::round::VotingDb::open_in_memory().unwrap();
+        voting_db.set_wallet_id("selection-view-incomplete-plan");
+        voting_db
+            .ensure_round(Network::Regtest, &params, None)
+            .unwrap();
+        let policy = BundlePolicy::new(2).unwrap().with_max_privacy_bundles(None);
+        voting_db
+            .ensure_bundles_with_policy(
+                &params.vote_round_id,
+                &selected.voting_note_infos(),
+                policy,
+            )
+            .unwrap();
+
+        let incomplete_selection = SelectedNotes {
+            notes: selected.notes[..2].to_vec(),
+            snapshot_height: selected.snapshot_height,
+            anchor_tree_state: selected.anchor_tree_state,
+        };
+        let power_error =
+            crate::voting_power_for_round(&incomplete_selection, &voting_db, &params.vote_round_id)
+                .unwrap_err();
+        let error = VotingNoteSelectionResultView::from_selected_for_round(
+            incomplete_selection,
+            &voting_db,
+            &params.vote_round_id,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("produces 1 delegation bundles, but 2 bundle rows are already persisted"),
+            "{error}"
+        );
+        assert!(
+            power_error
+                .to_string()
+                .contains("produces 1 delegation bundles, but 2 bundle rows are already persisted"),
+            "{power_error}"
+        );
+    }
+
+    #[test]
+    fn round_reports_reject_a_reordered_persisted_prefix() {
+        let divisor = crate::governance::BALLOT_DIVISOR;
+        let note_value = divisor * 3 / 5;
+        let selected = SelectedNotes {
+            notes: (1..=4)
+                .map(|position| test_note_ref(note_value, note_value, position))
+                .collect(),
+            snapshot_height: 100,
+            anchor_tree_state: test_tree_state(100),
+        };
+        let params = target_round_params(42);
+        let voting_db = crate::round::VotingDb::open_in_memory().unwrap();
+        voting_db.set_wallet_id("selection-view-reordered-prefix");
+        voting_db
+            .ensure_round(Network::Regtest, &params, None)
+            .unwrap();
+        let policy = BundlePolicy::new(2).unwrap().with_max_privacy_bundles(None);
+        voting_db
+            .ensure_bundles_with_policy(
+                &params.vote_round_id,
+                &selected.voting_note_infos(),
+                policy,
+            )
+            .unwrap();
+
+        let mut reordered_selection = selected;
+        reordered_selection
+            .notes
+            .push(test_note_ref(2 * divisor, 2 * divisor, 99));
+        let power_error =
+            crate::voting_power_for_round(&reordered_selection, &voting_db, &params.vote_round_id)
+                .unwrap_err();
+        let view_error = VotingNoteSelectionResultView::from_selected_for_round(
+            reordered_selection,
+            &voting_db,
+            &params.vote_round_id,
+        )
+        .unwrap_err();
+
+        assert!(
+            power_error
+                .to_string()
+                .contains("notes do not match persisted setup"),
+            "{power_error}"
+        );
+        assert!(
+            view_error
+                .to_string()
+                .contains("notes do not match persisted setup"),
+            "{view_error}"
+        );
     }
 
     #[test]

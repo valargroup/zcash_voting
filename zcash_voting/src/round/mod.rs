@@ -54,6 +54,29 @@ pub struct BundleLayout {
     /// Raw value removed by the privacy tail trim.
     #[serde(default)]
     pub privacy_trim_dropped_value_zatoshi: u64,
+    /// Persisted trailing bundles intentionally removed from this round.
+    #[serde(default)]
+    pub skipped_suffix_bundles: u32,
+    /// Notes contained in the intentionally removed trailing bundles.
+    #[serde(default)]
+    pub skipped_suffix_notes: u32,
+    /// Raw value contained in the intentionally removed trailing bundles.
+    #[serde(default)]
+    pub skipped_suffix_value_zatoshi: u64,
+}
+
+/// The portion of a canonical plan excluded by the round's persisted prefix.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SkippedBundleSuffix {
+    pub(crate) bundles: u32,
+    pub(crate) notes: u32,
+    pub(crate) value_zatoshi: u64,
+}
+
+/// A canonical plan limited to the bundle rows that still exist for a round.
+pub(crate) struct EffectiveRoundBundlePlan {
+    pub(crate) plan: crate::note_bundling::ChunkResult,
+    pub(crate) skipped_suffix: SkippedBundleSuffix,
 }
 
 /// Validates that `bundle_index` is in `[0, bundle_count)`.
@@ -100,8 +123,25 @@ pub fn bundle_notes_for_index_for_round(
     voting_db: &VotingDb,
     round_id: &str,
 ) -> Result<Vec<NoteInfo>, VotingError> {
-    let policy = voting_db.effective_bundle_policy(round_id, BundlePolicy::default())?;
-    bundle_notes_for_index_with_policy(round_note_infos, bundle_setup, bundle_index, policy)
+    if bundle_setup.bundle_count == 0 {
+        return Err(VotingError::InvalidInput {
+            message: "No eligible voting bundles were created for delegation".to_string(),
+        });
+    }
+    if bundle_index >= bundle_setup.bundle_count {
+        return Err(VotingError::InvalidInput {
+            message: format!(
+                "bundle_index {bundle_index} is out of range for {} delegation bundles",
+                bundle_setup.bundle_count
+            ),
+        });
+    }
+    note_bundles_for_round(round_note_infos, voting_db, round_id)?
+        .get(bundle_index as usize)
+        .cloned()
+        .ok_or_else(|| VotingError::InvalidInput {
+            message: format!("bundle_index {bundle_index} has no eligible note bundle"),
+        })
 }
 
 /// Returns the note rows for one bundle index under an explicit bundle policy.
@@ -155,7 +195,10 @@ pub fn note_bundles_for_round(
     round_id: &str,
 ) -> Result<Vec<Vec<NoteInfo>>, VotingError> {
     let policy = voting_db.effective_bundle_policy(round_id, BundlePolicy::default())?;
-    note_bundles_with_policy(notes, policy)
+    Ok(voting_db
+        .effective_round_bundle_plan_for_notes(round_id, notes, policy)?
+        .plan
+        .bundles)
 }
 
 /// Returns the eligible note bundles for a round note set under an explicit policy.
@@ -164,6 +207,61 @@ pub fn note_bundles_with_policy(
     policy: BundlePolicy,
 ) -> Result<Vec<Vec<NoteInfo>>, VotingError> {
     Ok(canonical_note_bundle_plan_for_notes(notes, policy)?.bundles)
+}
+
+/// Limits an already validated canonical plan to the round's persisted prefix.
+fn limit_canonical_plan_to_persisted_prefix(
+    mut plan: crate::note_bundling::ChunkResult,
+    persisted_bundle_count: u32,
+) -> Result<EffectiveRoundBundlePlan, VotingError> {
+    if persisted_bundle_count == 0 {
+        return Ok(EffectiveRoundBundlePlan {
+            plan,
+            skipped_suffix: SkippedBundleSuffix::default(),
+        });
+    }
+
+    let prefix_len = persisted_bundle_count as usize;
+    if plan.bundles.len() < prefix_len {
+        return Err(VotingError::InvalidInput {
+            message: format!(
+                "current note selection produces {} delegation bundles, but {persisted_bundle_count} bundle rows are already persisted",
+                plan.bundles.len()
+            ),
+        });
+    }
+
+    let skipped_bundles = plan.bundles.split_off(prefix_len);
+    let skipped_notes = skipped_bundles.iter().try_fold(0usize, |count, bundle| {
+        count
+            .checked_add(bundle.len())
+            .ok_or_else(|| VotingError::InvalidInput {
+                message: "skipped suffix note count overflow".to_string(),
+            })
+    })?;
+    let skipped_value_zatoshi = skipped_bundles.iter().try_fold(0u64, |value, bundle| {
+        value
+            .checked_add(raw_bundle_weight(bundle)?)
+            .ok_or_else(|| VotingError::InvalidInput {
+                message: "skipped suffix note value overflow".to_string(),
+            })
+    })?;
+    plan.eligible_weight = quantized_bundle_set_weight(&plan.bundles)?;
+
+    Ok(EffectiveRoundBundlePlan {
+        plan,
+        skipped_suffix: SkippedBundleSuffix {
+            bundles: u32::try_from(skipped_bundles.len()).map_err(|_| {
+                VotingError::InvalidInput {
+                    message: "skipped suffix bundle count exceeds u32".to_string(),
+                }
+            })?,
+            notes: u32::try_from(skipped_notes).map_err(|_| VotingError::InvalidInput {
+                message: "skipped suffix note count exceeds u32".to_string(),
+            })?,
+            value_zatoshi: skipped_value_zatoshi,
+        },
+    })
 }
 
 /// Returns the unquantized zatoshi value for a bundle.
@@ -576,6 +674,36 @@ impl VotingDb {
         Ok(requested)
     }
 
+    /// Reconstructs the active plan and verifies it describes the persisted rows.
+    ///
+    /// A non-zero persisted bundle count is the authoritative prefix boundary,
+    /// but the count alone is insufficient: the retained canonical bundles must
+    /// also match the note identities stored for that prefix.
+    pub(crate) fn effective_round_bundle_plan_for_notes(
+        &self,
+        round_id: &str,
+        notes: &[NoteInfo],
+        policy: BundlePolicy,
+    ) -> Result<EffectiveRoundBundlePlan, VotingError> {
+        let plan = canonical_note_bundle_plan_for_notes(notes, policy)?;
+        self.effective_round_bundle_plan_for_canonical_plan(round_id, plan)
+    }
+
+    /// Limits a canonical plan to persisted rows and validates their identities.
+    pub(crate) fn effective_round_bundle_plan_for_canonical_plan(
+        &self,
+        round_id: &str,
+        plan: crate::note_bundling::ChunkResult,
+    ) -> Result<EffectiveRoundBundlePlan, VotingError> {
+        let persisted_bundle_count = self.get_bundle_count(round_id)?;
+        let effective_plan =
+            limit_canonical_plan_to_persisted_prefix(plan, persisted_bundle_count)?;
+        if persisted_bundle_count > 0 {
+            validate_persisted_bundle_notes(self, round_id, &effective_plan.plan.bundles)?;
+        }
+        Ok(effective_plan)
+    }
+
     /// Creates bundle rows for `notes`, or validates existing bundle rows.
     ///
     /// The note ordering, duplicate-nullifier handling, and weight quantization
@@ -621,6 +749,9 @@ impl VotingDb {
                 privacy_trim_dropped_bundles: plan.privacy_trim.dropped_bundles,
                 privacy_trim_dropped_notes: plan.privacy_trim.dropped_notes,
                 privacy_trim_dropped_value_zatoshi: plan.privacy_trim.dropped_value,
+                skipped_suffix_bundles: 0,
+                skipped_suffix_notes: 0,
+                skipped_suffix_value_zatoshi: 0,
             });
         }
 
@@ -655,6 +786,9 @@ impl VotingDb {
             privacy_trim_dropped_bundles: plan.privacy_trim.dropped_bundles,
             privacy_trim_dropped_notes: plan.privacy_trim.dropped_notes,
             privacy_trim_dropped_value_zatoshi: plan.privacy_trim.dropped_value,
+            skipped_suffix_bundles: 0,
+            skipped_suffix_notes: 0,
+            skipped_suffix_value_zatoshi: 0,
         })
     }
 
@@ -701,32 +835,36 @@ impl VotingDb {
 
         let policy = self.effective_bundle_policy(round_id, policy)?;
         let plan = canonical_note_bundle_plan_for_notes(notes, policy)?;
-        let privacy_trim = plan.privacy_trim;
-        let bundles = plan.bundles;
-        if bundles.len() < stored_count as usize {
-            return Err(VotingError::InvalidInput {
-                message: format!(
-                    "current note selection produces {} delegation bundles, but {stored_count} bundle rows are already persisted for round {round_id}",
-                    bundles.len()
-                ),
-            });
-        }
-
-        let stored_bundles = &bundles[..stored_count as usize];
-        validate_persisted_bundle_notes(self, round_id, stored_bundles)?;
+        let effective_plan =
+            limit_canonical_plan_to_persisted_prefix(plan, stored_count).map_err(|error| {
+                match error {
+                    VotingError::InvalidInput { message }
+                        if message.contains("bundle rows are already persisted") =>
+                    {
+                        VotingError::InvalidInput {
+                            message: format!("{message} for round {round_id}"),
+                        }
+                    }
+                    other => other,
+                }
+            })?;
+        validate_persisted_bundle_notes(self, round_id, &effective_plan.plan.bundles)?;
         // Record the policy only after it reproduces the persisted prefix,
         // replacing unreadable policy JSON with the validated fallback.
         let conn = self.conn();
         queries::set_round_bundle_policy(&conn, round_id, &self.wallet_id(), policy)?;
         Ok(BundleLayout {
             bundle_count: stored_count,
-            eligible_weight: quantized_bundle_set_weight(stored_bundles)?,
+            eligible_weight: effective_plan.plan.eligible_weight,
             // This view describes the persisted prefix, not notes omitted while
             // planning the original bundle set.
             dropped_count: 0,
-            privacy_trim_dropped_bundles: privacy_trim.dropped_bundles,
-            privacy_trim_dropped_notes: privacy_trim.dropped_notes,
-            privacy_trim_dropped_value_zatoshi: privacy_trim.dropped_value,
+            privacy_trim_dropped_bundles: effective_plan.plan.privacy_trim.dropped_bundles,
+            privacy_trim_dropped_notes: effective_plan.plan.privacy_trim.dropped_notes,
+            privacy_trim_dropped_value_zatoshi: effective_plan.plan.privacy_trim.dropped_value,
+            skipped_suffix_bundles: effective_plan.skipped_suffix.bundles,
+            skipped_suffix_notes: effective_plan.skipped_suffix.notes,
+            skipped_suffix_value_zatoshi: effective_plan.skipped_suffix.value_zatoshi,
         })
     }
 }
@@ -1463,6 +1601,16 @@ mod tests {
         assert_eq!(
             reused.eligible_weight,
             5 * crate::governance::BALLOT_DIVISOR
+        );
+        assert_eq!(reused.skipped_suffix_bundles, 1);
+        assert_eq!(reused.skipped_suffix_notes, 1);
+        assert_eq!(
+            reused.skipped_suffix_value_zatoshi,
+            crate::governance::BALLOT_DIVISOR
+        );
+        assert_eq!(
+            note_bundles_for_round(&notes, &db, ROUND_ID).unwrap().len(),
+            1
         );
     }
 
