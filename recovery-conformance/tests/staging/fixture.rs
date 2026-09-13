@@ -388,12 +388,14 @@ pub async fn build_control(
         max_dispatches,
         faults,
     );
-    let outcome = run_to_quiescence(&fixture.worker, &config);
+    let resume = run_to_quiescence(&fixture.worker, &config);
     // Before the outcome is judged: a run that failed still fetched whatever
     // PIR proofs it got through, and those are exactly what the next run needs
     // in order not to fail the same way.
     warm_from(fixture, &sidecar);
-    let outcome = outcome?;
+    let resume = resume?;
+    eprintln!("  control: resume {}", resume.summary());
+    let outcome = &resume.outcome;
     anyhow::ensure!(
         outcome.is_terminal_success(),
         "the control run ended at {} rather than quiescence",

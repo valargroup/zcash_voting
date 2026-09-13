@@ -412,6 +412,7 @@ as a claim.
 | **A1** | Two `resume_plan` calls over the same durable state return identical plans | `deterministic_plan` |
 | **A2** | A resumed round reaches terminal quiescence, never `Failures` or `PassBudgetExhausted` | matrix, per stage |
 | **A3** | Terminal submission states match the uncrashed control | matrix, per stage |
+| **A6** | **A run reporting a stalled chain recovery must have made at least one chain read for the step that stalled.** `ChainRecoveryStalled` is not a verdict, so the harness waits and re-drives — but that licence belongs to a recovery that scanned and found nothing, not to one that normalized an abandoned reservation and returned. The two are identical in the outcome, the durable row, and the eventual result; only the request count separates them. Scoped to the stalled step, because a resumed round drives its other bundles to completion and a round-wide total is never zero | `assert_a_stall_attempted_recovery`, in both re-drive loops |
 | **A4** | A second resume plans no further *foreground* work. `ConfirmShare` steps are excluded by design: a round ending in `BackgroundShareWorkOnly` has finished what the foreground owns, and the host's timer closes the rest | `assert_idempotent` |
 | **B1** (part) | After a `before-broadcast` crash the abandoned reservation **still exists**; a row that vanished would let the next pass reserve a fresh first attempt and build a second transaction | `assert_stage_state` |
 | **B2** | The crashed bundle is *advanced*, never re-delegated — a second delegation would spend its notes twice | `assert_stage_state` |
@@ -553,7 +554,7 @@ does not exist. **Do not read them as tested.**
 | | Why not yet |
 | --- | --- |
 | **A5** | No assertion that a helper share is never sent with the `0` tree-position placeholder. |
-| **B1** (rest) | That the row becomes exactly `Recovering` is **not** asserted: normalization is lazy, happening inside the lifecycle's next admission rather than at open, so it needs an assertion that drives one admission and reads the row before the round advances past it. The safety-critical half — the row survives at all — *is* asserted, for a crash (`B1`) and now for a hang (`H3`). |
+| **B1** (rest) | That the row becomes exactly `Recovering` is **not** asserted: normalization is lazy, happening inside the lifecycle's next admission rather than at open, so it needs an assertion that drives one admission and reads the row before the round advances past it. The safety-critical half — the row survives at all — *is* asserted, for a crash (`B1`) and now for a hang (`H3`). What the resumed run must *do* with that row is now covered from the other side by `A6`, which fails a run that reported a stalled recovery without making a chain read for it, and in the SDK by `the_first_resumed_episode_confirms_an_abandoned_vote_after_reopening` and `an_abandoned_vote_missing_from_the_tree_retransmits_in_the_first_resumed_pass`. |
 | **B6** | Generation-identity immutability is trigger-enforced but not checked here. |
 | **C1, C2, C4, C6, C7** | Roster changes, per-proposal isolation, the ballot gate, tree-cache consistency, and generation binding have no assertion. |
 | **D3** (rest) | Only the journalling half is asserted. That an ambiguity is later *erased* — promoted to a definite outcome by a duplicate-safe retry rather than carried forever — is still unchecked. |
@@ -585,7 +586,37 @@ note. Three things are checked, in increasing strength:
 
 A stalled recovery is not a verdict: the specification separates
 `ChainRecoveryStalled` from `ChainTerminal` because running again later may
-resolve it, so the matrix waits and re-drives rather than failing.
+resolve it, so the matrix waits and re-drives rather than failing — **but only
+once the run has shown it looked** (`A6`). That qualifier is not decoration.
+The unqualified policy is how this suite reported a pass on a round whose first
+resumed process normalized an abandoned reservation to `Recovering` and
+returned without a single chain read: the second process scanned and confirmed,
+the terminal state matched the control, and every assertion held. Nothing here
+asked what the first run did, because nothing here could. The chain reads a run
+makes are now attributed to the step that made them, so "the transaction is not
+mined yet" and "this run did no recovery work" stop being the same observation.
+
+How many children a resume costs is reported every stage beside the
+reservations line and is deliberately **not** asserted yet. A chain that has not
+advanced legitimately costs a re-drive, and encoding a ceiling before observing
+one is how a matrix acquires a flake instead of a finding. The number is printed
+so a change in it is visible.
+
+First live observation, both sharp stages against `svote-1`:
+
+| | Resume attempts | Chain reads | Wall clock |
+| --- | --- | --- | --- |
+| control (uncrashed) | 1 | 9 | — |
+| `before-broadcast` | 1 | 9 | 85s |
+| `after-broadcast-unread` | 1 | 9 | 130s |
+
+One attempt, in every case. That is the number the regression would have moved:
+a first resumed run that normalized its reservation and returned needs a second
+child, so `2` at either sharp stage is the shape to look for. A ceiling of one
+is not asserted on this single run — the legal re-drive for a transaction that
+is not yet mined has to be seen at least once before its cost is known — but the
+observation is recorded here so a later change has something to be compared
+against.
 
 Neither is a stale vote-tree cache. A crash can leave the cached
 vote-commitment tree disagreeing with a delegation that confirmed; the tree sync
@@ -928,7 +959,37 @@ note. Three things are checked, in increasing strength:
 
 A stalled recovery is not a verdict: the specification separates
 `ChainRecoveryStalled` from `ChainTerminal` because running again later may
-resolve it, so the matrix waits and re-drives rather than failing.
+resolve it, so the matrix waits and re-drives rather than failing — **but only
+once the run has shown it looked** (`A6`). That qualifier is not decoration.
+The unqualified policy is how this suite reported a pass on a round whose first
+resumed process normalized an abandoned reservation to `Recovering` and
+returned without a single chain read: the second process scanned and confirmed,
+the terminal state matched the control, and every assertion held. Nothing here
+asked what the first run did, because nothing here could. The chain reads a run
+makes are now attributed to the step that made them, so "the transaction is not
+mined yet" and "this run did no recovery work" stop being the same observation.
+
+How many children a resume costs is reported every stage beside the
+reservations line and is deliberately **not** asserted yet. A chain that has not
+advanced legitimately costs a re-drive, and encoding a ceiling before observing
+one is how a matrix acquires a flake instead of a finding. The number is printed
+so a change in it is visible.
+
+First live observation, both sharp stages against `svote-1`:
+
+| | Resume attempts | Chain reads | Wall clock |
+| --- | --- | --- | --- |
+| control (uncrashed) | 1 | 9 | — |
+| `before-broadcast` | 1 | 9 | 85s |
+| `after-broadcast-unread` | 1 | 9 | 130s |
+
+One attempt, in every case. That is the number the regression would have moved:
+a first resumed run that normalized its reservation and returned needs a second
+child, so `2` at either sharp stage is the shape to look for. A ceiling of one
+is not asserted on this single run — the legal re-drive for a transaction that
+is not yet mined has to be seen at least once before its cost is known — but the
+observation is recorded here so a later change has something to be compared
+against.
 
 Neither is a stale vote-tree cache. A crash can leave the cached
 vote-commitment tree disagreeing with a delegation that confirmed; the tree sync

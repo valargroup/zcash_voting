@@ -21,6 +21,7 @@
 //! it kills processes, and it must never run as part of `make test`.
 
 pub mod assertions;
+pub mod chain_reads;
 pub mod child;
 pub mod combined;
 pub mod environment;
@@ -39,6 +40,7 @@ pub mod stages;
 pub mod stall;
 pub mod wallet_sync;
 
+pub use chain_reads::{ChainReadLedger, CountingRoute};
 pub use helper_fleet::{HelperAvailability, HelperFleetPlan, SYNTHETIC_HELPER_URLS};
 pub use recrash::RecrashCase;
 pub use setup_preservation::{assert_delegation_setup_preserved, BundleSetup, SetupComparison};

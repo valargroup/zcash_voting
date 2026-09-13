@@ -2125,3 +2125,139 @@ async fn resubmission_waits_for_the_confirmed_vc_position() {
         789
     );
 }
+
+/// A file-backed sidecar that removes itself, WAL and shm included.
+struct Sidecar(std::path::PathBuf);
+
+impl Drop for Sidecar {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+        }
+    }
+}
+
+impl Sidecar {
+    fn new(label: &str) -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        Self(std::env::temp_dir().join(format!(
+            "share-{label}-{}-{nonce}.sqlite",
+            std::process::id()
+        )))
+    }
+
+    /// Opens the sidecar, seeding a delivered share on first use.
+    ///
+    /// Called twice by the test below: once to build the state a crash leaves,
+    /// and once to reopen it. Seeding is idempotent because the second open
+    /// must find the round already there, exactly as a restarted host does.
+    fn open(&self, seed: bool) -> VotingDb {
+        let db = VotingDb::open_path(&self.0).unwrap();
+        db.set_wallet_id(WALLET_ID);
+        if seed {
+            seed_recoverable_vote_for_wallet(&db, WALLET_ID);
+            share::record_delivery(
+                &db,
+                &share::ShareDeliveryRecordParams {
+                    round_id: ROUND_ID,
+                    bundle_index: 0,
+                    proposal_id: 1,
+                    share_index: 0,
+                    // One acceptance against a target of one, so placement is
+                    // already satisfied and the share is neither under-placed
+                    // nor overdue. That matters: those two conditions each
+                    // trigger a resubmission on their own, and a test that left
+                    // either true would POST no matter what the crash marker
+                    // said -- passing even with interrupted recovery deleted.
+                    submission: &ShareSubmissionReport {
+                        accepted_urls: vec![helper(1)],
+                        ambiguous_urls: Vec::new(),
+                        target_count: 1,
+                    },
+                    submit_at: SUBMIT_AT,
+                },
+            )
+            .unwrap();
+        }
+        db
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_tracking_pass_after_reopening_recovers_an_interrupted_attempt() {
+    // The helper-side counterpart of the chain lifecycle's first-resumed-pass
+    // obligation. Every other interrupted-attempt test seeds its marker in the
+    // same process that then recovers it, so none of them can tell a marker
+    // that survived a real close from one that only ever lived in this
+    // connection's page cache.
+    //
+    // The claim is about the *first* pass: an interrupted attempt must draw a
+    // duplicate-safe POST from the pass that first sees it after reopening, not
+    // from some later one. A share that needs two passes to move is a share
+    // whose recovery depends on the host running tracking more than once.
+    let sidecar = Sidecar::new("interrupted-reopen");
+    let configured = helpers(3);
+    {
+        let db = sidecar.open(true);
+        mark_interrupted_attempt(&db, &helper(2));
+        let stored = only_share(&db);
+        assert_eq!(
+            stored.attempting_urls,
+            vec![helper(2)],
+            "the crash marker must be durable before the connection closes"
+        );
+        // Dropped with the attempt reserved and unclassified: the wallet cannot
+        // prove whether the POST left the process.
+    }
+
+    let db = sidecar.open(false);
+    assert_eq!(
+        only_share(&db).attempting_urls,
+        vec![helper(2)],
+        "the crash marker must survive the reopen, or recovery cannot tell an interrupted \
+         attempt from one never made"
+    );
+
+    let post_url = format!("{}/shielded-vote/v1/shares", helper(2));
+    // Queued but not expected: an untried helper is available, and reaching for
+    // it would mean the pass expanded placement instead of reconciling the
+    // attempt it could not account for.
+    let untried_post = format!("{}/shielded-vote/v1/shares", helper(3));
+    let transport = Arc::new(MockTransport::default());
+    transport.queue_post(&post_url, json_status("duplicate"));
+    transport.queue_post(&untried_post, json_status("queued"));
+    let client = client_with(transport.clone());
+    let random = zero_bytes;
+    let mut tracking_params = params(&configured, SUBMIT_AT - 1, &random);
+    tracking_params.vote_end_time_seconds = None;
+
+    let report = track_pending_shares(&db, &tracking_params, &client, &never_cancel())
+        .await
+        .unwrap();
+
+    // The assertion that matters: the reopened pass actually contacted the
+    // helper, rather than reclassifying the row and returning.
+    assert_eq!(
+        transport.call_count(&post_url),
+        1,
+        "the first pass after reopening owes the interrupted helper one duplicate-safe \
+         attempt, and a pass that made none has not recovered anything"
+    );
+    assert_eq!(
+        transport.call_count(&untried_post),
+        0,
+        "reconciling the interrupted attempt must not expand placement to a new helper"
+    );
+    assert_eq!(report.resubmitted[0].server_url, helper(2));
+    assert_eq!(transport.posted_submit_at(&post_url), SUBMIT_AT);
+
+    let stored = only_share(&db);
+    assert_eq!(stored.sent_to_urls, vec![helper(1), helper(2)]);
+    assert!(
+        stored.attempting_urls.is_empty(),
+        "a resolved attempt must leave the crash marker behind"
+    );
+}
