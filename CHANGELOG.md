@@ -6,7 +6,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-This release is `zcash_voting` 4.0.0.
+## v5.0.0
+
+This release is `zcash_voting` 5.0.0 and supersedes the 4.0.0 prerelease
+series.
 
 ### Added
 
@@ -59,7 +62,7 @@ This release is `zcash_voting` 4.0.0.
   `zakura-wallet-lib 0.1.0-rc5` stack.
 - Prepared `vote-commitment-tree 0.6.1` and
   `vote-commitment-tree-client 0.8.1` with the updated exact pins; publish them
-  in that order before `zcash_voting 4.0.0`.
+  in that order before `zcash_voting 5.0.0`.
 
 ### Fixed
 - Hardened voting sidecar migration against schema drift. A sidecar whose
