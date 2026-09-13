@@ -8,6 +8,11 @@ List the tests or manual checks that cover the change.
 
 ## Backport
 
-Apply `A:backport/v5.0.x` only when this change should also ship on the active
-`release/v5.0.x` maintenance line. Otherwise, leave the target label unset. See
+Apply each label whose maintenance line should receive this change:
+
+- `A:backport/v3.x` for `release/v3.x`
+- `A:backport/v4.0.x` for `release/v4.0.x`
+- `A:backport/v5.0.x` for `release/v5.0.x`
+
+Otherwise, leave the target labels unset. See
 [Release branches and backports](docs/release-branches.md).

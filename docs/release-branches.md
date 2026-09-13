@@ -4,7 +4,14 @@
 `release/vMAJOR.MINOR.x` is the maintenance line for a shipped release series,
 such as `release/v5.0.x` for the `v5.0` releases. The maintenance line exists so
 a fix can ship against an already-released version without also shipping
-whatever else has landed on `main` since.
+whatever else has landed on `main` since. The historical `release/v3.x` branch
+predates this naming pattern and keeps its original name.
+
+The currently supported maintenance lines are:
+
+- `release/v3.x`, selected by `A:backport/v3.x`;
+- `release/v4.0.x`, selected by `A:backport/v4.0.x`; and
+- `release/v5.0.x`, selected by `A:backport/v5.0.x`.
 
 Cut a maintenance branch from the chosen release commit before the first release
 candidate on that line. Every release tag for the line should be reachable from
@@ -36,10 +43,10 @@ next release from `main`, not on the maintenance line.
 
 ## Backport flow
 
-Changes merge to `main` first. Apply `A:backport/v5.0.x` to the source PR when the
-change should also ship on the maintenance line. After the source PR merges,
-Mergify opens a separate PR against `release/v5.0.x` and assigns it to the source
-author.
+Changes merge to `main` first. Apply each `A:backport/*` label whose maintenance
+line should receive the change. A source PR may target more than one supported
+line. After the source PR merges, Mergify opens a separate PR against each
+selected release branch and assigns them to the source author.
 
 That backport PR is an ordinary PR. It runs the normal CI suite and needs human
 review; it is never merged automatically. If the cherry-pick conflicts, Mergify
@@ -47,9 +54,9 @@ opens the PR anyway and applies `A:backport/conflict` — resolve the conflict o
 the generated PR rather than pushing directly to the maintenance branch.
 
 Release-only metadata, such as a version bump for the maintenance line, may
-target `release/v5.0.x` directly. An emergency fix made directly on the branch
-must be forwarded to `main` immediately afterward, or the next release will
-silently regress it.
+target that release branch directly. An emergency fix made directly on a
+maintenance branch must be forwarded to `main` immediately afterward, or the
+next release will silently regress it.
 
 Applying a backport label never creates a tag, publishes a crate, or releases
 anything. Releases remain explicit tags cut by a human.
