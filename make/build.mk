@@ -166,3 +166,38 @@ bench-bundle-pipelines: ## Compare serial and five real-proof pipelines with con
 .PHONY: bench-bundle-pipelines-sample
 bench-bundle-pipelines-sample: ## Run one benchmark sample (normally invoked by the comparison harness)
 	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" cargo nextest run -P ci --release -p zcash_voting --locked --run-ignored ignored-only --success-output immediate -E 'test(bundle_pipeline_benchmark)'
+
+.PHONY: migration-compat-build migration-compat-capture migration-compat-replay migration-compat-unit
+migration-compat-build: ## Build isolated v3.0.0 producer/reader and current history reader
+	@python3 "$(ROOT)/migration-compat/run.py" build
+
+migration-compat-capture: ## Produce a real v3.0.0 sidecar and replay its migration (live staging)
+	@python3 "$(ROOT)/migration-compat/run.py" capture --config "$(CAPTURE_CONFIG)"
+
+migration-compat-replay: ## Verify retained real-release sidecars without network or signing keys
+	@python3 "$(ROOT)/migration-compat/run.py" replay --fixture-dir "$(FIXTURE_DIR)"
+
+migration-compat-unit: ## Test the migration artifact comparator without live services
+	@python3 -m unittest discover -s "$(ROOT)/migration-compat/tests"
+
+.PHONY: migration-compat-provision migration-compat-regression
+migration-compat-provision: ## Provision staging inputs for the old-release capture worker
+	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" cargo run -p recovery-conformance --example migration_provision --locked -- "$(ARTIFACT_DIR)" "$(CAPTURE_CONFIG)"
+
+migration-compat-regression: ## Run the deterministic concurrent migration regression
+	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" cargo nextest run -P agent -p zcash_voting --features test-fixtures --locked -E 'test(waiting_opener_uses_the_committed_version_not_its_initial_read)'
+
+.PHONY: migration-compat-faults migration-compat-fmt
+migration-compat-faults: ## Interrupt real migrations on copies of a retained v3.0.0 capture
+	@MIGRATION_RELEASE_FIXTURE="$(FIXTURE_DB)" CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" cargo nextest run -P agent -p zcash_voting --features test-fixtures --locked -E 'test(denied_migration_statements) or test(killed_migration_process)'
+
+migration-compat-fmt: ## Format only migration conformance sources
+	@rustfmt --edition 2021 $(ROOT)/migration-compat/history.rs $(ROOT)/migration-compat/old/mod.rs $(ROOT)/recovery-conformance/examples/migration_provision.rs $(ROOT)/recovery-conformance/examples/migration_provision_isolated.rs $(ROOT)/zcash_voting/src/storage/migrations/tests/concurrent_open.rs $(ROOT)/zcash_voting/src/storage/migrations/tests/interruption.rs
+
+.PHONY: migration-compat-verify-old
+migration-compat-verify-old: migration-compat-build ## Verify retained proof using v3.0.0's own verifier
+	@"$(ROOT)/target/migration-compat/old-build/release/examples/migration_capture" verify-delegation "$(FIXTURE_DB)"
+
+.PHONY: migration-compat-provision-isolated
+migration-compat-provision-isolated: ## Provision a round only on an explicit disposable migration chain
+	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" cargo run -p recovery-conformance --example migration_provision_isolated --locked -- "$(DEPLOYMENT_CONFIG)" "$(ARTIFACT_DIR)" "$(CAPTURE_CONFIG)"

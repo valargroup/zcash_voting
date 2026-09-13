@@ -3,6 +3,9 @@ use crate::storage::queries;
 use crate::VotingRoundParams;
 use rusqlite::OptionalExtension;
 
+mod concurrent_open;
+mod interruption;
+
 fn pre_v8_schema() -> String {
     include_str!("001_init.sql")
         .split("-- Immutable public delegation authorization")
