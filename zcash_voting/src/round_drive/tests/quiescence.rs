@@ -505,3 +505,136 @@ async fn an_outcome_unknown_share_never_outranks_the_delivery_the_round_owes() {
     assert!(!plan.blocking_recovery);
     assert!(!plan.blocking_share_work);
 }
+
+#[tokio::test]
+async fn a_crash_interrupted_share_is_handed_to_tracking_not_redelivered() {
+    // The sibling of `an_outcome_unknown_share_never_outranks_the_delivery_the
+    // _round_owes`, for the other half of `outcome_unknown`.
+    //
+    // `attempting_urls` and `ambiguous_urls` mean different things. An
+    // ambiguous helper definitely received a POST whose response was unusable;
+    // an attempting helper is a reservation written *before* dispatch, so a
+    // process killed there cannot tell whether the bytes left. The classifier
+    // folds both into one `outcome_unknown` flag, and only the ambiguous half
+    // was covered: narrowing that flag to `ambiguous_urls` alone left every
+    // round-drive test passing while the foreground began re-delivering shares
+    // a helper may already hold.
+    //
+    // Which is the whole claim here. A crash-interrupted share is duplicate-safe
+    // to reconcile only through background tracking, which orders it after
+    // untried helpers; a foreground delivery would re-POST it blind.
+    let helpers = vec!["http://helper.invalid".to_string()];
+    let database = crate::share_tracking::tests::db_with_share(&[]);
+    database
+        .conn()
+        .execute(
+            "UPDATE share_delegations
+             SET attempting_urls = '[\"http://helper.invalid\"]'
+             WHERE round_id = :round_id AND wallet_id = :wallet_id
+               AND bundle_index = 0 AND proposal_id = 1 AND share_index = 0",
+            rusqlite::named_params! {
+                ":round_id": ROUND_ID,
+                ":wallet_id": database.wallet_id(),
+            },
+        )
+        .unwrap();
+    // Share 1 is deliverable: it proves the run still dispatches what it safely
+    // can, so a green result cannot come from the round simply doing nothing.
+    crate::share::record_delivery(
+        &database,
+        &crate::share::ShareDeliveryRecordParams {
+            round_id: ROUND_ID,
+            bundle_index: 0,
+            proposal_id: 1,
+            share_index: 1,
+            submission: &crate::share_tracking::ShareSubmissionReport {
+                accepted_urls: Vec::new(),
+                ambiguous_urls: Vec::new(),
+                target_count: helpers.len(),
+            },
+            submit_at: 1_700_000_000,
+        },
+    )
+    .unwrap();
+    database
+        .conn()
+        .execute(
+            "UPDATE votes SET tx_hash = 'aa' WHERE round_id = :round_id
+               AND wallet_id = :wallet_id AND bundle_index = 0 AND proposal_id = 1",
+            rusqlite::named_params! {
+                ":round_id": ROUND_ID,
+                ":wallet_id": database.wallet_id(),
+            },
+        )
+        .unwrap();
+
+    let helper = Arc::new(AcceptingHelper::default());
+    let executor = executor_over_accepting_helper(Arc::new(database), Arc::clone(&helper));
+    let interrupted = NextStep::ConfirmShare {
+        bundle_index: 0,
+        proposal_id: 1,
+        share_index: 0,
+    };
+    let undelivered = NextStep::ConfirmShare {
+        bundle_index: 0,
+        proposal_id: 1,
+        share_index: 1,
+    };
+
+    let control = ChainSubmissionControl::new(1);
+    // Bounded, because the regression this guards does not merely re-deliver:
+    // a foreground delivery for a share whose only helper is already in
+    // `attempting_urls` does not resolve, and the round stops making progress.
+    // Without the bound that surfaces as a harness timeout minutes later, with
+    // nothing naming the cause.
+    let (report, events) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        drive(&executor, &control),
+    )
+    .await
+    .expect(
+        "the round wedged instead of handing the crash-interrupted share to background \
+         tracking; a foreground delivery to a helper already in `attempting_urls` has \
+         nothing that can resolve it",
+    );
+    let selected: Vec<_> = events
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            RoundDriveEvent::StepSelected { step } => Some(step.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        selected,
+        vec![undelivered],
+        "the crash-interrupted share must not be dispatched in the foreground; only the \
+         share that can make safe progress is"
+    );
+    // One POST, for share 1. Two would mean the interrupted share was
+    // re-delivered to a helper that may already hold it.
+    assert_eq!(*helper.posts.lock().unwrap(), 1);
+
+    let RoundQuiescence::BackgroundShareWorkOnly { shares } = report.quiescence else {
+        panic!(
+            "a crash-interrupted share is handed to tracking: {:?}",
+            report.quiescence
+        );
+    };
+    assert!(
+        shares
+            .iter()
+            .any(|share| share.share_index == interrupted_index(&interrupted)),
+        "the handoff names the interrupted share so the host's tracker can own it: {shares:?}"
+    );
+}
+
+/// The share index a `ConfirmShare` step names.
+fn interrupted_index(step: &NextStep) -> u32 {
+    match step {
+        NextStep::ConfirmShare { share_index, .. } => *share_index,
+        other => panic!("expected a share step: {other:?}"),
+    }
+}
