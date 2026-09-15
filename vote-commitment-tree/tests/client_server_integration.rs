@@ -12,12 +12,39 @@ use std::convert::Infallible;
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use vote_commitment_tree::sync_api::{BlockCommitmentsPage, TreeState};
-use vote_commitment_tree::{MemoryTreeServer, MerklePath, SyncError, TreeClient, TreeSyncApi};
+use vote_commitment_tree::sync_api::{BlockCommitments, BlockCommitmentsPage, TreeState};
+use vote_commitment_tree::{
+    MemoryTreeServer, MerklePath, SyncError, TreeClient, TreeSyncApi, TREE_CAPACITY,
+};
 use voting_crypto_deps::pasta_curves::Fp;
 
 fn fp(x: u64) -> Fp {
     Fp::from(x)
+}
+
+struct StaticTreeSyncApi {
+    state: TreeState,
+    page: BlockCommitmentsPage,
+}
+
+impl TreeSyncApi for StaticTreeSyncApi {
+    type Error = Infallible;
+
+    fn get_block_commitments(
+        &self,
+        _from_height: u32,
+        _to_height: u32,
+    ) -> Result<BlockCommitmentsPage, Self::Error> {
+        Ok(self.page.clone())
+    }
+
+    fn get_root_at_height(&self, _height: u32) -> Result<Option<Fp>, Self::Error> {
+        Ok(None)
+    }
+
+    fn get_tree_state(&self) -> Result<TreeState, Self::Error> {
+        Ok(self.state.clone())
+    }
 }
 
 /// Full lifecycle: MsgDelegateVote → client sync → MsgCastVote → client sync → witnesses verify.
@@ -355,6 +382,105 @@ fn sync_idempotent_when_up_to_date() {
     client.sync(&server).unwrap();
     assert_eq!(client.size(), 1);
     assert_eq!(client.last_synced_height(), Some(1));
+}
+
+#[test]
+fn sync_rejects_overcapacity_responses_without_mutating_the_client() {
+    let mut client = TreeClient::empty();
+    let advertised_error = client
+        .sync(&StaticTreeSyncApi {
+            state: TreeState {
+                next_index: TREE_CAPACITY + 1,
+                root: fp(1),
+                height: 10,
+            },
+            page: BlockCommitmentsPage {
+                blocks: Vec::new(),
+                next_from_height: 0,
+            },
+        })
+        .expect_err("an advertised position beyond capacity must be rejected");
+    assert!(matches!(
+        advertised_error,
+        SyncError::TreeCapacityExceeded {
+            height: 10,
+            requested_next_index,
+            capacity,
+        } if requested_next_index == TREE_CAPACITY + 1 && capacity == TREE_CAPACITY
+    ));
+    assert_eq!(client.size(), 0);
+    assert_eq!(client.last_synced_height(), None);
+
+    let returned_leaf_error = client
+        .sync(&StaticTreeSyncApi {
+            state: TreeState {
+                next_index: 1,
+                root: fp(1),
+                height: 10,
+            },
+            page: BlockCommitmentsPage {
+                blocks: vec![BlockCommitments {
+                    height: 10,
+                    start_index: TREE_CAPACITY,
+                    leaves: vec![vote_commitment_tree::MerkleHashVote::from_fp(fp(1))],
+                    root: fp(1),
+                }],
+                next_from_height: 0,
+            },
+        })
+        .expect_err("a returned leaf beyond capacity must be rejected");
+    assert!(matches!(
+        returned_leaf_error,
+        SyncError::TreeCapacityExceeded {
+            height: 10,
+            requested_next_index,
+            capacity,
+        } if requested_next_index == TREE_CAPACITY + 1 && capacity == TREE_CAPACITY
+    ));
+    assert_eq!(client.size(), 0);
+    assert_eq!(client.last_synced_height(), None);
+}
+
+#[test]
+fn sync_rejects_non_increasing_checkpoints_without_mutating_the_client() {
+    for requested in [2, 1] {
+        let mut client = TreeClient::empty();
+        let error = client
+            .sync(&StaticTreeSyncApi {
+                state: TreeState {
+                    next_index: 2,
+                    root: fp(2),
+                    height: 2,
+                },
+                page: BlockCommitmentsPage {
+                    blocks: vec![
+                        BlockCommitments {
+                            height: 2,
+                            start_index: 0,
+                            leaves: vec![vote_commitment_tree::MerkleHashVote::from_fp(fp(1))],
+                            root: fp(1),
+                        },
+                        BlockCommitments {
+                            height: requested,
+                            start_index: 1,
+                            leaves: vec![vote_commitment_tree::MerkleHashVote::from_fp(fp(2))],
+                            root: fp(2),
+                        },
+                    ],
+                    next_from_height: 0,
+                },
+            })
+            .expect_err("duplicate and regressing checkpoints must be rejected");
+        assert!(matches!(
+            error,
+            SyncError::CheckpointOutOfOrder {
+                previous: 2,
+                requested: actual,
+            } if actual == requested
+        ));
+        assert_eq!(client.size(), 0);
+        assert_eq!(client.last_synced_height(), None);
+    }
 }
 
 #[test]
