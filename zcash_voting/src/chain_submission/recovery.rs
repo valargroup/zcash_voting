@@ -115,6 +115,69 @@ struct LeafBlock {
     root: Option<String>,
 }
 
+struct RecoveryPassBudget {
+    deadline: tokio::time::Instant,
+    leaf_request_count: usize,
+    response_bytes: u64,
+}
+
+impl RecoveryPassBudget {
+    fn new() -> Self {
+        Self {
+            deadline: tokio::time::Instant::now() + RECOVERY_PASS_TIMEOUT,
+            leaf_request_count: 0,
+            response_bytes: 0,
+        }
+    }
+
+    fn begin_leaf_request(&mut self) -> Result<(), RecoveryScanFailure> {
+        if self.leaf_request_count >= MAX_RECOVERY_LEAF_REQUESTS
+            || tokio::time::Instant::now() >= self.deadline
+        {
+            return Err(bounded_pass_exhausted());
+        }
+        self.leaf_request_count += 1;
+        Ok(())
+    }
+
+    fn charge_response(&mut self, response_bytes: usize) -> Result<(), RecoveryScanFailure> {
+        self.response_bytes = self.response_bytes.saturating_add(response_bytes as u64);
+        if self.response_bytes > MAX_RECOVERY_TOTAL_BYTES {
+            return Err(RecoveryScanFailure::Invalid(invalid(
+                "tree recovery responses exceed the total byte limit",
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_time_remaining(&self) -> Result<(), RecoveryScanFailure> {
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(bounded_pass_exhausted());
+        }
+        Ok(())
+    }
+
+    fn cannot_fail_over(&self) -> bool {
+        self.leaf_request_count >= MAX_RECOVERY_LEAF_REQUESTS
+            || self.response_bytes > MAX_RECOVERY_TOTAL_BYTES
+            || tokio::time::Instant::now() >= self.deadline
+    }
+}
+
+enum ReplicaScanOutcome {
+    Match {
+        final_van_position: u64,
+        vote_commitment_positions: Vec<u64>,
+    },
+    NoMatch,
+}
+
+#[derive(Clone, Copy)]
+struct RecoveryReplica<'a> {
+    endpoint: &'a str,
+    endpoint_index: usize,
+}
+
 pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
     protocol: &ChainProtocolClient<T>,
     derived: &DerivedChainSubmission,
@@ -124,17 +187,82 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
     interrupted: impl Fn() -> bool,
     observations: &crate::ObservationScope,
 ) -> Result<RecoveryScanOutcome<'a>, RecoveryScanFailure> {
-    let recovery_deadline = tokio::time::Instant::now() + RECOVERY_PASS_TIMEOUT;
-    let endpoint = protocol.endpoints().first().ok_or_else(|| {
-        RecoveryScanFailure::Invalid(invalid("tree recovery has no configured endpoint"))
-    })?;
     let round = hex::encode(derived.generation().identity().vote_round_id());
-    let latest_url = format!("{endpoint}/shielded-vote/v1/commitment-tree/{round}/latest");
-    let (latest, latest_bytes): (LatestResponse, usize) = get_json_with_size(
-        protocol.transport(),
+    let expected = derived.expected_layout().leaves();
+    let mut budget = RecoveryPassBudget::new();
+    let mut last_failure = None;
+
+    for (endpoint_index, endpoint) in protocol.endpoints().iter().enumerate() {
+        if interrupted() {
+            return Err(RecoveryScanFailure::Interrupted);
+        }
+        match scan_replica(
+            protocol.transport(),
+            RecoveryReplica {
+                endpoint,
+                endpoint_index,
+            },
+            &round,
+            &expected,
+            &mut budget,
+            &interrupted,
+            observations,
+        )
+        .await
+        {
+            Ok(ReplicaScanOutcome::Match {
+                final_van_position,
+                vote_commitment_positions,
+            }) => {
+                return Ok(RecoveryScanOutcome::Match {
+                    final_van_position,
+                    vote_commitment_positions,
+                })
+            }
+            Ok(ReplicaScanOutcome::NoMatch) => {
+                return Ok(RecoveryScanOutcome::NoMatch(RecoveryRetryAuthorization {
+                    operation,
+                    _lease: lease,
+                    generation_digest: derived.generation().digest(),
+                    candidate,
+                }))
+            }
+            Err(RecoveryScanFailure::Interrupted) => return Err(RecoveryScanFailure::Interrupted),
+            Err(failure) => {
+                if budget.cannot_fail_over() {
+                    return Err(failure);
+                }
+                last_failure = Some(failure);
+            }
+        }
+    }
+
+    Err(last_failure.unwrap_or_else(|| {
+        RecoveryScanFailure::Invalid(invalid("tree recovery has no configured endpoint"))
+    }))
+}
+
+/// Scans one replica from its own metadata response and never carries partial
+/// snapshot state to another replica.
+async fn scan_replica<T: ChainTransport>(
+    transport: &T,
+    replica: RecoveryReplica<'_>,
+    round: &str,
+    expected: &[[u8; 32]],
+    budget: &mut RecoveryPassBudget,
+    interrupted: &impl Fn() -> bool,
+    observations: &crate::ObservationScope,
+) -> Result<ReplicaScanOutcome, RecoveryScanFailure> {
+    let latest_url = format!(
+        "{}/shielded-vote/v1/commitment-tree/{round}/latest",
+        replica.endpoint
+    );
+    let latest: LatestResponse = get_json(
+        transport,
         latest_url,
-        recovery_deadline,
-        &interrupted,
+        replica.endpoint_index,
+        budget,
+        interrupted,
         observations,
     )
     .await?;
@@ -155,16 +283,12 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             )))
         }
     };
-    let expected = derived.expected_layout().leaves();
     let mut frontier: Frontier<MerkleHashVote, { TREE_DEPTH as u8 }> = Frontier::empty();
     let mut window: std::collections::VecDeque<[u8; 32]> =
         std::collections::VecDeque::with_capacity(expected.len());
     let mut next_index = 0_u64;
     let mut from_height = 0_u64;
     let mut previous_height = None;
-    let mut leaf_request_count = 0_usize;
-    let mut total_bytes = 0_u64;
-    charge_recovery_bytes(&mut total_bytes, latest_bytes)?;
     let mut unpaired_nonfinal_page_leaves = None;
     let mut match_start = None;
 
@@ -172,27 +296,21 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
         if interrupted() {
             return Err(RecoveryScanFailure::Interrupted);
         }
-        if leaf_request_count >= MAX_RECOVERY_LEAF_REQUESTS
-            || tokio::time::Instant::now() >= recovery_deadline
-        {
-            return Err(RecoveryScanFailure::Invalid(invalid(
-                "tree recovery exhausted its bounded pass",
-            )));
-        }
+        budget.begin_leaf_request()?;
         let url = format!(
-            "{endpoint}/shielded-vote/v1/commitment-tree/{round}/leaves?from_height={from_height}&to_height={}",
+            "{}/shielded-vote/v1/commitment-tree/{round}/leaves?from_height={from_height}&to_height={}",
+            replica.endpoint,
             snapshot.height
         );
-        let (page, bytes): (LeavesResponse, usize) = get_json_with_size(
-            protocol.transport(),
+        let page: LeavesResponse = get_json(
+            transport,
             url,
-            recovery_deadline,
-            &interrupted,
+            replica.endpoint_index,
+            budget,
+            interrupted,
             observations,
         )
         .await?;
-        leaf_request_count += 1;
-        charge_recovery_bytes(&mut total_bytes, bytes)?;
         let page_leaf_count: usize = page.blocks.iter().map(|block| block.leaves.len()).sum();
         if page_leaf_count as u64 > snapshot.next_index.saturating_sub(next_index) {
             return Err(RecoveryScanFailure::Invalid(invalid(
@@ -277,39 +395,31 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             )));
         }
     }
-    if tokio::time::Instant::now() >= recovery_deadline {
-        return Err(RecoveryScanFailure::Invalid(invalid(
-            "tree recovery exhausted its bounded pass",
-        )));
-    }
+    budget.ensure_time_remaining()?;
     if snapshot_root.is_some_and(|root| frontier.root() != root) {
         return Err(RecoveryScanFailure::Invalid(invalid(
             "tree recovery final root contradicts the fixed snapshot",
         )));
     }
     if let Some(start) = match_start {
-        return Ok(RecoveryScanOutcome::Match {
+        return Ok(ReplicaScanOutcome::Match {
             final_van_position: start,
             vote_commitment_positions: (1..expected.len())
                 .map(|offset| start + offset as u64)
                 .collect(),
         });
     }
-    Ok(RecoveryScanOutcome::NoMatch(RecoveryRetryAuthorization {
-        operation,
-        _lease: lease,
-        generation_digest: derived.generation().digest(),
-        candidate,
-    }))
+    Ok(ReplicaScanOutcome::NoMatch)
 }
 
-async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
+async fn get_json<T: ChainTransport, R: for<'de> Deserialize<'de>>(
     transport: &T,
     url: String,
-    recovery_deadline: tokio::time::Instant,
+    endpoint_index: usize,
+    budget: &mut RecoveryPassBudget,
     interrupted: &impl Fn() -> bool,
     observations: &crate::ObservationScope,
-) -> Result<(R, usize), RecoveryScanFailure> {
+) -> Result<R, RecoveryScanFailure> {
     let timer = observations.stage("chain.recovery_get");
     let mut http_status = None;
     let result = async {
@@ -323,14 +433,12 @@ async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
             MAX_RECOVERY_RESPONSE_BYTES,
         );
         let request_deadline =
-            (tokio::time::Instant::now() + RECOVERY_REQUEST_TIMEOUT).min(recovery_deadline);
+            (tokio::time::Instant::now() + RECOVERY_REQUEST_TIMEOUT).min(budget.deadline);
         let response = tokio::time::timeout_at(request_deadline, transport.chain_get(request))
             .await
             .map_err(|_| {
-                if tokio::time::Instant::now() >= recovery_deadline {
-                    return RecoveryScanFailure::Invalid(invalid(
-                        "tree recovery exhausted its bounded pass",
-                    ));
+                if tokio::time::Instant::now() >= budget.deadline {
+                    return bounded_pass_exhausted();
                 }
                 RecoveryScanFailure::Transport(ChainTransportError::possibly_dispatched(
                     "tree recovery request timed out",
@@ -338,6 +446,7 @@ async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
             })?
             .map_err(RecoveryScanFailure::Transport)?;
         http_status = Some(response.status());
+        budget.charge_response(response.body().len())?;
         let has_json_content_type = response.content_type().is_some_and(|content_type| {
             content_type.split(';').next().is_some_and(|media_type| {
                 media_type.trim().eq_ignore_ascii_case("application/json")
@@ -351,12 +460,9 @@ async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
                 "tree recovery response has invalid HTTP metadata",
             )));
         }
-        let size = response.body().len();
-        serde_json::from_slice(response.body())
-            .map(|value| (value, size))
-            .map_err(|_| {
-                RecoveryScanFailure::Invalid(invalid("tree recovery response is malformed"))
-            })
+        serde_json::from_slice(response.body()).map_err(|_| {
+            RecoveryScanFailure::Invalid(invalid("tree recovery response is malformed"))
+        })
     }
     .await;
     let (outcome, error_kind) = match &result {
@@ -369,21 +475,17 @@ async fn get_json_with_size<T: ChainTransport, R: for<'de> Deserialize<'de>>(
         }
         Err(_) => (crate::ObservationOutcome::Failed, Some("Protocol")),
     };
-    timer.finish_http(outcome, error_kind, http_status, None);
+    timer.finish_http(
+        outcome,
+        error_kind,
+        http_status,
+        u32::try_from(endpoint_index).ok(),
+    );
     result
 }
 
-fn charge_recovery_bytes(
-    total_bytes: &mut u64,
-    response_bytes: usize,
-) -> Result<(), RecoveryScanFailure> {
-    *total_bytes = total_bytes.saturating_add(response_bytes as u64);
-    if *total_bytes > MAX_RECOVERY_TOTAL_BYTES {
-        return Err(RecoveryScanFailure::Invalid(invalid(
-            "tree recovery responses exceed the total byte limit",
-        )));
-    }
-    Ok(())
+fn bounded_pass_exhausted() -> RecoveryScanFailure {
+    RecoveryScanFailure::Invalid(invalid("tree recovery exhausted its bounded pass"))
 }
 
 fn decode_leaf(encoded: &str, label: &str) -> Result<MerkleHashVote, RecoveryScanFailure> {

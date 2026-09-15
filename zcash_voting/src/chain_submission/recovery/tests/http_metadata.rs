@@ -48,12 +48,17 @@ async fn pass_deadline_cancels_an_in_flight_request() {
     let transport = DelayedTreeTransport {
         delay: Duration::from_secs(10),
     };
-    let recovery_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut budget = RecoveryPassBudget {
+        deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+        leaf_request_count: 0,
+        response_bytes: 0,
+    };
 
-    let failure = get_json_with_size::<_, LatestResponse>(
+    let failure = get_json::<_, LatestResponse>(
         &transport,
         "https://chain.example/latest".to_string(),
-        recovery_deadline,
+        0,
+        &mut budget,
         &|| false,
         &crate::ObservationScope::disabled(),
     )

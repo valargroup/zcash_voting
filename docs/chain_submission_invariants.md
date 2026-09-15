@@ -901,6 +901,14 @@ Each recovery pass:
    private authorization that may be consumed immediately to atomically retire
    the inconclusive candidate, if any, and reserve a same-generation retry.
 
+Recovery tries the configured endpoints in their validated order. One replica
+supplies both `/latest` and every leaf page for one fixed-snapshot attempt. A
+transport, HTTP, metadata, snapshot, or pagination failure discards that
+attempt's snapshot, frontier, match window, and cursor before recovery restarts
+from the next replica's `/latest`; state from two replicas is never combined.
+The first complete valid match or no-match scan ends the pass. Endpoint and
+cursor history remain ephemeral and are not persisted.
+
 A no-match authorization requires successful traversal of the entire selected
 snapshot. Timeout, cancellation, malformed or incomplete pagination,
 contradictory snapshot metadata, endpoint exhaustion, or multiple complete
@@ -918,10 +926,11 @@ omit zero-valued protobuf scalars; omitted indexes and heights are interpreted
 as zero before those validations. Recovery uses the following fixed ceilings:
 
 - `16,777,216` leaves, the full `2^24` vote-commitment-tree capacity;
-- `6,709` leaf-range requests under vote-sdk's `5,000`-leaf page target, with
-  each block returned atomically even when the block exceeds that target;
-- `8 MiB` per response and `1,000,000,000` bytes across the complete pass, including
-  the initial snapshot-metadata response;
+- `6,709` leaf-range request attempts across all replicas under vote-sdk's
+  `5,000`-leaf page target, with each block returned atomically even when the
+  block exceeds that target;
+- `8 MiB` per response and `1,000,000,000` bytes across all replica attempts in
+  the complete pass, including snapshot-metadata responses;
 - `60 seconds` per request and `15 minutes` across the complete pass; and
 - `16 MiB` working memory beyond the expected layout and transport buffers.
 
@@ -931,13 +940,16 @@ covers every structurally valid tree size. Responses are processed as a stream;
 the complete tree is never retained in memory. The request ceiling follows the
 deployed greedy whole-block pagination contract: two consecutive non-final
 pages contain at least `5,001` leaves, so a full tree requires at most `6,709`
-leaf requests. A server that advances through empty pages or otherwise departs
-from that contract fails closed immediately. Independent byte and time budgets
-bound how long a valid but unusually large or slow snapshot can retain lifecycle
-locks. Exhausting either budget leaves the generation `Recovering` and produces
-no retry authorization. Metadata claiming more than `2^24` leaves is malformed
-and no leaf scan starts. Cancellation is checked between requests and before the
-confirmation commit point.
+leaf requests. Failed replica attempts consume that same ceiling rather than
+receiving a fresh allowance. A server that advances through empty pages or
+otherwise departs from that contract is abandoned, and recovery starts a fresh
+snapshot attempt on the next replica while the global bounds allow.
+Independent byte and time budgets bound how long valid, unusually large, slow,
+or failing replicas can retain lifecycle locks. Exhausting any whole-pass
+budget leaves the generation `Recovering` and produces no retry authorization.
+Metadata claiming more than `2^24` leaves is malformed and no leaf scan starts
+on that replica. Cancellation is checked between requests, between replicas,
+and before the confirmation commit point.
 
 Finding one member is insufficient. Singleton outputs must be adjacent and in
 order. A batch must contain the final successor VAN followed immediately by
@@ -948,15 +960,16 @@ The entire selected snapshot is checked even after a match, so a second
 complete match rejects the result and retains any candidate. Partial,
 reordered, nonadjacent, or otherwise incomplete occurrences leave the row
 `Recovering` with no partial position write but permit the private authorization
-after the valid complete scan. Malformed pages, cancellation, endpoint
-exhaustion, and transport interruption do not complete a pass, produce no
-authorization, and retain the candidate. Delayed indexing may produce a valid
-no-match pass and therefore permits the combined retirement-and-reservation;
-the same-generation and nullifier rules make a later commit safe. Structural
-support and completion are separate: metadata may declare any tree up to
-`2^24` leaves, but one pass completes only when the fixed snapshot can be
-served within the request, byte, and time ceilings above. A valid snapshot that
-exceeds the `1,000,000,000`-byte or `15`-minute operational budget fails
+after the valid complete scan. A malformed page or transport interruption
+abandons only that replica attempt; cancellation, whole-pass budget exhaustion,
+or endpoint exhaustion ends the pass without authorization and retains the
+candidate. Delayed indexing may produce a valid no-match pass and therefore
+permits the combined retirement-and-reservation; the same-generation and
+nullifier rules make a later commit safe. Structural support and completion are
+separate: metadata may declare any tree up to `2^24` leaves, but one pass
+completes only when one replica's fixed snapshot can be served within the
+request, byte, and time ceilings above. A valid snapshot that contributes to
+exceeding the `1,000,000,000`-byte or `15`-minute operational budget fails
 closed, produces no authorization, and remains `Recovering`.
 
 Candidate retirement, its diagnostic update, and retry reservation are one
@@ -1713,6 +1726,15 @@ Phase 6 recovery coverage is anchored by
 `empty_checkpoint_with_contradictory_root_is_rejected`,
 `incomplete_pagination_produces_no_authorization`,
 `oversized_atomic_block_is_accepted_above_the_page_target`,
+`transport_failure_before_snapshot_fails_over_to_next_replica`,
+`mid_scan_failure_restarts_snapshot_and_cursor_on_next_replica`,
+`malformed_replica_is_skipped_without_mixing_its_snapshot`,
+`contradictory_replica_is_skipped_before_authorization`,
+`exhausting_all_replicas_produces_no_authorization`,
+`complete_no_match_stops_before_later_replicas`,
+`cancellation_between_replicas_stops_failover`,
+`response_byte_budget_is_shared_across_replicas`,
+`leaf_request_budget_is_shared_across_replicas`,
 `full_tree_capacity_fits_the_fixed_request_and_byte_ceilings`, and
 `tree_confirmation_is_atomic_clamps_timestamp_and_survives_reopen_without_a_hash`.
 
