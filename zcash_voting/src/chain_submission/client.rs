@@ -40,7 +40,7 @@ pub struct ChainSubmissionClientConfig {
     pub vote_chain_id: String,
     /// Ordered, distinct vote-chain base URLs.
     ///
-    /// One to eight HTTP(S) URLs are required. URLs must not contain
+    /// One to 100 HTTP(S) URLs are required. URLs must not contain
     /// credentials, a query, or a fragment, and duplicates are rejected after
     /// canonicalization. Fresh POST failover and status lookup follow this
     /// order. Exact tree recovery reads from the first endpoint; later

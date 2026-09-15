@@ -6,6 +6,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Fixed
+
+- Allow chain submission clients to configure up to 100 vote-chain endpoints.
+
 ## v5.0.0
 
 `zcash_voting` 5.0.0 moves round execution, chain submission/recovery, and

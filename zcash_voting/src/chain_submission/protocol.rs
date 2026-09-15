@@ -30,7 +30,7 @@ const DEFAULT_CHAIN_POST_TIMEOUT: Duration = Duration::from_secs(150);
 const DEFAULT_CHAIN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CHAIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_CHAIN_HTTP_REQUEST_BYTES: usize = 1024 * 1024;
-const MAX_CHAIN_ENDPOINTS: usize = 8;
+const MAX_CHAIN_ENDPOINTS: usize = 100;
 const NULLIFIER_ALREADY_SPENT_CODE: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
