@@ -48,6 +48,7 @@ const fn maximum_whole_block_page_count(leaves: u64, target: u64) -> u64 {
 pub(super) enum RecoveryScanFailure {
     Transport(ChainTransportError),
     Invalid(ChainSubmissionDiagnostic),
+    AmbiguousLayout(ChainSubmissionDiagnostic),
     Interrupted,
 }
 
@@ -228,6 +229,7 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
                 }))
             }
             Err(RecoveryScanFailure::Interrupted) => return Err(RecoveryScanFailure::Interrupted),
+            Err(failure @ RecoveryScanFailure::AmbiguousLayout(_)) => return Err(failure),
             Err(failure) => {
                 if budget.cannot_fail_over() {
                     return Err(failure);
@@ -350,7 +352,7 @@ async fn scan_replica<T: ChainTransport>(
                 {
                     let start = next_index - expected.len() as u64;
                     if match_start.replace(start).is_some() {
-                        return Err(RecoveryScanFailure::Invalid(invalid(
+                        return Err(RecoveryScanFailure::AmbiguousLayout(invalid(
                             "tree recovery found multiple exact generation layouts",
                         )));
                     }

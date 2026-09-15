@@ -43,5 +43,5 @@ async fn duplicate_complete_layout_is_ambiguous_not_confirmation() {
         .await
         .err()
         .expect("duplicate layout is invalid");
-    assert!(matches!(failure, RecoveryScanFailure::Invalid(_)));
+    assert!(matches!(failure, RecoveryScanFailure::AmbiguousLayout(_)));
 }

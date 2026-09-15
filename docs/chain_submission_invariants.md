@@ -907,7 +907,10 @@ transport, HTTP, metadata, snapshot, or pagination failure discards that
 attempt's snapshot, frontier, match window, and cursor before recovery restarts
 from the next replica's `/latest`; state from two replicas is never combined.
 The first complete valid match or no-match scan ends the pass. Endpoint and
-cursor history remain ephemeral and are not persisted.
+cursor history remain ephemeral and are not persisted. Multiple complete
+layouts in one internally consistent snapshot are terminal ambiguity for the
+pass, not a replica fault: recovery never fails over from that evidence to a
+different snapshot.
 
 A no-match authorization requires successful traversal of the entire selected
 snapshot. Timeout, cancellation, malformed or incomplete pagination,
@@ -1730,6 +1733,7 @@ Phase 6 recovery coverage is anchored by
 `mid_scan_failure_restarts_snapshot_and_cursor_on_next_replica`,
 `malformed_replica_is_skipped_without_mixing_its_snapshot`,
 `contradictory_replica_is_skipped_before_authorization`,
+`duplicate_layout_does_not_fail_over_to_stale_no_match`,
 `exhausting_all_replicas_produces_no_authorization`,
 `complete_no_match_stops_before_later_replicas`,
 `cancellation_between_replicas_stops_failover`,

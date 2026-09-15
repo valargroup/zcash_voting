@@ -143,6 +143,26 @@ async fn contradictory_replica_is_skipped_before_authorization() {
 }
 
 #[tokio::test]
+async fn duplicate_layout_does_not_fail_over_to_stale_no_match() {
+    let mut responses = tree_responses(&[[3; 32], [4; 32], [8; 32], [3; 32], [4; 32]])
+        .into_iter()
+        .map(Ok)
+        .collect::<Vec<_>>();
+    responses.push(Ok(ChainHttpResponse::json(200, br#"{"tree":{}}"#.to_vec())));
+
+    let failure = scan_results(
+        endpoints(),
+        responses,
+        Some(CandidateTransactionHash::from_bytes([10; 32])),
+    )
+    .await
+    .err()
+    .expect("duplicate ledger evidence must stop replica failover");
+
+    assert!(matches!(failure, RecoveryScanFailure::AmbiguousLayout(_)));
+}
+
+#[tokio::test]
 async fn exhausting_all_replicas_produces_no_authorization() {
     let responses = vec![
         Err(ChainTransportError::definitely_unsent(
