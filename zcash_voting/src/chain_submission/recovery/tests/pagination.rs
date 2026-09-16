@@ -309,9 +309,14 @@ fn request_ceiling_covers_full_tree_without_deriving_resource_budgets() {
 
 #[test]
 fn cumulative_response_budget_rejects_the_first_excess_byte() {
-    let mut total_bytes = MAX_RECOVERY_TOTAL_BYTES - 1;
+    let mut budget = RecoveryPassBudget {
+        deadline: tokio::time::Instant::now() + RECOVERY_PASS_TIMEOUT,
+        leaf_request_count: 0,
+        response_bytes: MAX_RECOVERY_TOTAL_BYTES - 1,
+    };
 
-    let failure = charge_recovery_bytes(&mut total_bytes, 2)
+    let failure = budget
+        .charge_response(2)
         .expect_err("the transfer budget must be independent of the request count");
 
     assert!(matches!(failure, RecoveryScanFailure::Invalid(_)));

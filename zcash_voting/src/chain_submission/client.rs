@@ -43,7 +43,8 @@ pub struct ChainSubmissionClientConfig {
     /// One to 100 HTTP(S) URLs are required. URLs must not contain
     /// credentials, a query, or a fragment, and duplicates are rejected after
     /// canonicalization. Fresh POST failover and status lookup follow this
-    /// order. Exact tree recovery reads from the first endpoint; later
+    /// order. Exact tree recovery tries replicas in this order, restarting a
+    /// fixed-snapshot scan from metadata whenever it changes endpoint. Later
     /// recovery POSTs rotate by durable reservation ordinal.
     pub endpoints: Vec<String>,
     /// Maximum time to track a usable candidate hash before entering recovery.

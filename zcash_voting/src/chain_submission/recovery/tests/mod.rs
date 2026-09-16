@@ -21,8 +21,12 @@ struct ScriptedTreeTransport {
 
 impl ScriptedTreeTransport {
     fn new(replies: Vec<ChainHttpResponse>) -> Self {
+        Self::with_results(replies.into_iter().map(Ok).collect())
+    }
+
+    fn with_results(replies: Vec<Result<ChainHttpResponse, ChainTransportError>>) -> Self {
         Self {
-            replies: Mutex::new(replies.into_iter().map(Ok).collect()),
+            replies: Mutex::new(replies.into()),
             urls: Mutex::new(vec![]),
         }
     }
@@ -127,6 +131,28 @@ async fn scan_responses(
     responses: Vec<ChainHttpResponse>,
     candidate: Option<CandidateTransactionHash>,
 ) -> Result<(RecoveryScanOutcome<'static>, Vec<String>), RecoveryScanFailure> {
+    scan_results(
+        vec!["https://chain.example".to_string()],
+        responses.into_iter().map(Ok).collect(),
+        candidate,
+    )
+    .await
+}
+
+async fn scan_results(
+    endpoints: Vec<String>,
+    responses: Vec<Result<ChainHttpResponse, ChainTransportError>>,
+    candidate: Option<CandidateTransactionHash>,
+) -> Result<(RecoveryScanOutcome<'static>, Vec<String>), RecoveryScanFailure> {
+    scan_results_with_interruption(endpoints, responses, candidate, || false).await
+}
+
+async fn scan_results_with_interruption(
+    endpoints: Vec<String>,
+    responses: Vec<Result<ChainHttpResponse, ChainTransportError>>,
+    candidate: Option<CandidateTransactionHash>,
+    interrupted: impl Fn() -> bool,
+) -> Result<(RecoveryScanOutcome<'static>, Vec<String>), RecoveryScanFailure> {
     // The test-owned operation and lease are leaked so the returned
     // authorization can be inspected without weakening its production lifetime.
     let derived = Box::leak(Box::new(derived()));
@@ -141,20 +167,15 @@ async fn scan_responses(
             .await
             .unwrap(),
     ));
-    let transport = ScriptedTreeTransport::new(responses);
-    let protocol = ChainProtocolClient::new(
-        transport,
-        Network::Testnet,
-        &["https://chain.example".to_string()],
-    )
-    .unwrap();
+    let transport = ScriptedTreeTransport::with_results(responses);
+    let protocol = ChainProtocolClient::new(transport, Network::Testnet, &endpoints).unwrap();
     let outcome = scan_exact_layout(
         &protocol,
         derived,
         candidate,
         operation,
         lease,
-        || false,
+        interrupted,
         &crate::ObservationScope::disabled(),
     )
     .await?;
@@ -165,3 +186,4 @@ async fn scan_responses(
 mod http_metadata;
 mod layout;
 mod pagination;
+mod replica_failover;
