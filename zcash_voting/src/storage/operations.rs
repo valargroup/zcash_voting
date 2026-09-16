@@ -3615,6 +3615,109 @@ mod tests {
         let _ = std::fs::remove_file(format!("{path_string}-wal"));
     }
 
+    /// Regression test for `queries::store_vote` returning an instant
+    /// SQLITE_BUSY instead of waiting out a competing writer.
+    ///
+    /// Before store_vote reserved its write lock up front, it ran its
+    /// validation SELECT inside a deferred SAVEPOINT, which only takes a
+    /// SHARED lock; the INSERT right after it then had to upgrade that SHARED
+    /// lock to a write lock from inside the same transaction. SQLite does not
+    /// invoke the busy handler for that specific upgrade (deadlock
+    /// avoidance), so a concurrent writer made this fail immediately with
+    /// SQLITE_BUSY no matter how long busy_timeout was configured for. This
+    /// mirrors `vote_submission_waits_for_a_competing_wal_writer` above,
+    /// which covers the same class of bug for `record_vote_submission`.
+    #[test]
+    fn store_vote_waits_for_a_competing_wal_writer_instead_of_failing_immediately() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "zcash-voting-immediate-store-vote-{}-{unique}.sqlite",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        let db_a = VotingDb::open(&path_string).unwrap();
+        db_a.set_wallet_id(W);
+        db_a.init_round(Network::Testnet, &test_params(), None)
+            .unwrap();
+        db_a.ensure_bundles(ROUND_ID, &[identity_test_note()])
+            .unwrap();
+
+        let db_b = VotingDb::open(&path_string).unwrap();
+        db_b.set_wallet_id(W);
+        db_a.conn().busy_handler(Some(signal_sqlite_busy)).unwrap();
+
+        let mut writer_conn = db_b.conn();
+        let writer_tx = writer_conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        writer_tx
+            .execute(
+                "UPDATE rounds SET phase = 1 WHERE round_id = ?1 AND wallet_id = ?2",
+                rusqlite::params![ROUND_ID, W],
+            )
+            .unwrap();
+
+        SQLITE_BUSY_OBSERVED.store(false, Ordering::SeqCst);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let conn = db_a.conn();
+                result_tx
+                    .send(queries::store_vote(
+                        &conn,
+                        ROUND_ID,
+                        W,
+                        0,
+                        1,
+                        0,
+                        b"commitment",
+                    ))
+                    .unwrap();
+            });
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !SQLITE_BUSY_OBSERVED.load(Ordering::SeqCst) {
+                if let Ok(result) = result_rx.try_recv() {
+                    drop(writer_tx);
+                    panic!("store_vote completed before SQLite contention: {result:?}");
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "store_vote never reached SQLite contention"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+
+            writer_tx.commit().unwrap();
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+        });
+
+        let conn = db_a.conn();
+        let stored_choice: i64 = conn
+            .query_row(
+                "SELECT choice FROM votes WHERE round_id = ?1 AND wallet_id = ?2 \
+                 AND bundle_index = 0 AND proposal_id = 1",
+                rusqlite::params![ROUND_ID, W],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_choice, 0);
+        drop(conn);
+
+        drop(writer_conn);
+        drop(db_b);
+        drop(db_a);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{path_string}-shm"));
+        let _ = std::fs::remove_file(format!("{path_string}-wal"));
+    }
+
     #[test]
     fn test_recovery_stores_require_existing_rows() {
         fn assert_invalid_input(err: VotingError, expected: &str) {

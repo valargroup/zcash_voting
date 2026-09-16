@@ -2134,95 +2134,67 @@ pub fn store_vote(
     choice: u32,
     commitment: &[u8],
 ) -> Result<(), VotingError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    // `conn.is_autocommit()` is false when a caller (e.g. the test-fixtures-only
+    // insert_recovery_fixture) already has its own transaction open on this
+    // connection. SQLite cannot nest a second BEGIN inside that, only a
+    // SAVEPOINT, so this call keeps the old savepoint-nesting behavior in
+    // that case -- callers that manage their own transaction are responsible
+    // for reserving the write lock up front themselves if they need the fix
+    // below (insert_recovery_fixture is test-only and never runs concurrently,
+    // so the original ordering is safe there).
+    if conn.is_autocommit() {
+        // Reserve the WAL writer before the validation read below, the same
+        // way every other top-level write path in this module does (see e.g.
+        // replace_bundle_witnesses and delete_bundles_from). A plain
+        // SAVEPOINT here would start a deferred transaction: the SELECT that
+        // follows would only take a SHARED lock, and the INSERT after it
+        // would then need to upgrade that SHARED lock to a write lock from
+        // inside an already-open transaction. SQLite does not invoke the
+        // busy handler for that upgrade (deadlock avoidance), so a
+        // concurrent writer made this fail instantly with SQLITE_BUSY
+        // regardless of any configured busy_timeout. Taking the write lock
+        // immediately, before the read, means a concurrent writer is waited
+        // out through the normal busy handler instead.
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|e| {
+            VotingError::Internal {
+                message: format!("failed to start store vote transaction: {}", e),
+            }
+        })?;
+        let result = store_vote_body(
+            &tx,
+            round_id,
+            wallet_id,
+            bundle_index,
+            proposal_id,
+            choice,
+            commitment,
+        );
+        return match result {
+            Ok(()) => tx.commit().map_err(|e| VotingError::Internal {
+                message: format!("failed to commit store vote transaction: {}", e),
+            }),
+            Err(err) => {
+                // `Transaction`'s `Drop` impl rolls back automatically when
+                // it is dropped without a commit.
+                Err(err)
+            }
+        };
+    }
 
     conn.execute_batch("SAVEPOINT store_vote_replace")
         .map_err(|e| VotingError::Internal {
             message: format!("failed to start store vote savepoint: {}", e),
         })?;
 
-    let result: Result<(), VotingError> = (|| {
-        let existing_vote: Option<(i64, Option<Vec<u8>>, bool)> = conn
-            .query_row(
-                "SELECT choice, commitment, tx_hash IS NOT NULL FROM votes
-                 WHERE round_id = :round_id
-                   AND wallet_id = :wallet_id
-                   AND bundle_index = :bundle_index
-                   AND proposal_id = :proposal_id",
-                named_params! {
-                    ":round_id": round_id,
-                    ":wallet_id": wallet_id,
-                    ":bundle_index": bundle_index as i64,
-                    ":proposal_id": proposal_id as i64,
-                },
-                |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)),
-            )
-            .optional()
-            .map_err(|e| VotingError::Internal {
-                message: format!("failed to load existing vote before store: {}", e),
-            })?;
-        let vote_changed = existing_vote
-            .as_ref()
-            .map(|(stored_choice, stored_commitment, _)| {
-                *stored_choice != choice as i64 || stored_commitment.as_deref() != Some(commitment)
-            })
-            .unwrap_or(false);
-        if let Some((_, _, true)) = existing_vote.as_ref() {
-            if vote_changed {
-                return Err(VotingError::InvalidInput {
-                    message: format!(
-                        "cannot replace submitted vote for round={}, wallet={}, bundle={}, proposal={}",
-                        round_id, wallet_id, bundle_index, proposal_id
-                    ),
-                });
-            }
-            return Ok(());
-        }
-        if existing_vote.is_some() && !vote_changed {
-            return Ok(());
-        }
-
-        conn.execute(
-            "INSERT OR REPLACE INTO votes (round_id, wallet_id, bundle_index, proposal_id, choice, commitment, created_at)
-             VALUES (:round_id, :wallet_id, :bundle_index, :proposal_id, :choice, :commitment, :created_at)",
-            named_params! {
-                ":round_id": round_id,
-                ":wallet_id": wallet_id,
-                ":bundle_index": bundle_index as i64,
-                ":proposal_id": proposal_id as i64,
-                ":choice": choice as i64,
-                ":commitment": commitment,
-                ":created_at": now,
-            },
-        )
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to store vote: {}", e),
-        })?;
-
-        if vote_changed {
-            conn.execute(
-                "DELETE FROM share_delegations
-                 WHERE round_id = :round_id
-                   AND wallet_id = :wallet_id
-                   AND bundle_index = :bundle_index
-                   AND proposal_id = :proposal_id",
-                named_params! {
-                    ":round_id": round_id,
-                    ":wallet_id": wallet_id,
-                    ":bundle_index": bundle_index as i64,
-                    ":proposal_id": proposal_id as i64,
-                },
-            )
-            .map_err(|e| VotingError::Internal {
-                message: format!("failed to clear stale share delegations: {}", e),
-            })?;
-        }
-
-        Ok(())
-    })();
+    let result = store_vote_body(
+        conn,
+        round_id,
+        wallet_id,
+        bundle_index,
+        proposal_id,
+        choice,
+        commitment,
+    );
 
     match result {
         Ok(()) => conn
@@ -2237,6 +2209,102 @@ pub fn store_vote(
             Err(err)
         }
     }
+}
+
+/// Validates and writes one vote row, without managing any transaction or
+/// savepoint of its own -- see [`store_vote`], which wraps this in whichever
+/// of the two is appropriate for the caller's connection state.
+fn store_vote_body(
+    conn: &Connection,
+    round_id: &str,
+    wallet_id: &str,
+    bundle_index: u32,
+    proposal_id: u32,
+    choice: u32,
+    commitment: &[u8],
+) -> Result<(), VotingError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let existing_vote: Option<(i64, Option<Vec<u8>>, bool)> = conn
+        .query_row(
+            "SELECT choice, commitment, tx_hash IS NOT NULL FROM votes
+             WHERE round_id = :round_id
+               AND wallet_id = :wallet_id
+               AND bundle_index = :bundle_index
+               AND proposal_id = :proposal_id",
+            named_params! {
+                ":round_id": round_id,
+                ":wallet_id": wallet_id,
+                ":bundle_index": bundle_index as i64,
+                ":proposal_id": proposal_id as i64,
+            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)),
+        )
+        .optional()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to load existing vote before store: {}", e),
+        })?;
+    let vote_changed = existing_vote
+        .as_ref()
+        .map(|(stored_choice, stored_commitment, _)| {
+            *stored_choice != choice as i64 || stored_commitment.as_deref() != Some(commitment)
+        })
+        .unwrap_or(false);
+    if let Some((_, _, true)) = existing_vote.as_ref() {
+        if vote_changed {
+            return Err(VotingError::InvalidInput {
+                message: format!(
+                    "cannot replace submitted vote for round={}, wallet={}, bundle={}, proposal={}",
+                    round_id, wallet_id, bundle_index, proposal_id
+                ),
+            });
+        }
+        return Ok(());
+    }
+    if existing_vote.is_some() && !vote_changed {
+        return Ok(());
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO votes (round_id, wallet_id, bundle_index, proposal_id, choice, commitment, created_at)
+         VALUES (:round_id, :wallet_id, :bundle_index, :proposal_id, :choice, :commitment, :created_at)",
+        named_params! {
+            ":round_id": round_id,
+            ":wallet_id": wallet_id,
+            ":bundle_index": bundle_index as i64,
+            ":proposal_id": proposal_id as i64,
+            ":choice": choice as i64,
+            ":commitment": commitment,
+            ":created_at": now,
+        },
+    )
+    .map_err(|e| VotingError::Internal {
+        message: format!("failed to store vote: {}", e),
+    })?;
+
+    if vote_changed {
+        conn.execute(
+            "DELETE FROM share_delegations
+             WHERE round_id = :round_id
+               AND wallet_id = :wallet_id
+               AND bundle_index = :bundle_index
+               AND proposal_id = :proposal_id",
+            named_params! {
+                ":round_id": round_id,
+                ":wallet_id": wallet_id,
+                ":bundle_index": bundle_index as i64,
+                ":proposal_id": proposal_id as i64,
+            },
+        )
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to clear stale share delegations: {}", e),
+        })?;
+    }
+
+    Ok(())
 }
 
 pub fn clear_stale_share_delegations_for_intent(
