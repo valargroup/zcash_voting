@@ -3173,6 +3173,14 @@ pub fn store_proof(
 
 // --- Votes ---
 
+/// Stores or replaces one unsubmitted vote and clears helper shares that belong
+/// to the replaced vote.
+///
+/// At the top level this reserves SQLite's WAL writer before reading the
+/// existing row, allowing the configured busy handler to wait out a competing
+/// writer. When called inside an existing transaction, the caller must have
+/// reserved the writer before any validation reads; the nested savepoint only
+/// preserves atomicity and cannot upgrade the caller's transaction behavior.
 pub fn store_vote(
     conn: &Connection,
     round_id: &str,
@@ -3182,94 +3190,39 @@ pub fn store_vote(
     choice: u32,
     commitment: &[u8],
 ) -> Result<(), VotingError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    if conn.is_autocommit() {
+        let tx =
+            Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|error| {
+                VotingError::from_sqlite("failed to start store vote transaction", &error)
+            })?;
+        validate_and_store_vote(
+            &tx,
+            round_id,
+            wallet_id,
+            bundle_index,
+            proposal_id,
+            choice,
+            commitment,
+        )?;
+        return tx.commit().map_err(|error| {
+            VotingError::from_sqlite("failed to commit store vote transaction", &error)
+        });
+    }
 
     conn.execute_batch("SAVEPOINT store_vote_replace")
         .map_err(|e| VotingError::Internal {
             message: format!("failed to start store vote savepoint: {}", e),
         })?;
 
-    let result: Result<(), VotingError> = (|| {
-        // Either witness of the vote having reached the chain forbids a
-        // replacement. A hash exists only for hash-confirmed submissions — the
-        // schema requires `confirmation_source = 'tree'` to carry none — so
-        // asking for it alone let a vote confirmed by an exact-tree scan have
-        // its choice and commitment silently overwritten, describing a vote
-        // whose proposal authority had already moved.
-        let existing_vote: Option<(i64, Option<Vec<u8>>, bool)> = conn
-            .query_row(
-                "SELECT choice, commitment,
-                        tx_hash IS NOT NULL OR vc_tree_position IS NOT NULL
-                 FROM votes
-                 WHERE round_id = :round_id
-                   AND wallet_id = :wallet_id
-                   AND bundle_index = :bundle_index
-                   AND proposal_id = :proposal_id",
-                named_params! {
-                    ":round_id": round_id,
-                    ":wallet_id": wallet_id,
-                    ":bundle_index": bundle_index as i64,
-                    ":proposal_id": proposal_id as i64,
-                },
-                |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)),
-            )
-            .optional()
-            .map_err(|e| VotingError::Internal {
-                message: format!("failed to load existing vote before store: {}", e),
-            })?;
-        let vote_changed = existing_vote
-            .as_ref()
-            .map(|(stored_choice, stored_commitment, _)| {
-                *stored_choice != choice as i64 || stored_commitment.as_deref() != Some(commitment)
-            })
-            .unwrap_or(false);
-        if let Some((_, _, true)) = existing_vote.as_ref() {
-            if vote_changed {
-                return Err(VotingError::InvalidInput {
-                    message: format!(
-                        "cannot replace submitted vote for round={}, wallet={}, bundle={}, proposal={}",
-                        round_id, wallet_id, bundle_index, proposal_id
-                    ),
-                });
-            }
-            return Ok(());
-        }
-        if existing_vote.is_some() && !vote_changed {
-            return Ok(());
-        }
-
-        conn.execute(
-            "INSERT OR REPLACE INTO votes (round_id, wallet_id, bundle_index, proposal_id, choice, commitment, created_at)
-             VALUES (:round_id, :wallet_id, :bundle_index, :proposal_id, :choice, :commitment, :created_at)",
-            named_params! {
-                ":round_id": round_id,
-                ":wallet_id": wallet_id,
-                ":bundle_index": bundle_index as i64,
-                ":proposal_id": proposal_id as i64,
-                ":choice": choice as i64,
-                ":commitment": commitment,
-                ":created_at": now,
-            },
-        )
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to store vote: {}", e),
-        })?;
-
-        if vote_changed {
-            share_delegations::delete_for_replaced_vote(
-                conn,
-                round_id,
-                wallet_id,
-                bundle_index,
-                proposal_id,
-            )?;
-        }
-
-        Ok(())
-    })();
+    let result = validate_and_store_vote(
+        conn,
+        round_id,
+        wallet_id,
+        bundle_index,
+        proposal_id,
+        choice,
+        commitment,
+    );
 
     match result {
         Ok(()) => conn
@@ -3284,6 +3237,100 @@ pub fn store_vote(
             Err(err)
         }
     }
+}
+
+/// Applies the vote-row transition inside a transaction boundary established
+/// by [`store_vote`] or its caller.
+fn validate_and_store_vote(
+    conn: &Connection,
+    round_id: &str,
+    wallet_id: &str,
+    bundle_index: u32,
+    proposal_id: u32,
+    choice: u32,
+    commitment: &[u8],
+) -> Result<(), VotingError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    // Either witness of the vote having reached the chain forbids a
+    // replacement. A hash exists only for hash-confirmed submissions — the
+    // schema requires `confirmation_source = 'tree'` to carry none — so
+    // asking for it alone let a vote confirmed by an exact-tree scan have
+    // its choice and commitment silently overwritten, describing a vote
+    // whose proposal authority had already moved.
+    let existing_vote: Option<(i64, Option<Vec<u8>>, bool)> = conn
+        .query_row(
+            "SELECT choice, commitment,
+                    tx_hash IS NOT NULL OR vc_tree_position IS NOT NULL
+             FROM votes
+             WHERE round_id = :round_id
+               AND wallet_id = :wallet_id
+               AND bundle_index = :bundle_index
+               AND proposal_id = :proposal_id",
+            named_params! {
+                ":round_id": round_id,
+                ":wallet_id": wallet_id,
+                ":bundle_index": bundle_index as i64,
+                ":proposal_id": proposal_id as i64,
+            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)),
+        )
+        .optional()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to load existing vote before store: {}", e),
+        })?;
+    let vote_changed = existing_vote
+        .as_ref()
+        .map(|(stored_choice, stored_commitment, _)| {
+            *stored_choice != choice as i64 || stored_commitment.as_deref() != Some(commitment)
+        })
+        .unwrap_or(false);
+    if let Some((_, _, true)) = existing_vote.as_ref() {
+        if vote_changed {
+            return Err(VotingError::InvalidInput {
+                message: format!(
+                    "cannot replace submitted vote for round={}, wallet={}, bundle={}, proposal={}",
+                    round_id, wallet_id, bundle_index, proposal_id
+                ),
+            });
+        }
+        return Ok(());
+    }
+    if existing_vote.is_some() && !vote_changed {
+        return Ok(());
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO votes (round_id, wallet_id, bundle_index, proposal_id, choice, commitment, created_at)
+         VALUES (:round_id, :wallet_id, :bundle_index, :proposal_id, :choice, :commitment, :created_at)",
+        named_params! {
+            ":round_id": round_id,
+            ":wallet_id": wallet_id,
+            ":bundle_index": bundle_index as i64,
+            ":proposal_id": proposal_id as i64,
+            ":choice": choice as i64,
+            ":commitment": commitment,
+            ":created_at": now,
+        },
+    )
+    .map_err(|e| VotingError::Internal {
+        message: format!("failed to store vote: {}", e),
+    })?;
+
+    if vote_changed {
+        share_delegations::delete_for_replaced_vote(
+            conn,
+            round_id,
+            wallet_id,
+            bundle_index,
+            proposal_id,
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Refuses a ballot intent that disagrees with a vote already on chain.
