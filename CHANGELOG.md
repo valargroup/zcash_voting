@@ -6,6 +6,11 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.0.2
+
+`zcash_voting` 5.0.2 updates `vote-commitment-tree` to 0.6.2 and
+`vote-commitment-tree-client` to 0.8.2.
+
 ### Fixed
 
 - Reserved the SQLite WAL writer before `store_vote` reads existing vote state,
@@ -13,6 +18,9 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   with `database is locked` instead of honoring the configured busy timeout.
 - Reject over-capacity leaves and non-increasing checkpoints from vote-tree
   endpoints with typed sync errors instead of panicking the wallet.
+- Try configured vote-chain replicas in order during exact commitment-tree
+  recovery, restarting each replica from its own fixed snapshot and refusing
+  to fail over from ambiguous duplicate-layout evidence.
 
 ## v5.0.1
 
