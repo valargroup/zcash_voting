@@ -10,16 +10,21 @@
 //! marked positions.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::fmt;
 use std::time::{Duration, Instant};
 
 use incrementalmerkletree::{Hashable, Level, Retention};
-use shardtree::{store::memory::MemoryShardStore, ShardTree};
+use shardtree::{
+    error::{InsertionError, ShardTreeError},
+    store::memory::MemoryShardStore,
+    ShardTree,
+};
 use voting_crypto_deps::pasta_curves::Fp;
 
-use crate::hash::{MerkleHashVote, MAX_CHECKPOINTS, SHARD_HEIGHT, TREE_DEPTH};
+use crate::hash::{MerkleHashVote, MAX_CHECKPOINTS, SHARD_HEIGHT, TREE_CAPACITY, TREE_DEPTH};
 use crate::path::MerklePath;
-use crate::sync_api::TreeSyncApi;
+use crate::sync_api::{BlockCommitmentsPage, TreeSyncApi};
 
 /// Resource limits applied to one complete tree synchronization.
 #[derive(Clone, Copy, Debug)]
@@ -73,6 +78,20 @@ pub enum SyncError<E: fmt::Debug> {
     },
     /// The server returned a pagination cursor that does not move forward.
     InvalidPagination { current: u32, next: u32 },
+    /// The server advertised or returned leaves outside the tree's capacity.
+    TreeCapacityExceeded {
+        height: u32,
+        requested_next_index: u64,
+        capacity: u64,
+    },
+    /// The server returned a checkpoint that does not follow the previous one.
+    CheckpointOutOfOrder { previous: u32, requested: u32 },
+    /// The in-memory tree rejected an update that passed response validation.
+    TreeUpdate {
+        height: u32,
+        operation: &'static str,
+        source: ShardTreeError<Infallible>,
+    },
     /// The server required more pages than one sync operation permits.
     PageLimitExceeded { max_pages: usize },
     /// The complete sync exceeded its wall-clock budget.
@@ -114,6 +133,27 @@ impl<E: fmt::Debug> fmt::Display for SyncError<E> {
                 "invalid pagination cursor: current={}, next={}",
                 current, next
             ),
+            SyncError::TreeCapacityExceeded {
+                height,
+                requested_next_index,
+                capacity,
+            } => write!(
+                f,
+                "tree capacity exceeded at height {height}: requested next_index \
+                 {requested_next_index}, capacity {capacity}"
+            ),
+            SyncError::CheckpointOutOfOrder {
+                previous,
+                requested,
+            } => write!(
+                f,
+                "checkpoint height is not strictly increasing: {requested} <= {previous}"
+            ),
+            SyncError::TreeUpdate {
+                height,
+                operation,
+                source,
+            } => write!(f, "tree {operation} failed at height {height}: {source}"),
             SyncError::PageLimitExceeded { max_pages } => {
                 write!(f, "sync page limit exceeded: max_pages={max_pages}")
             }
@@ -223,6 +263,13 @@ impl TreeClient {
         let started_at = Instant::now();
         let state = api.get_tree_state()?;
         Self::check_sync_duration(started_at, limits.max_duration)?;
+        if state.next_index > TREE_CAPACITY {
+            return Err(SyncError::TreeCapacityExceeded {
+                height: state.height,
+                requested_next_index: state.next_index,
+                capacity: TREE_CAPACITY,
+            });
+        }
         if state.next_index == self.next_position {
             if state.next_index > 0 {
                 let local = self.root();
@@ -256,6 +303,7 @@ impl TreeClient {
             let page = api.get_block_commitments(page_from, to_height)?;
             pages_fetched += 1;
             Self::check_sync_duration(started_at, limits.max_duration)?;
+            self.validate_page(&page)?;
 
             for block in &page.blocks {
                 // Validate start_index continuity: the block's first leaf index must
@@ -278,17 +326,39 @@ impl TreeClient {
                     } else {
                         Retention::Ephemeral
                     };
-                    self.inner
-                        .append(*leaf, retention)
-                        .expect("append must succeed (tree not full)");
+                    self.inner.append(*leaf, retention).map_err(|source| {
+                        if matches!(source, ShardTreeError::Insert(InsertionError::TreeFull)) {
+                            SyncError::TreeCapacityExceeded {
+                                height: block.height,
+                                requested_next_index: self.next_position.saturating_add(1),
+                                capacity: TREE_CAPACITY,
+                            }
+                        } else {
+                            SyncError::TreeUpdate {
+                                height: block.height,
+                                operation: "append",
+                                source,
+                            }
+                        }
+                    })?;
                     self.next_position += 1;
                 }
 
                 // Checkpoint after each block's leaves, mirroring the server's
                 // EndBlocker snapshots.
-                self.inner
-                    .checkpoint(block.height)
-                    .expect("checkpoint must succeed");
+                let checkpoint_added = self.inner.checkpoint(block.height).map_err(|source| {
+                    SyncError::TreeUpdate {
+                        height: block.height,
+                        operation: "checkpoint",
+                        source,
+                    }
+                })?;
+                if !checkpoint_added {
+                    return Err(SyncError::CheckpointOutOfOrder {
+                        previous: self.last_synced_height.unwrap_or(block.height),
+                        requested: block.height,
+                    });
+                }
                 self.last_synced_height = Some(block.height);
 
                 // Root consistency check: verify the client's computed root matches
@@ -347,6 +417,58 @@ impl TreeClient {
                     server: state.root,
                 });
             }
+        }
+
+        Ok(())
+    }
+
+    /// Validates response metadata that can be checked before mutating the tree.
+    fn validate_page<E: fmt::Debug>(
+        &self,
+        page: &BlockCommitmentsPage,
+    ) -> Result<(), SyncError<E>> {
+        let mut expected_next_position = self.next_position;
+        let mut previous_height = self.last_synced_height;
+
+        for block in &page.blocks {
+            if let Some(previous) = previous_height {
+                if block.height <= previous {
+                    return Err(SyncError::CheckpointOutOfOrder {
+                        previous,
+                        requested: block.height,
+                    });
+                }
+            }
+
+            if !block.leaves.is_empty() {
+                let leaf_count = u64::try_from(block.leaves.len()).unwrap_or(u64::MAX);
+                let declared_next_index = block.start_index.saturating_add(leaf_count);
+                if declared_next_index > TREE_CAPACITY {
+                    return Err(SyncError::TreeCapacityExceeded {
+                        height: block.height,
+                        requested_next_index: declared_next_index,
+                        capacity: TREE_CAPACITY,
+                    });
+                }
+                if block.start_index != expected_next_position {
+                    return Err(SyncError::StartIndexMismatch {
+                        height: block.height,
+                        expected: expected_next_position,
+                        got: block.start_index,
+                    });
+                }
+
+                let requested_next_index = expected_next_position.saturating_add(leaf_count);
+                if requested_next_index > TREE_CAPACITY {
+                    return Err(SyncError::TreeCapacityExceeded {
+                        height: block.height,
+                        requested_next_index,
+                        capacity: TREE_CAPACITY,
+                    });
+                }
+                expected_next_position = requested_next_index;
+            }
+            previous_height = Some(block.height);
         }
 
         Ok(())
