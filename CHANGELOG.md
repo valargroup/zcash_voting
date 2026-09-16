@@ -6,6 +6,14 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v4.0.0-rc.2
+
+### Fixed
+
+- Reserved the SQLite WAL writer before `store_vote` reads existing vote state,
+  preventing concurrent vote-commitment persistence from failing immediately
+  with `database is locked` instead of honoring the configured busy timeout.
+
 ## v4.0.0-rc.1
 
 ### Changed
