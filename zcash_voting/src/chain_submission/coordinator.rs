@@ -1129,7 +1129,10 @@ where
                 Ok(RecoveryScan::NoMatch(authorization))
             }
             Err(RecoveryScanFailure::Interrupted) => Ok(RecoveryScan::Interrupted),
-            Err(RecoveryScanFailure::Invalid(diagnostic)) => {
+            Err(
+                RecoveryScanFailure::Invalid(diagnostic)
+                | RecoveryScanFailure::AmbiguousLayout(diagnostic),
+            ) => {
                 self.reconcile_with_durable_state(
                     derived.generation(),
                     SubmissionObservation::ContinueRecovery,
