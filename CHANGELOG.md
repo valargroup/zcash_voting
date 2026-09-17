@@ -8,6 +8,9 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ### Fixed
 
+- Reserved the SQLite WAL writer before `store_vote` reads existing vote state,
+  preventing concurrent vote-commitment persistence from failing immediately
+  with `database is locked` instead of honoring the configured busy timeout.
 - Reject over-capacity leaves and non-increasing checkpoints from vote-tree
   endpoints with typed sync errors instead of panicking the wallet.
 

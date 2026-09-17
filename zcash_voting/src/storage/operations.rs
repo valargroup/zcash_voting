@@ -6517,7 +6517,59 @@ mod tests {
             }
         }
 
-        // The production operation reserves the writer before its first read.
+        // Vote storage must reserve the writer before checking whether the
+        // existing choice or commitment changed. Otherwise its deferred read
+        // snapshot cannot be upgraded after the competing writer commits.
+        {
+            SQLITE_BUSY_OBSERVED.store(false, Ordering::SeqCst);
+            db_a.conn().busy_handler(Some(signal_sqlite_busy)).unwrap();
+            let mut writer_conn = db_b.conn();
+            let writer_tx = writer_conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            writer_tx
+                .execute(
+                    "UPDATE rounds SET phase = 2 WHERE round_id = ?1 AND wallet_id = ?2",
+                    rusqlite::params![ROUND_ID, W],
+                )
+                .unwrap();
+
+            let (result_tx, result_rx) = std::sync::mpsc::channel();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let conn = db_a.conn();
+                    let result = queries::store_vote(&conn, ROUND_ID, W, 0, 1, 1, &[0xBB; 32]);
+                    result_tx.send(result).unwrap();
+                });
+
+                let writer_tx =
+                    wait_for_sqlite_contention(writer_tx, &result_rx, "vote commitment storage");
+                assert!(matches!(
+                    result_rx.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ));
+
+                writer_tx.commit().unwrap();
+                let result = result_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                result.unwrap();
+            });
+        }
+
+        let stored_choice: i64 = db_a
+            .conn()
+            .query_row(
+                "SELECT choice FROM votes
+                 WHERE round_id = ?1 AND wallet_id = ?2
+                   AND bundle_index = 0 AND proposal_id = 1",
+                rusqlite::params![ROUND_ID, W],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_choice, 1);
+
+        // Submission recording reserves the writer before its first read.
         // If another writer already owns it, SQLite's busy handling makes this
         // call wait until that writer commits, after which the read and update
         // both succeed.
