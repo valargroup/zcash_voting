@@ -311,7 +311,7 @@ The real output is:
 | --- | --- |
 | Recipient | Voting hotkey address |
 | Value | `0` zatoshi |
-| OVK | `None` (no account outgoing viewing key) |
+| OVK | `None` by default; account external OVK with Ledger output review |
 | Memo | 512-byte delegation display memo |
 | `rseed_output` | Fresh randomness sampled by the builder |
 
@@ -323,14 +323,37 @@ The zero-value output is protocol-relevant: ZKP #1 reconstructs `cmx_new` for
 that same output value. Implementations MUST NOT change it to a 1-zatoshi
 output without changing and versioning the proof statement.
 
+### Ledger output review
+
+Call `DelegationPipeline::with_ledger_output_review()` or
+`DelegationKeys::with_ledger_output_review()` before the first delegation
+setup to enable Ledger output review. The synthetic spend remains 1 zatoshi
+and the hotkey output remains zero. The account's external outgoing viewing
+key (OVK) encrypts the output recovery data so Ledger can recover and display
+the hotkey output instead of omitting it as a dummy output.
+
+Anyone holding that OVK can recover the hotkey address and delegation memo
+from the submitted action. This does not grant authority to sign a delegation,
+spend funds, or vote as the hotkey. Existing callers keep `OVK=None` unless
+they opt in. The option does not change the circuit, vote-chain verification,
+or database format.
+
+Saved delegation requests are reused byte for byte, including after restart.
+Enabling this option after setup does not rebuild an existing request or make
+an earlier request compatible with Ledger.
+
 ### Memo
 
-The current display memo is:
+The default display memo is:
 
 ```text
 I am authorizing this hotkey managed by my wallet to vote on {round_name}.
 Amount: {whole}.{fraction:08} ZEC.
 ```
+
+Ledger output review escapes non-ASCII and control characters in the round
+title and replaces the line break before `Amount` with a space. The title is
+truncated as needed to retain the amount within the 512-byte memo limit.
 
 The memo is informational. It is covered by the transaction sighash, but the
 vote-chain verifier does not parse it. Wallets SHOULD show the same round,

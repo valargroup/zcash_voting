@@ -6,6 +6,22 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.1.0
+
+### Added
+
+- Opt-in Ledger output review through
+  `DelegationPipeline::with_ledger_output_review()` and
+  `DelegationKeys::with_ledger_output_review()`. New delegation requests use
+  the account's external outgoing viewing key and a printable ASCII memo so
+  Ledger can review the existing zero-value hotkey output. The outgoing
+  viewing key holder can recover the hotkey address and delegation memo from
+  the submitted action, without gaining signing authority. Configure this
+  before the first delegation setup; saved requests are reused unchanged.
+  Existing callers retain the default behavior. No database, circuit, or
+  vote-chain update is required. See
+  [Ledger output review](docs/delegation-signing-transaction.md#ledger-output-review).
+
 ## v5.0.2
 
 `zcash_voting` 5.0.2 updates `vote-commitment-tree` to 0.6.2 and
