@@ -55,6 +55,7 @@ pub struct DelegationPipeline<W: WalletDbOpener> {
     account_uuid: String,
     hotkey: Option<VotingHotkey>,
     bundle_policy: BundlePolicy,
+    ledger_output_review: bool,
 }
 
 impl<W: WalletDbOpener> DelegationPipeline<W> {
@@ -100,7 +101,16 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
             account_uuid: account_uuid.to_string(),
             hotkey,
             bundle_policy,
+            ledger_output_review: false,
         })
+    }
+
+    /// Applies [`crate::delegate::DelegationKeys::with_ledger_output_review`] to
+    /// newly prepared bundles. Select this only for Ledger accounts; it exposes
+    /// the hotkey output and memo to account-OVK holders.
+    pub fn with_ledger_output_review(mut self) -> Self {
+        self.ledger_output_review = true;
+        self
     }
 
     /// A handle on the pipeline's sidecar connection, scoped to its wallet.

@@ -4,7 +4,19 @@ use std::sync::{Arc, Barrier};
 
 #[test]
 fn keystone_request_reuses_warmed_setup_and_survives_restart() {
+    assert_request_survives_restart(false);
+}
+
+#[test]
+fn ledger_request_reuses_warmed_setup_and_survives_restart() {
+    assert_request_survives_restart(true);
+}
+
+fn assert_request_survives_restart(ledger_output_review: bool) {
     let (_, params, _, mut prepared) = prepared_wallet_delegation_fixture();
+    if ledger_output_review {
+        prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    }
     let path =
         std::env::temp_dir().join(format!("keystone-warmup-{}.sqlite", uuid::Uuid::new_v4()));
     let path = path.to_str().unwrap();
@@ -22,9 +34,14 @@ fn keystone_request_reuses_warmed_setup_and_survives_restart() {
         .unwrap();
     assert_eq!(before.pczt_bytes, setup.pczt_bytes);
     assert_eq!(before.pczt_sighash, setup.pczt_sighash);
+    let memo = if ledger_output_review {
+        ledger_display_memo
+    } else {
+        display_memo
+    };
     assert_eq!(
         before.display_memo,
-        display_memo(
+        memo(
             &prepared.round_name,
             crate::round::raw_bundle_weight(&prepared.bundle_note_infos).unwrap()
         )
@@ -295,4 +312,17 @@ fn observed_keystone_requests_preserve_durable_reuse_and_missing_pczt_errors() {
         stage.error_kind.as_deref(),
         Some("DelegationPcztUnavailable")
     );
+}
+
+#[test]
+fn enabling_ledger_output_review_does_not_rewrite_an_existing_signing_context() {
+    let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+    let original = prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    let reused = prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    assert_eq!(reused, original);
 }

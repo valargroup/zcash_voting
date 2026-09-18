@@ -1287,6 +1287,7 @@ impl VotingDb {
             &keys.round_name,
             &padded_note_secrets,
             van_blinding.as_ref(),
+            keys.ledger_output_review,
         )?;
         // Compute total note value from input notes
         let total_note_value: u64 = notes

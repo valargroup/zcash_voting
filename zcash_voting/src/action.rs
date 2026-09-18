@@ -355,6 +355,7 @@ pub(crate) fn build_governance_pczt(
     round_name: &str,
     padded_note_secrets: &[(Vec<u8>, Vec<u8>)],
     van_blinding: Option<&VanBlinding>,
+    ledger_output_review: bool,
 ) -> Result<GovernancePczt, VotingError> {
     validate_notes(notes)?;
     validate_round_params(params)?;
@@ -563,7 +564,11 @@ pub(crate) fn build_governance_pczt(
     // Add output to hotkey address. The circuit commits to a zero-value output
     // note for cmx_new, so Phase 1 must use the same value and rseed.
     let memo = {
-        let memo_str = crate::delegate::display_memo(round_name, total_weight);
+        let memo_str = if ledger_output_review {
+            crate::delegate::ledger_display_memo(round_name, total_weight)
+        } else {
+            crate::delegate::display_memo(round_name, total_weight)
+        };
         let mut buf = [0u8; 512];
         let bytes = memo_str.as_bytes();
         let len = bytes.len().min(512);
@@ -597,7 +602,12 @@ pub(crate) fn build_governance_pczt(
             })?;
 
         builder
-            .add_output(None, hotkey_addr.clone(), NoteValue::ZERO, memo)
+            .add_output(
+                ledger_output_review.then(|| fvk.to_ovk(Scope::External)),
+                hotkey_addr.clone(),
+                NoteValue::ZERO,
+                memo,
+            )
             .map_err(|e| VotingError::Internal {
                 message: format!("Builder::add_output failed: {:?}", e),
             })?;
@@ -883,6 +893,9 @@ pub fn extract_spend_auth_sig(
 
 #[cfg(test)]
 mod tests {
+    #[path = "output_recovery.rs"]
+    mod output_recovery;
+
     use super::*;
     use orchard::{
         keys::SpendingKey,
@@ -941,6 +954,7 @@ mod tests {
             "Test Round",
             &sample_padded_note_secrets(notes.len()).unwrap(),
             None,
+            false,
         )
         .unwrap()
     }
@@ -1158,6 +1172,7 @@ mod tests {
             "Test Round",
             &sample_padded_note_secrets(1).unwrap(),
             None,
+            false,
         )
         .unwrap_err();
 
@@ -1229,64 +1244,6 @@ mod tests {
     }
 
     #[test]
-    fn test_governance_outputs_are_not_recoverable_with_account_ovk() {
-        let result = build_mock_nu6_3_pczt(&[mock_note()]);
-        let fvk = FullViewingKey::from_bytes(&mock_fvk_bytes().try_into().unwrap()).unwrap();
-        let ovk = fvk.to_ovk(Scope::External);
-
-        for index in 0..crate::tx1::TX1_ACTION_COUNT {
-            let start = 1 + index * crate::tx1::TX1_ACTION_EFFECTS_LEN;
-            let action = Action::from_parts(
-                Nullifier::from_bytes(
-                    result.tx1_effects[start + 32..start + 64]
-                        .try_into()
-                        .unwrap(),
-                )
-                .unwrap(),
-                VerificationKey::<SpendAuth>::try_from(
-                    <[u8; 32]>::try_from(&result.tx1_effects[start + 64..start + 96]).unwrap(),
-                )
-                .unwrap(),
-                ExtractedNoteCommitment::from_bytes(
-                    result.tx1_effects[start + 96..start + 128]
-                        .try_into()
-                        .unwrap(),
-                )
-                .unwrap(),
-                TransmittedNoteCiphertext {
-                    epk_bytes: result.tx1_effects[start + 128..start + 160]
-                        .try_into()
-                        .unwrap(),
-                    enc_ciphertext: result.tx1_effects[start + 160..start + 740]
-                        .try_into()
-                        .unwrap(),
-                    out_ciphertext: result.tx1_effects[start + 740..start + 820]
-                        .try_into()
-                        .unwrap(),
-                },
-                ValueCommitment::from_bytes(
-                    result.tx1_effects[start..start + 32].try_into().unwrap(),
-                )
-                .unwrap(),
-                (),
-            )
-            .unwrap();
-
-            assert!(
-                try_output_recovery_with_ovk(
-                    &IronwoodDomain::for_action(&action),
-                    &ovk,
-                    &action,
-                    action.cv_net(),
-                    &action.encrypted_note().out_ciphertext,
-                )
-                .is_none(),
-                "action {index} was recoverable with the governance account OVK"
-            );
-        }
-    }
-
-    #[test]
     fn test_build_governance_pczt_rejects_coin_type_network_mismatch() {
         let err = build_governance_pczt(
             &[mock_note()],
@@ -1301,6 +1258,7 @@ mod tests {
             "Test Round",
             &sample_padded_note_secrets(1).unwrap(),
             None,
+            false,
         )
         .unwrap_err();
 
