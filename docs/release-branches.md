@@ -10,8 +10,9 @@ predates this naming pattern and keeps its original name.
 The currently supported maintenance lines are:
 
 - `release/v3.x`, selected by `A:backport/v3.x`;
-- `release/v4.0.x`, selected by `A:backport/v4.0.x`; and
-- `release/v5.0.x`, selected by `A:backport/v5.0.x`.
+- `release/v4.0.x`, selected by `A:backport/v4.0.x`;
+- `release/v5.0.x`, selected by `A:backport/v5.0.x`; and
+- `release/v5.1.x`, selected by `A:backport/v5.1.x`.
 
 Cut a maintenance branch from the chosen release commit before the first release
 candidate on that line. Every release tag for the line should be reachable from

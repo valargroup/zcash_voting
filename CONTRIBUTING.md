@@ -26,9 +26,9 @@ polling, or recovery, read
 ## Releases and backports
 
 `main` is the development line for the next release. Shipped release series are
-maintained on release branches (`release/v3.x`, `release/v4.0.x`, and
-`release/v5.0.x` are currently supported), and semver-compatible fixes reach
-them through reviewed automated backports rather than direct pushes. New lines
+maintained on release branches (`release/v3.x`, `release/v4.0.x`,
+`release/v5.0.x`, and `release/v5.1.x` are currently supported). Semver-compatible
+fixes reach them through reviewed automated backports rather than direct pushes. New lines
 use the `release/vMAJOR.MINOR.x` naming pattern. Read
 [Release branches and backports](docs/release-branches.md) before deciding where
 a change lands or applying a backport label.
