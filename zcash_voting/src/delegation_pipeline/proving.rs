@@ -73,7 +73,7 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
     ) -> Result<PreparedDelegationBundle, VotingError> {
         let hotkey = self.hotkey()?;
         let wallet = self.wallet.open_for_read()?;
-        delegate::observe_prepare_delegation_bundle(
+        let mut prepared = delegate::observe_prepare_delegation_bundle(
             self.scoped_voting_db()?,
             &wallet,
             PrepareDelegationBundleParams {
@@ -85,7 +85,9 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
                 bundle_policy: self.bundle_policy,
             },
             observations,
-        )
+        )?;
+        prepared.delegation_keys.ledger_output_review = self.ledger_output_review;
+        Ok(prepared)
     }
 
     /// Whether a durable proof already exists for the bundle.

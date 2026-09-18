@@ -79,6 +79,7 @@ pub struct DelegationKeys {
     pub(crate) round_name: String,
     /// Present only when the local voting hotkey secret is available.
     van_blinding_key: Option<VanBlindingKey>,
+    pub(crate) ledger_output_review: bool,
 }
 
 // Preserve the public identity semantics from before deterministic blinding.
@@ -94,6 +95,7 @@ impl PartialEq for DelegationKeys {
             && self.network == other.network
             && self.coin_type == other.coin_type
             && self.round_name == other.round_name
+            && self.ledger_output_review == other.ledger_output_review
     }
 }
 
@@ -110,6 +112,7 @@ impl Hash for DelegationKeys {
         self.network.hash(state);
         self.coin_type.hash(state);
         self.round_name.hash(state);
+        self.ledger_output_review.hash(state);
     }
 }
 
@@ -124,6 +127,7 @@ impl std::fmt::Debug for DelegationKeys {
             .field("network", &self.network)
             .field("coin_type", &self.coin_type)
             .field("round_name", &"<redacted>")
+            .field("ledger_output_review", &self.ledger_output_review)
             .field(
                 "deterministic_van_blinding",
                 &self.van_blinding_key.is_some(),
@@ -133,6 +137,16 @@ impl std::fmt::Debug for DelegationKeys {
 }
 
 impl DelegationKeys {
+    /// Enables account-OVK recovery and printable ASCII memos for Ledger review.
+    ///
+    /// Disabled by default. Account-OVK holders can recover the hotkey output and
+    /// memo from published TX1 effects. Titles escape non-ASCII/control characters;
+    /// line breaks become spaces. Existing persisted PCZTs are reused unchanged.
+    pub fn with_ledger_output_review(mut self) -> Self {
+        self.ledger_output_review = true;
+        self
+    }
+
     /// Builds delegation keys from one already validated target.
     #[allow(clippy::too_many_arguments)]
     fn with_voting_target(
@@ -155,6 +169,7 @@ impl DelegationKeys {
             coin_type: target.network().network_type().coin_type(),
             round_name,
             van_blinding_key,
+            ledger_output_review: false,
         }
     }
 
@@ -2433,6 +2448,21 @@ pub fn display_memo(round_name: &str, total_weight_zatoshi: u64) -> String {
     memo
 }
 
+// Escape before truncation to preserve the amount and avoid Ledger's memo-hash path.
+pub(crate) fn ledger_display_memo(round_name: &str, total_weight_zatoshi: u64) -> String {
+    let title: String = round_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii() && !ch.is_ascii_control() {
+                ch.to_string()
+            } else {
+                ch.escape_default().collect()
+            }
+        })
+        .collect();
+    display_memo(&title, total_weight_zatoshi).replace('\n', " ")
+}
+
 fn truncate_utf8_prefix(value: &str, max_bytes: usize) -> &str {
     if value.len() <= max_bytes {
         return value;
@@ -2875,6 +2905,7 @@ mod tests {
                 coin_type: Network::Testnet.network_type().coin_type(),
                 round_name: "Demo Round".to_string(),
                 van_blinding_key: None,
+                ledger_output_review: false,
             },
             branch_id_provider: LightwalletdBranchIdProvider::resolved(TESTNET_NU6_BRANCH_ID),
             anchor_tree_state_bytes: vec![0xAA],
