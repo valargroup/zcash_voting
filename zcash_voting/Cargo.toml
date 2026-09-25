@@ -1,6 +1,6 @@
 [package]
 name = "zcash_voting"
-version = "5.1.0"
+version = "5.1.1-rc.1"
 edition = "2021"
 rust-version = "1.91"
 description = "Client-side library for Zcash shielded voting: ZKP delegation and vote-commitment proofs (Halo 2), ElGamal encryption, governance PCZT construction, Merkle witness generation, and SQLite round-state persistence."
@@ -50,8 +50,8 @@ ed25519-dalek = "2"
 
 pir-client = { version = "=0.7.3", default-features = false }
 pir-types = { version = "=0.6.3", default-features = false }
-valar-spiral-rs = { version = "=0.5.2", default-features = false }
-valar-ypir = { version = "=0.2.0", default-features = false }
+valar-spiral-rs = { version = "=0.5.3-rc.1", default-features = false }
+valar-ypir = { version = "=0.2.1", default-features = false }
 imt-tree = { version = "=0.5.3", default-features = false }
 
 bytes = "1"
