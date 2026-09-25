@@ -6,15 +6,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-## v5.1.1-rc.1
-
-### Fixed
-
-- Align the PIR dependencies with `valar-spiral-rs` `0.5.3-rc.1` and
-  `valar-ypir` `0.2.1-rc.1`, allowing wallets to resolve voting alongside
-  the published Enhance PIR client and IPIR `0.1.0-rc.3` without local
-  dependency overrides. No voting API, wire format, or database changes.
-
 ## v5.1.0
 
 ### Added
