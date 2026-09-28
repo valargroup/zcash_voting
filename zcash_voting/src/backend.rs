@@ -9,3 +9,8 @@ pub use zakura_wallet_lib::{
     client_backend as zcash_client_backend, client_sqlite as zcash_client_sqlite,
     keys as zcash_keys, orchard, pczt, primitives as zcash_primitives,
 };
+
+#[cfg(feature = "zakura")]
+pub use ::zcash_protocol;
+#[cfg(feature = "lrz")]
+pub use ::lrz_zcash_protocol as zcash_protocol;

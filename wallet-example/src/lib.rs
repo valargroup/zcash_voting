@@ -4,6 +4,9 @@ compile_error!("features `lrz` and `zakura` cannot be enabled together");
 #[cfg(not(any(feature = "lrz", feature = "zakura")))]
 compile_error!("enable exactly one of the `lrz` or `zakura` features");
 
+#[cfg(feature = "lrz")]
+extern crate lrz_zcash_protocol as zcash_protocol;
+
 pub mod example_capability_handoff;
 pub mod example_config;
 pub mod example_delegation;
