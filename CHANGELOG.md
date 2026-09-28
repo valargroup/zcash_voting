@@ -6,6 +6,12 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.1.1-rc.3
+
+`zcash_voting` 5.1.1-rc.3 keeps the 5.1.1-rc.2 dependency stack and gates the
+regtest `NetworkUpgrade::Nu7` arm behind the Zakura feature so the LRZ backend
+continues to build against crates.io `zcash_protocol 0.10`.
+
 ## v5.1.1-rc.2
 
 `zcash_voting` 5.1.1-rc.2 aligns on the published Zakura cryptography `2.0.0`

@@ -362,7 +362,9 @@ impl Parameters for Network {
                 NetworkUpgrade::Nu6_3 => {
                     Some(BlockHeight::from_u32(REGTEST_NU6_3_ACTIVATION_HEIGHT))
                 }
-                // Match public networks: Nu7 is defined but not yet activated.
+                // Zakura protocol 2.0 defines Nu7; crates.io zcash_protocol 0.10
+                // does not. Match public Zakura networks: not yet activated.
+                #[cfg(feature = "zakura")]
                 NetworkUpgrade::Nu7 => None,
             },
         }
