@@ -20,6 +20,9 @@
 //! Deliberately outside the workspace default members: it needs the network,
 //! it kills processes, and it must never run as part of `make test`.
 
+#[cfg(feature = "lrz")]
+extern crate lrz_zcash_protocol as zcash_protocol;
+
 pub mod assertions;
 pub mod chain_reads;
 pub mod child;
