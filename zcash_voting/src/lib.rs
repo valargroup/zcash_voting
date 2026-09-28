@@ -23,6 +23,11 @@ compile_error!("features `lrz` and `zakura` cannot be enabled together");
 #[cfg(not(any(feature = "lrz", feature = "zakura")))]
 compile_error!("enable exactly one of the `lrz` or `zakura` features");
 
+// LRZ selects crates.io `zcash_protocol` under a renamed dependency key. Alias
+// it back so the rest of the crate can keep `use zcash_protocol::...`.
+#[cfg(feature = "lrz")]
+extern crate lrz_zcash_protocol as zcash_protocol;
+
 pub mod action;
 pub mod backend;
 pub mod chain_submission;

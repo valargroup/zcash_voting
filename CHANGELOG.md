@@ -6,6 +6,25 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.1.1-rc.2
+
+`zcash_voting` 5.1.1-rc.2 aligns on the published Zakura cryptography `2.0.0`
+stack and supporting crate releases:
+
+- `zakura-wallet-lib 0.1.0-rc6`
+- `voting-circuits 0.12.2` and `voting-crypto-deps 0.2.4`
+- `imt-tree 0.5.4`, `pir-types 0.6.4`, and `pir-client 0.7.4`
+- `vote-commitment-tree 0.6.3` and `vote-commitment-tree-client 0.8.3`
+
+The Zakura path depends on `zakura-protocol 2.0.0` under the `zcash_protocol`
+import name; the LRZ path keeps crates.io `zcash_protocol 0.10.4`. Spiral
+remains at `valar-spiral-rs 0.5.3-rc.1` with `valar-ypir 0.2.1`.
+
+## v5.1.1-rc.1
+
+`zcash_voting` 5.1.1-rc.1 updates Spiral to `valar-spiral-rs 0.5.3-rc.1` and
+YPIR to published `valar-ypir 0.2.1`.
+
 ## v5.1.0
 
 ### Added

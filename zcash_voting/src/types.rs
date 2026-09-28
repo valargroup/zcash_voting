@@ -362,6 +362,8 @@ impl Parameters for Network {
                 NetworkUpgrade::Nu6_3 => {
                     Some(BlockHeight::from_u32(REGTEST_NU6_3_ACTIVATION_HEIGHT))
                 }
+                // Match public networks: Nu7 is defined but not yet activated.
+                NetworkUpgrade::Nu7 => None,
             },
         }
     }
