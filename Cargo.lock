@@ -1543,9 +1543,9 @@ dependencies = [
 
 [[package]]
 name = "imt-tree"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f92c99eb90cebfcd9697072e01c55eb7313297405dd59890556ba808ecea03c8"
+checksum = "d1672ba48584c1dcdec12c3b39b44ffb68d3620d70046653c57516cb3a06201d"
 dependencies = [
  "anyhow",
  "hex",
@@ -2025,9 +2025,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pir-client"
-version = "0.7.3"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e828f60bc83396d8e5791d41a423fa3406d26344e6dc31a48afbca52829308d6"
+checksum = "20ea25f246c635f9bf1c35ed8a0052a11a682a7f78924a2d64a53fedd301fcbd"
 dependencies = [
  "anyhow",
  "futures",
@@ -2043,9 +2043,9 @@ dependencies = [
 
 [[package]]
 name = "pir-types"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "555365eac794205a9d4b28f5515f5e3e93c6e1e1f61cac4976a8a48ffba3227f"
+checksum = "c26f2c33bb3f799708c13cfefafd3e5059b149c340ddedc7d11bff7f0910f910"
 dependencies = [
  "anyhow",
  "imt-tree",
@@ -2327,6 +2327,7 @@ dependencies = [
  "tokio",
  "tonic",
  "voting-crypto-deps",
+ "zakura-protocol",
  "zcash_protocol",
  "zcash_voting",
  "zeroize",
@@ -3318,7 +3319,7 @@ dependencies = [
 
 [[package]]
 name = "vote-commitment-tree"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "imt-tree",
@@ -3333,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "vote-commitment-tree-client"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "base64",
  "bytes",
@@ -3353,9 +3354,9 @@ dependencies = [
 
 [[package]]
 name = "voting-circuits"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f68226b33cda30cbd1fe37a28927546c636a50c0c376b18df7beb7cdcfb4c4ef"
+checksum = "4fd0c565243e5bb9210041da82a2747596aa97f16b2b13626c99eda710e7bc23"
 dependencies = [
  "blake2b_simd",
  "incrementalmerkletree",
@@ -3366,9 +3367,9 @@ dependencies = [
 
 [[package]]
 name = "voting-crypto-deps"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7093c43ce71cde30f4d9c1154fa6f0b69c6866a4efb9cb582055a81dcf438a6e"
+checksum = "912ae5f4b86e2dd37a6b0fef77b1557af71dcf87221b20bff5c02326c0f81903"
 dependencies = [
  "halo2_gadgets",
  "halo2_poseidon",
@@ -3591,10 +3592,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "zakura-bellman"
-version = "1.2.0"
+name = "zakura-address"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6668703cc9a72754c4081991cc81180fed31e25b8069c1ff5c3c4fdb41e1850f"
+checksum = "b928582281258e7d64a2b3aa0d4711101945eccb3306c7ba99d8f6109a4102ad"
+dependencies = [
+ "bech32",
+ "bs58",
+ "corez",
+ "f4jumble",
+ "zakura-protocol",
+ "zcash_encoding",
+]
+
+[[package]]
+name = "zakura-bellman"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "298264794e0b205eaa968032405d19490fb0e2e3ffbf4bfe1fb846ddba134c41"
 dependencies = [
  "bitvec",
  "blake2s_simd",
@@ -3607,9 +3622,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-bls12-381"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2edea13b7bba94ccb7aa473b30e4c390549ffe7c25d83919d6ba4e9b65626497"
+checksum = "2257196dff0c1a50a946b890657a8e1e75c6b2969b519252e107bd6380e31748"
 dependencies = [
  "ff 0.14.0",
  "group 0.14.0",
@@ -3620,9 +3635,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-client-backend"
-version = "0.1.0-rc5"
+version = "0.1.0-rc7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad892817774c836ab37239af03840b17368a4c5ed364f9ee868273bb0ddf0ada"
+checksum = "dd138cad8c217dcd4cbdf2324824760ae55c62b14dc4ed78ba08ccba30ceabd5"
 dependencies = [
  "base64",
  "bech32",
@@ -3651,27 +3666,28 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "which",
+ "zakura-address",
  "zakura-bls12-381",
  "zakura-keys",
  "zakura-orchard",
  "zakura-pasta-curves",
+ "zakura-pir-enhance-types",
  "zakura-primitives",
+ "zakura-protocol",
  "zakura-sapling-crypto",
- "zcash_address",
+ "zakura-transparent",
+ "zakura-zip321",
  "zcash_encoding",
  "zcash_note_encryption",
- "zcash_protocol",
  "zcash_script",
- "zcash_transparent",
  "zip32",
- "zip321",
 ]
 
 [[package]]
 name = "zakura-client-sqlite"
-version = "0.1.0-rc5"
+version = "0.1.0-rc7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4757a07d2fcc344aa2bbec9ba4d68d95d09ed9968b1d3032f0ca348487f251af"
+checksum = "e70bc4e3cf36b8b933af0926369b2b9b27cb3fc67eda14ac6f091df524885f47"
 dependencies = [
  "bitflags 2.13.1",
  "bs58",
@@ -3697,26 +3713,26 @@ dependencies = [
  "time",
  "tracing",
  "uuid",
+ "zakura-address",
  "zakura-client-backend",
  "zakura-jubjub",
  "zakura-keys",
  "zakura-orchard",
  "zakura-pczt",
  "zakura-primitives",
+ "zakura-protocol",
  "zakura-sapling-crypto",
- "zcash_address",
+ "zakura-transparent",
  "zcash_encoding",
- "zcash_protocol",
  "zcash_script",
- "zcash_transparent",
  "zip32",
 ]
 
 [[package]]
 name = "zakura-halo2-gadgets"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d24d27771c16598da80f900efcf8051282221b035931e0b61dd465e70c7e3f"
+checksum = "7f945c1d7b248ae2e1e325c7967bf6763064cd989c4bcfd576b1929f9cbab636"
 dependencies = [
  "arrayvec",
  "ff 0.14.0",
@@ -3730,15 +3746,15 @@ dependencies = [
 
 [[package]]
 name = "zakura-halo2-legacy-pdqsort"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab38fc11181f44ad3158e16e9a247c8a76a1bcf73adfa08b9ea29d3d9f68be6"
+checksum = "bd937744427c64312f098771939c98247df1beb6fcb108de992201815824e7e0"
 
 [[package]]
 name = "zakura-halo2-poseidon"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7ea83759fbaa8a599b7e37b71d1b57e3ac9dcb40e42e572a9fc7a8d927e08b"
+checksum = "f512f1970a7f69ad3e3390bd2a46bf53c471b96afcc2954fd6b889e738116926"
 dependencies = [
  "bitvec",
  "ff 0.14.0",
@@ -3748,9 +3764,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-halo2-proofs"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfa509d1ddcec871a2508ae4d90c89c57a55bd49dc0ddb6456adfaad08069222"
+checksum = "2f66962d186c44189b1141645ca031ead78144f306b1f682481426afd6744113"
 dependencies = [
  "blake2b_simd",
  "ff 0.14.0",
@@ -3765,9 +3781,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-jubjub"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7cc2178b04ba26be2676cd74018add8768fcda53326aae8255e7b676f877ee6"
+checksum = "b3c229473f6d22363febe2237f18ec4a59e6e446715fdb45ab3b29da87634708"
 dependencies = [
  "bitvec",
  "ff 0.14.0",
@@ -3779,9 +3795,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-keys"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f301a02dd34dbc50d9ceb59b552501b73f74c47a137f58eba59c9415febf2bd"
+checksum = "5ee2b10af793470d975d145b1002995bf9f58ba8862eea08841e3882f2c6c823"
 dependencies = [
  "bech32",
  "blake2b_simd",
@@ -3793,20 +3809,20 @@ dependencies = [
  "rand_core 0.6.4",
  "secrecy",
  "subtle",
+ "zakura-address",
  "zakura-orchard",
+ "zakura-protocol",
  "zakura-sapling-crypto",
- "zcash_address",
+ "zakura-transparent",
  "zcash_encoding",
- "zcash_protocol",
- "zcash_transparent",
  "zip32",
 ]
 
 [[package]]
 name = "zakura-orchard"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ff7912c408024e03ec9c731e62cf848231fcbd0b7385e9032540d53ebc9a665"
+checksum = "5eab764ffab91190fc0e90fb6f5973819b0ed66c577684e2d60d92295ddad93c"
 dependencies = [
  "aes",
  "bitvec",
@@ -3842,18 +3858,18 @@ dependencies = [
 
 [[package]]
 name = "zakura-pairing"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bb93e2fa3d808aee507f0ce5167b2819f692d9c915b2d543eab820050deef73"
+checksum = "71750f2a9fb5b1f4951199a2e09578a5c030336c0b75bc64bd9b6ccdb275f4e2"
 dependencies = [
  "group 0.14.0",
 ]
 
 [[package]]
 name = "zakura-pasta-curves"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33817e907eaf89e5871ab0cdfc1054907ec0b3a86759c7a9d41875690f6fd9f4"
+checksum = "32245cb7516361b02b4188b5536d5a998b6be454cf229a2531fb36820a2c4995"
 dependencies = [
  "blake2b_simd",
  "cc",
@@ -3868,9 +3884,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-pczt"
-version = "0.1.0-rc3"
+version = "0.1.0-rc4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4f816936d17f64f02008363aec6dc46ff1ede6d1e227d2037561c14763b52f2"
+checksum = "d9804652bad6d01e18e4ce5b993aacdb1eaa1cfaa08a63f53d252fc3bdce6814"
 dependencies = [
  "blake2b_simd",
  "document-features",
@@ -3888,19 +3904,25 @@ dependencies = [
  "zakura-orchard",
  "zakura-pasta-curves",
  "zakura-primitives",
+ "zakura-protocol",
  "zakura-redjubjub",
  "zakura-sapling-crypto",
+ "zakura-transparent",
  "zcash_note_encryption",
- "zcash_protocol",
  "zcash_script",
- "zcash_transparent",
 ]
 
 [[package]]
-name = "zakura-primitives"
-version = "1.2.0"
+name = "zakura-pir-enhance-types"
+version = "0.0.1-rc0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6d512f69295e815987e4c2802da5a3f37fa86418acca9e35d75f3ba8dc34a5d"
+checksum = "31a417a632bc4c6dbb454c13a2a3dfc11c09bbe3d170de5be8d0f60a7c281407"
+
+[[package]]
+name = "zakura-primitives"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0713ca2e55d75b9d130fc406eef5052d12908ae2a97235798eedd7c29983239e"
 dependencies = [
  "blake2b_simd",
  "block-buffer 0.11.0-rc.3",
@@ -3917,20 +3939,33 @@ dependencies = [
  "sha2 0.10.9",
  "zakura-jubjub",
  "zakura-orchard",
+ "zakura-protocol",
  "zakura-redjubjub",
  "zakura-sapling-crypto",
+ "zakura-transparent",
  "zcash_encoding",
  "zcash_note_encryption",
- "zcash_protocol",
  "zcash_script",
- "zcash_transparent",
+]
+
+[[package]]
+name = "zakura-protocol"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26fc0c39ba93a4d60df86a56f2e8aad23c36ee93da04b695876e8034826d6b29"
+dependencies = [
+ "corez",
+ "document-features",
+ "hex",
+ "memuse",
+ "zcash_encoding",
 ]
 
 [[package]]
 name = "zakura-reddsa"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f5849526a1f308f3c522ebdcccd49e4add198d7b31297dedcfce9ff392c9e4"
+checksum = "23bcd68f1bde9127715d4b0583565dbeb08535560077b21586f1a65067ab0c58"
 dependencies = [
  "blake2b_simd",
  "frost-rerandomized",
@@ -3946,9 +3981,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-redjubjub"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ff05cf4b8580b495f180942e702c0f9ecf92346e1204b3b2f8ceb71f98b55b5"
+checksum = "62e92be6a1c5146de13ed36e21ed1f6c9badfa3094345b6ddf771284a983b7d5"
 dependencies = [
  "rand_core 0.10.1",
  "thiserror 2.0.20",
@@ -3958,9 +3993,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-sapling-crypto"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdfa36cec0a3b20da86caee7931f636a80071e27077fff2da7ca03536848d05c"
+checksum = "6b0a9aac91fe3211ea9680251ed0baa4e910e537c159eeab29010aa758e27038"
 dependencies = [
  "aes",
  "bitvec",
@@ -3992,9 +4027,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-sinsemilla"
-version = "1.2.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad8f2ee21b5341be7586c4b5ed7d4e114cf85a576837ed68a2da72f4434d26b7"
+checksum = "a67c1cae8ddd8a938da0b14b63dd9fc69b1a8f31ad76d6876813992f02829248"
 dependencies = [
  "group 0.14.0",
  "once_cell",
@@ -4003,10 +4038,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "zakura-wallet-lib"
-version = "0.1.0-rc5"
+name = "zakura-transparent"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4fd4845e34f1d3fcb93a811bfe0e2f84c28b2a2f884c531e6ed504dcd958f0e"
+checksum = "2baee5951db6299f6fb78f86b4c5aff21e110cfafa8caa8e596e25992ea2a2da"
+dependencies = [
+ "bip32",
+ "bs58",
+ "corez",
+ "document-features",
+ "getset",
+ "hex",
+ "nonempty",
+ "ripemd 0.1.3",
+ "secp256k1",
+ "sha2 0.10.9",
+ "subtle",
+ "zakura-address",
+ "zakura-protocol",
+ "zcash_encoding",
+ "zcash_script",
+ "zcash_spec",
+ "zip32",
+]
+
+[[package]]
+name = "zakura-wallet-lib"
+version = "0.1.0-rc6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a2cf68c16ebe136b4f71c66de5dc0dc644087094314b9687d5b218f15db0c5"
 dependencies = [
  "orchard",
  "pczt",
@@ -4036,6 +4096,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zakura-zip321"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7621db24f937f76b5c577f3c47a260883d417035535c3266b2c59d20575b12d6"
+dependencies = [
+ "base64",
+ "nom",
+ "percent-encoding",
+ "zakura-address",
+ "zakura-protocol",
+]
+
+[[package]]
 name = "zcash-voting-wallet-example"
 version = "0.1.0"
 dependencies = [
@@ -4052,6 +4125,7 @@ dependencies = [
  "serde",
  "serde_json",
  "voting-crypto-deps",
+ "zakura-protocol",
  "zcash_protocol",
  "zcash_voting",
  "zeroize",
@@ -4272,9 +4346,9 @@ dependencies = [
 
 [[package]]
 name = "zcash_protocol"
-version = "0.10.5"
+version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "314329b91ec4bbb517441840e47d0b2029bf0b946f086980c96c889c2d92dc5d"
+checksum = "b20adb1cdb6ab551e83d1507461e89b41fc67e800eec9e59e0c8de96152e8c5c"
 dependencies = [
  "corez",
  "document-features",
@@ -4336,7 +4410,7 @@ dependencies = [
 
 [[package]]
 name = "zcash_voting"
-version = "5.1.1-rc.1"
+version = "5.1.1-rc.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -4377,6 +4451,7 @@ dependencies = [
  "vote-commitment-tree-client",
  "voting-circuits",
  "voting-crypto-deps",
+ "zakura-protocol",
  "zakura-wallet-lib",
  "zcash_note_encryption",
  "zcash_protocol",

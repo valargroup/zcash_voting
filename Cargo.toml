@@ -17,9 +17,12 @@ default-members = [
 resolver = "2"
 
 [workspace.dependencies]
-voting-circuits = { version = "=0.12.1", default-features = false }
-voting-crypto-deps = { version = "=0.2.3", default-features = false }
-zcash_protocol = { version = "0.10.4" }
+voting-circuits = { version = "=0.12.2", default-features = false }
+voting-crypto-deps = { version = "=0.2.4", default-features = false }
+# Zakura 2.0 publishes protocol as `zakura-protocol` with lib name `zcash_protocol`.
+# Packages select one of these through the `zakura` / `lrz` features.
+zcash_protocol = { version = "2.0.0", package = "zakura-protocol", default-features = false }
+lrz_zcash_protocol = { version = "0.10.4", package = "zcash_protocol" }
 
 [profile.test.package.imt-tree]
 opt-level = 3
