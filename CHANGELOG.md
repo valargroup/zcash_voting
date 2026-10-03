@@ -6,6 +6,11 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- `zcash_voting` now requires `zakura-wallet-lib` `^0.1.0-rc6` instead of
+  exactly `0.1.0-rc6`.
+
 ## v5.1.1-rc.3
 
 `zcash_voting` 5.1.1-rc.3 keeps the 5.1.1-rc.2 dependency stack and gates the
