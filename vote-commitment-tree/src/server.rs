@@ -18,8 +18,8 @@
 
 use std::collections::BTreeMap;
 
-use incrementalmerkletree::{Hashable, Level, Retention};
-use shardtree::{
+use crate::incrementalmerkletree::{Hashable, Level, Retention};
+use crate::shardtree::{
     error::ShardTreeError,
     store::{memory::MemoryShardStore, ShardStore},
     ShardTree,
@@ -35,7 +35,7 @@ use crate::sync_api::BlockCommitments;
 // GenericTreeServer
 // ---------------------------------------------------------------------------
 
-/// An append-only Poseidon Merkle tree server backed by any [`shardtree::store::ShardStore`].
+/// An append-only Poseidon Merkle tree server backed by any [`ShardStore`](crate::shardtree::store::ShardStore).
 ///
 /// Use the type aliases [`TreeServer`] (KV-backed) and [`MemoryTreeServer`]
 /// (in-memory) rather than naming this type directly.
@@ -45,7 +45,7 @@ use crate::sync_api::BlockCommitments;
 /// results can be safely `.unwrap()`-ed; for [`TreeServer`] the error type is
 /// [`crate::kv_shard_store::KvError`] and must be propagated.
 pub struct GenericTreeServer<
-    S: shardtree::store::ShardStore<H = MerkleHashVote, CheckpointId = u32>,
+    S: crate::shardtree::store::ShardStore<H = MerkleHashVote, CheckpointId = u32>,
 > {
     pub(crate) inner: ShardTree<S, { TREE_DEPTH as u8 }, { SHARD_HEIGHT }>,
     /// Latest checkpoint id (block height) that has been recorded.
@@ -344,7 +344,7 @@ where
 
 impl<S> GenericTreeServer<S>
 where
-    S: shardtree::store::ShardStore<H = MerkleHashVote, CheckpointId = u32>,
+    S: crate::shardtree::store::ShardStore<H = MerkleHashVote, CheckpointId = u32>,
     S::Error: std::fmt::Debug,
 {
     /// Append a single leaf (e.g. one VAN from `MsgDelegateVote`).
@@ -432,7 +432,7 @@ where
     ///
     /// Returns `None` if the position or checkpoint is invalid.
     pub fn path(&self, position: u64, anchor_height: u32) -> Option<MerklePath> {
-        let pos = incrementalmerkletree::Position::from(position);
+        let pos = crate::incrementalmerkletree::Position::from(position);
         self.inner
             .witness_at_checkpoint_id(pos, &anchor_height)
             .ok()

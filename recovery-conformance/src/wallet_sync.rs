@@ -28,6 +28,7 @@ use zcash_voting::backend::zcash_client_backend::{
     proto::{compact_formats::CompactBlock, service::BlockId, service::BlockRange},
 };
 use zcash_voting::backend::zcash_client_sqlite::{util::SystemClock, WalletDb};
+use zcash_voting::backend::zip32;
 use zcash_voting::Network;
 
 /// How many blocks are fetched and scanned at a time.

@@ -3,8 +3,8 @@
 mod ingress_timeout;
 mod interrupted_reservation;
 
+use crate::backend::incrementalmerkletree::frontier::Frontier;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use incrementalmerkletree::frontier::Frontier;
 use std::{
     collections::VecDeque,
     sync::{

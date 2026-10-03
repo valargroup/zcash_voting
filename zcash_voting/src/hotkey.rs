@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
-pub(crate) use crate::backend::{orchard, zcash_keys};
+pub(crate) use crate::backend::{orchard, zcash_keys, zip32};
 use orchard::keys::{FullViewingKey, SpendingKey};
-use rand::RngCore;
+use voting_crypto_deps::rand::{rngs::OsRng, Rng as _};
 use zcash_keys::keys::UnifiedSpendingKey;
 use zeroize::Zeroizing;
 use zip32::{AccountId, Scope};
@@ -34,7 +34,7 @@ pub const VOTING_HOTKEY_ADDRESS_INDEX: u32 = 0;
 /// an Orchard key for `network`.
 pub fn generate_random_voting_hotkey(network: Network) -> Result<VotingHotkey, VotingError> {
     let mut secret = Zeroizing::new(vec![0u8; VOTING_HOTKEY_STORED_SECRET_LEN]);
-    rand::rngs::OsRng.fill_bytes(secret.as_mut_slice());
+    OsRng.fill_bytes(secret.as_mut_slice());
     voting_hotkey_from_stored_secret(&secret, network)
 }
 
@@ -88,7 +88,10 @@ pub(crate) fn spending_key_from_hotkey_seed(
         }
     })?;
 
-    Ok(*usk.orchard())
+    // `SpendingKey` is `Copy` only under the Zakura backend.
+    #[allow(clippy::clone_on_copy)]
+    let spending_key = usk.orchard().clone();
+    Ok(spending_key)
 }
 
 fn raw_orchard_address_from_seed(

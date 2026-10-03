@@ -1,13 +1,13 @@
 #[allow(unused_imports)]
-pub(crate) use crate::backend::{orchard, pasta_curves, pczt, zcash_keys, zcash_primitives};
+pub(crate) use crate::backend::{orchard, pasta_curves, pczt, zcash_keys, zcash_primitives, zip32};
 use pasta_curves::arithmetic::{CurveAffine, CurveExt};
 use pasta_curves::group::{
     ff::{Field, PrimeField},
     Curve, Group, GroupEncoding,
 };
 use pasta_curves::pallas;
-use rand::RngCore;
 use subtle::CtOption;
+use voting_crypto_deps::rand::{rngs::OsRng, Rng};
 
 use orchard::builder::{Builder, BundleType};
 use orchard::bundle::{BundleVersion, TxVersion as OrchardTxVersion};
@@ -170,8 +170,17 @@ pub(crate) fn derive_governance_output_cmx(
     Ok(output_cmx.to_bytes())
 }
 
+/// The Unified Address whose only receiver is `address`.
+fn orchard_unified_address(address: Address) -> UnifiedAddress {
+    #[cfg(feature = "zakura")]
+    let unified_address = UnifiedAddress::from_receivers(Some(address), None, None);
+    #[cfg(feature = "lrz")]
+    let unified_address = UnifiedAddress::from_receivers(Some(address), None, None, None, None);
+    unified_address.expect("an Orchard receiver forms a valid Unified Address")
+}
+
 /// Generate a random valid Rho (retries until the random bytes are a valid Pallas field element).
-fn random_rho(rng: &mut impl RngCore) -> Rho {
+fn random_rho(rng: &mut impl Rng) -> Rho {
     loop {
         let mut rho_bytes = [0u8; 32];
         rng.fill_bytes(&mut rho_bytes);
@@ -183,7 +192,7 @@ fn random_rho(rng: &mut impl RngCore) -> Rho {
 }
 
 /// Generate a random valid RandomSeed for a given Rho.
-fn random_rseed(rng: &mut impl RngCore, rho: &Rho) -> (RandomSeed, [u8; 32]) {
+fn random_rseed(rng: &mut impl Rng, rho: &Rho) -> (RandomSeed, [u8; 32]) {
     loop {
         let mut rseed_bytes = [0u8; 32];
         rng.fill_bytes(&mut rseed_bytes);
@@ -205,7 +214,7 @@ pub(crate) fn sample_padded_note_secrets(
         });
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = OsRng;
     let mut padded_note_secrets = Vec::with_capacity(BUNDLE_NOTE_SLOTS - notes_len);
     for _ in notes_len..BUNDLE_NOTE_SLOTS {
         let rho = random_rho(&mut rng);
@@ -221,7 +230,7 @@ fn make_note(
     addr: Address,
     value: NoteValue,
     rho: Rho,
-    rng: &mut impl RngCore,
+    rng: &mut impl Rng,
     version: NoteVersion,
 ) -> Result<(orchard::Note, [u8; 32]), VotingError> {
     let (rseed, rseed_bytes) = random_rseed(rng, &rho);
@@ -240,7 +249,7 @@ fn make_note(
 fn make_dummy_note(
     addr: Address,
     rho: Rho,
-    rng: &mut impl RngCore,
+    rng: &mut impl Rng,
     protocol: VotingShieldedProtocol,
 ) -> Result<(orchard::Note, [u8; 32]), VotingError> {
     make_note(
@@ -412,8 +421,7 @@ pub(crate) fn build_governance_pczt(
         .try_into()
         .expect("validated as 32 bytes above");
 
-    let mut rng = rand::thread_rng();
-    let mut crypto_rng = voting_crypto_deps::rand::rngs::OsRng;
+    let mut rng = OsRng;
     let shielded_protocol = VotingShieldedProtocol::for_branch_id(branch_id)?;
     let bundle_version = shielded_protocol.bundle_version();
 
@@ -491,7 +499,7 @@ pub(crate) fn build_governance_pczt(
 
     let van_comm_rand_fp = van_blinding
         .map(VanBlinding::field)
-        .unwrap_or_else(|| pallas::Base::random(&mut crypto_rng));
+        .unwrap_or_else(|| pallas::Base::random(&mut rng));
     let van_comm_rand: [u8; 32] = van_comm_rand_fp.to_repr();
 
     // Compute VAN
@@ -579,9 +587,8 @@ pub(crate) fn build_governance_pczt(
     // Use Creator::build_from_parts to construct the PCZT with the selected
     // Orchard or Ironwood bundle, matching the wallet transaction builder path.
     let consensus_network = consensus_network_for_voting_network(network);
-    let hotkey_user_address = UnifiedAddress::from_receivers(Some(hotkey_addr.clone()), None, None)
-        .expect("an Orchard receiver forms a valid Unified Address")
-        .encode(&consensus_network);
+    let hotkey_user_address =
+        orchard_unified_address(hotkey_addr.clone()).encode(&consensus_network);
 
     for _ in 0..MAX_PCZT_LAYOUT_ATTEMPTS {
         // TX1 is V6-only and is never proved or broadcast, so its unused anchor
@@ -616,7 +623,7 @@ pub(crate) fn build_governance_pczt(
         // Keep the metadata check below as a defensive layout assertion.
         let (mut pczt_bundle, bundle_meta) =
             builder
-                .build_for_pczt(&mut crypto_rng)
+                .build_for_pczt(&mut rng)
                 .map_err(|e| VotingError::Internal {
                     message: format!("Builder::build_for_pczt failed: {:?}", e),
                 })?;
@@ -724,11 +731,14 @@ pub(crate) fn build_governance_pczt(
         })?;
 
         // Run IO Finalizer so the Signer (Keystone) can compute the sighash.
-        let pczt = pczt::roles::io_finalizer::IoFinalizer::new(pczt)
-            .finalize_io()
-            .map_err(|e| VotingError::Internal {
-                message: format!("IoFinalizer::finalize_io failed: {:?}", e),
-            })?;
+        let io_finalizer = pczt::roles::io_finalizer::IoFinalizer::new(pczt);
+        #[cfg(feature = "zakura")]
+        let finalized = io_finalizer.finalize_io();
+        #[cfg(feature = "lrz")]
+        let finalized = io_finalizer.finalize_io(&mut rng);
+        let pczt = finalized.map_err(|e| VotingError::Internal {
+            message: format!("IoFinalizer::finalize_io failed: {:?}", e),
+        })?;
 
         let pczt_bytes = pczt.serialize().map_err(|e| VotingError::Internal {
             message: format!("PCZT serialization failed: {:?}", e),
@@ -905,7 +915,7 @@ mod tests {
         value::ValueCommitment,
         Action,
     };
-    use zcash_note_encryption::try_output_recovery_with_ovk;
+    use voting_crypto_deps::zcash_note_encryption::try_output_recovery_with_ovk;
 
     fn mock_note() -> NoteInfo {
         NoteInfo {
@@ -1120,11 +1130,9 @@ mod tests {
         let hotkey_addr = Address::from_raw_address_bytes(&hotkey_raw)
             .into_option()
             .expect("mock hotkey address is valid");
-        let expected_user_address = UnifiedAddress::from_receivers(Some(hotkey_addr), None, None)
-            .expect("an Orchard receiver forms a valid Unified Address")
-            .encode(&consensus_network_for_voting_network(
-                VotingNetwork::Regtest,
-            ));
+        let expected_user_address = orchard_unified_address(hotkey_addr).encode(
+            &consensus_network_for_voting_network(VotingNetwork::Regtest),
+        );
         assert_eq!(
             output.user_address().as_deref(),
             Some(expected_user_address.as_str())

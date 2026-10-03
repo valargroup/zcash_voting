@@ -35,6 +35,16 @@ pub mod serde;
 pub mod server;
 pub mod sync_api;
 
+// -- Selected tree crates --------------------------------------------------
+
+// The tree types must come from the `incrementalmerkletree` that the selected
+// cryptography backend uses, and `shardtree` must match it.
+#[cfg(feature = "zakura")]
+use ::shardtree;
+#[cfg(feature = "lrz")]
+use lrz_shardtree as shardtree;
+use voting_crypto_deps::incrementalmerkletree;
+
 // -- Re-exports (public API) -----------------------------------------------
 
 pub use anchor::Anchor;

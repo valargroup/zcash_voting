@@ -57,9 +57,7 @@ fn assert_output_recovery(ledger_output_review: bool) {
                 epk_bytes: result.tx1_effects[start + 128..start + 160]
                     .try_into()
                     .unwrap(),
-                enc_ciphertext: result.tx1_effects[start + 160..start + 740]
-                    .try_into()
-                    .unwrap(),
+                enc_ciphertext: note_ciphertext(&result.tx1_effects[start + 160..start + 740]),
                 out_ciphertext: result.tx1_effects[start + 740..start + 820]
                     .try_into()
                     .unwrap(),
@@ -94,4 +92,16 @@ fn ledger_memo_retains_round_and_amount_without_entering_device_hash_path() {
     assert!(escaped.bytes().all(|byte| matches!(byte, 0x20..=0x7e)));
     assert!(escaped.contains("\\u{6295}"));
     assert!(escaped.ends_with(" Amount: 1.23456789 ZEC."));
+}
+
+/// Reads an Orchard note ciphertext in the selected backend's representation.
+#[cfg(feature = "zakura")]
+fn note_ciphertext(bytes: &[u8]) -> [u8; 580] {
+    bytes.try_into().unwrap()
+}
+
+/// Reads an Orchard note ciphertext in the selected backend's representation.
+#[cfg(feature = "lrz")]
+fn note_ciphertext(bytes: &[u8]) -> orchard::note_encryption::NoteCiphertextBytes {
+    orchard::note_encryption::NoteBytesData(bytes.try_into().unwrap())
 }

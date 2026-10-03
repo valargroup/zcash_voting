@@ -4,7 +4,7 @@
 
 use core::iter;
 
-use incrementalmerkletree::{Hashable, Level};
+use crate::incrementalmerkletree::{Hashable, Level};
 use lazy_static::lazy_static;
 use voting_crypto_deps::pasta_curves::{group::ff::PrimeField, Fp};
 

@@ -6,6 +6,7 @@ use voting_crypto_deps::pasta_curves::group::ff::PrimeField;
 
 use zcash_keys::keys::UnifiedSpendingKey;
 use zcash_protocol::consensus::Parameters;
+use zcash_voting::backend::zip32::{fingerprint::SeedFingerprint, AccountId};
 use zcash_voting::backend::{orchard, pasta_curves, zcash_client_sqlite, zcash_keys};
 use zcash_voting::delegate::ResolveDelegationLwdParams;
 use zcash_voting::prelude::{
@@ -20,7 +21,6 @@ use zcash_voting::prelude::{
 };
 use zcash_voting::wire::PirLayout;
 use zcash_voting::{BundlePolicy, HyperTransport, PirFleet, VotingRoundParams};
-use zip32::{fingerprint::SeedFingerprint, AccountId};
 
 /// Inputs for preparing one reusable delegation bundle context.
 ///
@@ -498,8 +498,7 @@ fn example_sign_delegation_request(
         .map_err(|_| anyhow::anyhow!("invalid account_index {}", request.account_index))?;
     let usk = UnifiedSpendingKey::from_seed(&request.network, seed, account)
         .context("derive account unified spending key")?;
-    let sk = *usk.orchard();
-    let ask = orchard::keys::SpendAuthorizingKey::from(&sk);
+    let ask = orchard::keys::SpendAuthorizingKey::from(usk.orchard());
     let alpha = Option::<pasta_curves::pallas::Scalar>::from(
         pasta_curves::pallas::Scalar::from_repr(request.alpha),
     )

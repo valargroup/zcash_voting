@@ -27,4 +27,3 @@ voting-crypto-deps = { workspace = true }
 zcash_protocol = { workspace = true, optional = true }
 lrz_zcash_protocol = { workspace = true, optional = true }
 zcash_voting = { path = "../zcash_voting", default-features = false }
-zip32 = "0.2"

@@ -10,15 +10,27 @@ readme = "README.md"
 
 [features]
 default = ["zakura"]
-zakura = ["imt-tree/zakura", "voting-crypto-deps/default", "voting-circuits/default"]
-lrz = ["imt-tree/upstream", "voting-crypto-deps/lrz", "voting-circuits/lrz"]
+zakura = [
+    "imt-tree/zakura",
+    "voting-crypto-deps/default",
+    "voting-circuits/default",
+    "dep:shardtree",
+]
+lrz = [
+    "imt-tree/upstream",
+    "voting-crypto-deps/lrz",
+    "voting-circuits/lrz",
+    "dep:lrz-shardtree",
+]
 
 [dependencies]
 imt-tree = { version = "=0.5.4", default-features = false }
 voting-crypto-deps = { workspace = true }
 anyhow = "1.0"
-incrementalmerkletree = "0.8.1"
-shardtree = "0.7"
+# `shardtree` must match the backend-selected
+# `voting_crypto_deps::incrementalmerkletree`, so each backend selects its own.
+shardtree = { version = "0.7", optional = true }
+lrz-shardtree = { package = "shardtree", version = "0.8", optional = true }
 lazy_static = "1"
 libc = "0.2"
 

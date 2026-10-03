@@ -22,7 +22,47 @@ voting-crypto-deps = { version = "=0.2.4", default-features = false }
 # Zakura 2.0 publishes protocol as `zakura-protocol` with lib name `zcash_protocol`.
 # Packages select one of these through the `zakura` / `lrz` features.
 zcash_protocol = { version = "2.0.0", package = "zakura-protocol", default-features = false }
-lrz_zcash_protocol = { version = "0.10.4", package = "zcash_protocol" }
+# Pre-release equality pin: the LRZ backend tracks the librustzcash NU7
+# pre-release stack, whose pre-releases make no compatibility promise.
+lrz_zcash_protocol = { version = "=0.11.0-pre.0", package = "zcash_protocol" }
+
+# The published Zakura 2.0 crates require the pre-release `bip32 0.6.0-pre.1`
+# stack, which cannot share a lockfile with the stable `bip32 0.6` that the
+# librustzcash NU7 pre-releases of the LRZ backend require: Cargo admits one
+# version per semver-compatible range, and resolves the optional dependencies
+# of both backends together. These revisions move every affected crate onto
+# the stable `bip32 0.6` / `secp256k1 0.33` stack and the LRZ backend onto the
+# NU7 pre-releases. Remove each entry once the corresponding release is
+# published (zakura-core/common#538 and the matching releases of
+# zakura-wallet-lib, voting-circuits, voting-crypto-deps, imt-tree, pir-types,
+# and pir-client).
+[patch.crates-io]
+zakura-bellman = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-pairing = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-bls12-381 = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-halo2-gadgets = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-halo2-poseidon = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-pasta-curves = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-halo2-proofs = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-halo2-legacy-pdqsort = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-sinsemilla = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-jubjub = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-orchard = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-reddsa = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-redjubjub = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-sapling-crypto = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-address = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-protocol = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-keys = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-transparent = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-primitives = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-zip321 = { git = "https://github.com/zodl-inc/zakura-common", rev = "c714f350a629d5419a1c341c192812ce58cb4013" }
+zakura-wallet-lib = { git = "https://github.com/zodl-inc/zakura-wallet-libraries", rev = "8128fc437ae5c65c5e108cfacf95046714b34db8" }
+voting-circuits = { git = "https://github.com/zodl-inc/voting-circuits", rev = "1e33d48e436482e0f364ff0f9f886904f88fa515" }
+voting-crypto-deps = { git = "https://github.com/zodl-inc/voting-circuits", rev = "1e33d48e436482e0f364ff0f9f886904f88fa515" }
+imt-tree = { git = "https://github.com/zodl-inc/voting-circuits", rev = "1e33d48e436482e0f364ff0f9f886904f88fa515" }
+pir-types = { git = "https://github.com/zodl-inc/vote-nullifier-pir", rev = "9c62d0565f6cc963e7875f9f40822764431eeab9" }
+pir-client = { git = "https://github.com/zodl-inc/vote-nullifier-pir", rev = "9c62d0565f6cc963e7875f9f40822764431eeab9" }
 
 [profile.test.package.imt-tree]
 opt-level = 3

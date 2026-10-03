@@ -1202,6 +1202,7 @@ mod pir_tests {
 
     #[test]
     fn precompute_snapshot_bundles_reuses_cached_real_note_proofs_for_a_full_bundle() {
+        use crate::backend::zip32::{AccountId, Scope};
         use crate::backend::{orchard, pasta_curves, zcash_keys};
         use orchard::{
             note::{NoteVersion, Rho},
@@ -1212,7 +1213,6 @@ mod pir_tests {
         use voting_circuits::delegation::ImtProvider;
         use voting_crypto_deps::rand::rngs::OsRng;
         use zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::{AccountId, Scope};
 
         let seed = [0x42u8; 32];
         let account = AccountId::try_from(0u32).unwrap();

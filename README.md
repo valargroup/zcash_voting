@@ -109,13 +109,13 @@ See the [migration walkthrough](docs/migrating-to-v5.md#replace-the-host-workflo
 
 The LRZ backend uses one Ironwood dependency stack:
 
-- **`orchard 0.15`** from [zcash/orchard](https://github.com/zcash/orchard),
+- **`orchard 0.16`** from [zcash/orchard](https://github.com/zcash/orchard),
   with `unstable-voting-circuits` enabled for the governance proof paths.
-- **`pczt 0.9.3`, `zcash_client_backend 0.24.0`,
-  `zcash_client_sqlite 0.22.0`, `zcash_keys 0.16.1`,
-  `zcash_primitives 0.30.1`, and `zcash_protocol 0.10.5`** from published
-  librustzcash releases.
-- **`voting-circuits 0.12.1`** from
+- **`pczt 0.10.0-pre.0`, `zcash_client_backend 0.25.0-pre.0`,
+  `zcash_client_sqlite 0.23.0-pre.0`, `zcash_keys 0.17.0-pre.0`,
+  `zcash_primitives 0.31.0-pre.0`, and `zcash_protocol 0.11.0-pre.0`** from
+  the librustzcash NU7 pre-releases.
+- **`voting-circuits 0.12.2`** from
   [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits)
   for the delegation and vote proof circuits.
 
@@ -133,6 +133,9 @@ lockfile and resolved metadata contain no Zakura forks.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
+Its `[patch.crates-io]` table moves both backends onto the stable `bip32` 0.6
+stack until the corresponding releases are published; a consumer must declare
+the same table.
 The current PIR and IMT releases require Rust 1.91 or newer.
 
 ## FFI

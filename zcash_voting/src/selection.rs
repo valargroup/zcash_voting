@@ -699,6 +699,7 @@ fn parse_account_uuid(account_uuid: &str) -> Result<AccountUuid, VotingError> {
 mod tests {
     use super::*;
 
+    use crate::backend::zip32::Scope;
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use orchard::{
         note::{NoteVersion, RandomSeed, Rho},
@@ -711,7 +712,6 @@ mod tests {
     use zcash_client_sqlite::{util::SystemClock, wallet::init::init_wallet_db};
     use zcash_primitives::block::BlockHash;
     use zcash_protocol::consensus::{NetworkUpgrade, Parameters};
-    use zip32::Scope;
 
     #[test]
     fn select_snapshot_notes_returns_snapshot_eligible_ironwood_notes() {

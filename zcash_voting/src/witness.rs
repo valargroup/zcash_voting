@@ -1,6 +1,7 @@
 #[allow(unused_imports)]
 pub(crate) use crate::backend::{
-    orchard, pasta_curves, zcash_client_backend, zcash_client_sqlite, zcash_primitives,
+    incrementalmerkletree, orchard, pasta_curves, zcash_client_backend, zcash_client_sqlite,
+    zcash_primitives,
 };
 use std::borrow::Borrow;
 
@@ -408,9 +409,9 @@ fn ct_option_to_result(
 mod tests {
     use super::*;
 
+    use crate::backend::incrementalmerkletree::frontier::{CommitmentTree, Frontier};
+    use crate::backend::incrementalmerkletree::Retention;
     pub(crate) use crate::backend::pasta_curves;
-    use incrementalmerkletree::frontier::{CommitmentTree, Frontier};
-    use incrementalmerkletree::Retention;
     use pasta_curves::group::ff::PrimeField;
     use pasta_curves::pallas;
     use zcash_client_backend::data_api::WalletCommitmentTrees;

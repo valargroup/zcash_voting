@@ -26,8 +26,8 @@ use std::io::{self, Cursor, Read, Write};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use incrementalmerkletree::Position;
-use shardtree::{
+use crate::incrementalmerkletree::Position;
+use crate::shardtree::{
     store::{Checkpoint, TreeState},
     Node, PrunableTree, RetentionFlags, Tree,
 };
