@@ -2533,6 +2533,7 @@ mod tests {
     use super::*;
     pub(crate) use crate::backend::pasta_curves;
 
+    use crate::backend::zip32::Scope;
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use orchard::{
         note::{NoteVersion, RandomSeed, Rho},
@@ -2548,7 +2549,6 @@ mod tests {
     use zcash_protocol::consensus::{
         Network as ZcashNetwork, NetworkConstants, NetworkUpgrade, Parameters,
     };
-    use zip32::Scope;
 
     const TESTNET_NU6_SNAPSHOT_HEIGHT: u64 = 3_536_500;
     const TESTNET_NU6_BRANCH_ID: u32 = 0x4DEC_4DF0;

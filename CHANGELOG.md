@@ -6,6 +6,33 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Added
+
+- `zcash_voting::backend::{incrementalmerkletree, zip32}` reexport the selected
+  backend's `incrementalmerkletree` and `zip32` crates.
+
+### Changed
+
+- `zcash_voting` now requires `zakura-wallet-lib` `^0.1.0-rc6` instead of
+  exactly `0.1.0-rc6`.
+- The `lrz` backend moved to the librustzcash NU7 pre-releases:
+  `zcash_protocol =0.11.0-pre.0`, `zcash_client_backend =0.25.0-pre.0`,
+  `zcash_client_sqlite =0.23.0-pre.0`, `zcash_keys =0.17.0-pre.0`,
+  `pczt =0.10.0-pre.0`, `zcash_primitives =0.31.0-pre.0`, and `orchard` 0.16,
+  with `incrementalmerkletree` 0.9 and `zip32` 0.3. Types from these crates in
+  the `zcash_voting` API, including `zip32::Scope` and `zcash_voting::backend`,
+  change accordingly.
+- Under `lrz`, `vote-commitment-tree` uses `incrementalmerkletree` 0.9 and
+  `shardtree` 0.8 in its API (`GenericTreeServer`'s `ShardStore` bound and
+  `MerklePath`'s `From` conversion). Under `zakura` they remain 0.8 and 0.7.
+- Under `lrz`, the governance PCZT's output `user_address` is a ZIP 316
+  Revision 2 (`zu`) Unified Address encoding.
+- Both backends now resolve on the stable `bip32` 0.6 / `secp256k1` 0.33
+  stack. Until the corresponding releases are published, a consumer must
+  declare this workspace's `[patch.crates-io]` table. Under `zakura`, the
+  transparent signing APIs reexported through `zcash_voting::backend` no
+  longer take a secp256k1 context.
+
 ## v5.1.1-rc.3
 
 `zcash_voting` 5.1.1-rc.3 keeps the 5.1.1-rc.2 dependency stack and gates the

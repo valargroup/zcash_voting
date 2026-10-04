@@ -91,13 +91,13 @@ pub(super) fn ironwood_setup_fixture() -> (VotingDb, NoteInfo, Vec<u8>) {
 pub(super) fn ironwood_setup_fixture_with_note_count(
     note_count: usize,
 ) -> (VotingDb, Vec<NoteInfo>, Vec<u8>) {
+    use crate::backend::zip32::{AccountId, Scope};
     use orchard::{
         note::{NoteVersion, Rho},
         value::NoteValue,
     };
     use voting_crypto_deps::rand::rngs::OsRng;
     use zcash_keys::keys::UnifiedSpendingKey;
-    use zip32::{AccountId, Scope};
 
     let seed = [0x42u8; 32];
     let account = AccountId::try_from(0u32).unwrap();

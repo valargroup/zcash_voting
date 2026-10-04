@@ -10,7 +10,7 @@
 
 use std::convert::Infallible;
 
-use shardtree::store::ShardStore;
+use crate::shardtree::store::ShardStore;
 use voting_crypto_deps::pasta_curves::Fp;
 
 use crate::hash::MerkleHashVote;
@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn empty_roots_are_consistent() {
         use crate::hash::{MerkleHashVote, TREE_DEPTH};
-        use incrementalmerkletree::{Hashable, Level};
+        use crate::incrementalmerkletree::{Hashable, Level};
 
         let leaf = MerkleHashVote::empty_leaf();
         assert_eq!(EMPTY_ROOTS[0], leaf);

@@ -13,16 +13,16 @@
 //! conformance sidecar holds exactly one.
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: plan_probe <sidecar.db> [account]");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: plan_probe <sidecar.db> [account]");
     let account = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "8b29d4e6-7940-4570-b2c2-3c7a25ba6922".to_string());
 
-    let connection = rusqlite::Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .expect("opening the sidecar");
+    let connection =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("opening the sidecar");
     let round: String = connection
         .query_row("select round_id from rounds limit 1", [], |row| row.get(0))
         .expect("reading the round id");

@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-pub(crate) use crate::backend::{orchard, pasta_curves, zcash_client_backend, zcash_keys};
+pub(crate) use crate::backend::{orchard, pasta_curves, zcash_client_backend, zcash_keys, zip32};
 use std::fmt;
 
 use orchard::note::{ExtractedNoteCommitment, NoteVersion};
@@ -362,9 +362,7 @@ impl Parameters for Network {
                 NetworkUpgrade::Nu6_3 => {
                     Some(BlockHeight::from_u32(REGTEST_NU6_3_ACTIVATION_HEIGHT))
                 }
-                // Zakura protocol 2.0 defines Nu7; crates.io zcash_protocol 0.10
-                // does not. Match public Zakura networks: not yet activated.
-                #[cfg(feature = "zakura")]
+                // Regtest does not activate Nu7.
                 NetworkUpgrade::Nu7 => None,
             },
         }
@@ -1432,13 +1430,13 @@ mod tests {
     mod error_kind;
 
     use super::*;
+    use crate::backend::zip32::{AccountId, Scope};
     use crate::governance::BALLOT_DIVISOR;
     use orchard::note::{ExtractedNoteCommitment, NoteVersion, Rho};
     use orchard::value::NoteValue;
     use voting_crypto_deps::rand::rngs::OsRng;
     use zcash_keys::keys::UnifiedSpendingKey;
     use zcash_protocol::consensus::TEST_NETWORK;
-    use zip32::{AccountId, Scope};
 
     fn placeholder_tree_state(snapshot_height: u64) -> TreeState {
         TreeState {

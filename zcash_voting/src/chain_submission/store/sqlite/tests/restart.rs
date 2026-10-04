@@ -2,8 +2,8 @@
 
 use std::{collections::VecDeque, sync::Mutex};
 
+use crate::backend::incrementalmerkletree::frontier::Frontier;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use incrementalmerkletree::frontier::Frontier;
 use vote_commitment_tree::{MerkleHashVote, TREE_DEPTH};
 
 use super::{super::*, fixtures::*};

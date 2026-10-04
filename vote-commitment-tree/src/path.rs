@@ -1,6 +1,6 @@
 //! Merkle authentication path for the vote commitment tree.
 
-use incrementalmerkletree::Hashable;
+use crate::incrementalmerkletree::Hashable;
 use voting_crypto_deps::pasta_curves::Fp;
 
 use crate::anchor::Anchor;
@@ -22,8 +22,12 @@ pub struct MerklePath {
     auth_path: [MerkleHashVote; TREE_DEPTH],
 }
 
-impl From<incrementalmerkletree::MerklePath<MerkleHashVote, { TREE_DEPTH as u8 }>> for MerklePath {
-    fn from(path: incrementalmerkletree::MerklePath<MerkleHashVote, { TREE_DEPTH as u8 }>) -> Self {
+impl From<crate::incrementalmerkletree::MerklePath<MerkleHashVote, { TREE_DEPTH as u8 }>>
+    for MerklePath
+{
+    fn from(
+        path: crate::incrementalmerkletree::MerklePath<MerkleHashVote, { TREE_DEPTH as u8 }>,
+    ) -> Self {
         let position: u64 = path.position().into();
         Self {
             position: position as u32,

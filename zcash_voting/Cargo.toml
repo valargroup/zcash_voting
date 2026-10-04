@@ -79,12 +79,10 @@ zeroize = "1"
 subtle = "2.6"
 voting-circuits = { workspace = true }
 nonempty = "0.11"
-zip32 = "0.2"
-incrementalmerkletree = "0.8"
 
 zcash_protocol = { workspace = true, optional = true }
 lrz_zcash_protocol = { workspace = true, optional = true }
-zakura-wallet-lib = { version = "=0.1.0-rc6", default-features = false }
+zakura-wallet-lib = { version = "0.1.0-rc6", default-features = false }
 uuid = "1.23.1"
 
 [dev-dependencies]
@@ -103,7 +101,6 @@ sha2 = "0.10"
 secrecy = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "time"] }
 tower-service = "0.3"
-zcash_note_encryption = "0.4.2"
 
 # Smoke-only CLI invoked by tests/pir-smoke.sh / `make pir-smoke`.
 # An example target keeps Cargo test filters from being forwarded as commands.

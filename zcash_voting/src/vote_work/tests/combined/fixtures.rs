@@ -38,8 +38,12 @@ pub(super) fn database() -> (Arc<round::VotingDb>, Arc<Driver>) {
     use crate::backend::zcash_keys::keys::UnifiedSpendingKey;
     let executor = executor_ready_to_cast("wallet").0;
     let db = executor.database();
-    let key = UnifiedSpendingKey::from_seed(&Network::Regtest, &[0x42; 64], zip32::AccountId::ZERO)
-        .unwrap();
+    let key = UnifiedSpendingKey::from_seed(
+        &Network::Regtest,
+        &[0x42; 64],
+        crate::backend::zip32::AccountId::ZERO,
+    )
+    .unwrap();
     let alpha = pallas::Scalar::from(7);
     let randomized = SpendAuthorizingKey::from(key.orchard()).randomize(&alpha);
     let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&randomized)).into();

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use hmac::{Hmac, Mac};
 
+use zcash_voting::backend::zip32;
 use zcash_voting::{Network, SpendAuthSigner, VotingError, VotingHotkey};
 
 /// Environment variable carrying the voter's 24-word mnemonic.

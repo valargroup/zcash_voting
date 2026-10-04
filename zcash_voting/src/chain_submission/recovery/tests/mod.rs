@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::Mutex};
 
-use incrementalmerkletree::frontier::Frontier;
+use crate::backend::incrementalmerkletree::frontier::Frontier;
 
 use super::*;
 use crate::{

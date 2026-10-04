@@ -41,8 +41,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::os::raw::c_void;
 
-use incrementalmerkletree::{Address, Level};
-use shardtree::{
+use crate::incrementalmerkletree::{Address, Level};
+use crate::shardtree::{
     store::{Checkpoint, ShardStore},
     LocatedPrunableTree, LocatedTree, PrunableTree, Tree,
 };

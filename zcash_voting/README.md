@@ -400,7 +400,7 @@ metadata. The selected wallet facade release is `zakura-wallet-lib
 `Cargo.lock` records the exact package sources and versions used by this branch.
 This release line requires Rust 1.91 or newer.
 
-- **`orchard 0.15`** from [zcash/orchard](https://github.com/zcash/orchard),
+- **`orchard 0.16`** from [zcash/orchard](https://github.com/zcash/orchard),
   with `unstable-voting-circuits` enabled for the governance proof paths
   (or `zakura-orchard 1.2.0` with the `zakura` feature).
 - **`voting-circuits 0.12.1`** from [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits)
@@ -408,10 +408,10 @@ This release line requires Rust 1.91 or newer.
 - **`vote-commitment-tree 0.6.1`** and
   **`vote-commitment-tree-client 0.8.1`** for vote commitment tree state
   and HTTP sync.
-- **`pczt 0.9.3`, `zcash_client_backend 0.24.0`,
-  `zcash_client_sqlite 0.22.0`, `zcash_keys 0.16.1`,
-  `zcash_primitives 0.30.1`, and `zcash_protocol 0.10.5`** from published
-  librustzcash releases (or the stable `zakura-*` family and RC5 wallet crates in
+- **`pczt 0.10.0-pre.0`, `zcash_client_backend 0.25.0-pre.0`,
+  `zcash_client_sqlite 0.23.0-pre.0`, `zcash_keys 0.17.0-pre.0`,
+  `zcash_primitives 0.31.0-pre.0`, and `zcash_protocol 0.11.0-pre.0`** from
+  the librustzcash NU7 pre-releases (or the stable `zakura-*` family and RC5 wallet crates in
   `zakura` builds).
 
 ## Downstream test fixtures

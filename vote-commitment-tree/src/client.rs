@@ -14,8 +14,8 @@ use std::convert::Infallible;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use incrementalmerkletree::{Hashable, Level, Retention};
-use shardtree::{
+use crate::incrementalmerkletree::{Hashable, Level, Retention};
+use crate::shardtree::{
     error::{InsertionError, ShardTreeError},
     store::memory::MemoryShardStore,
     ShardTree,
@@ -491,7 +491,7 @@ impl TreeClient {
     /// Returns `None` if the position or checkpoint is invalid, or if the
     /// position was not marked.
     pub fn witness(&self, position: u64, anchor_height: u32) -> Option<MerklePath> {
-        let pos = incrementalmerkletree::Position::from(position);
+        let pos = crate::incrementalmerkletree::Position::from(position);
         self.inner
             .witness_at_checkpoint_id(pos, &anchor_height)
             .ok()

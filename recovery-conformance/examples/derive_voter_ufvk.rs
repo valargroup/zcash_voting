@@ -1,7 +1,7 @@
 //! Derives the voter wallet's UFVK from the seed under both BIP39 conventions,
 //! so an existing wallet database can be matched with the crate's own key code
 //! rather than a hand-rolled fingerprint.
-use zcash_voting::backend::zcash_keys::keys::UnifiedSpendingKey;
+use zcash_voting::backend::{zcash_keys::keys::UnifiedSpendingKey, zip32};
 use zcash_voting::Network;
 
 const WORDLIST: &str = include_str!("bip39-english.txt");

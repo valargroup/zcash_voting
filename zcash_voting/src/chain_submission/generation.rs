@@ -1233,12 +1233,12 @@ mod tests {
             primitives::redpallas::{SpendAuth, VerificationKey},
         };
         use crate::backend::zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::AccountId;
+        use crate::backend::zip32::AccountId;
 
         let account = AccountId::try_from(0).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&Network::Testnet, seed, account).unwrap();
-        let sk: SpendingKey = *usk.orchard();
-        let randomized = SpendAuthorizingKey::from(&sk).randomize(alpha);
+        let sk: &SpendingKey = usk.orchard();
+        let randomized = SpendAuthorizingKey::from(sk).randomize(alpha);
         let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&randomized)).into();
         let signature = randomized.sign(voting_crypto_deps::rand::rngs::OsRng, sighash);
         (rk, (&signature).into())

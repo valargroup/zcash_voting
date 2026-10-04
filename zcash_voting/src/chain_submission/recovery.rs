@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
+use crate::backend::incrementalmerkletree::frontier::Frontier;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use incrementalmerkletree::frontier::Frontier;
 use serde::Deserialize;
 use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
 
