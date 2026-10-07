@@ -277,8 +277,7 @@ where
     /// Exhausting the budget never ends the generation: the row stays hashless
     /// `Recovering` with its last attempt's dispatch diagnostic, and a later
     /// invocation receives a fresh budget. Only chain rejection code 2 after
-    /// unresolved dispatch is terminal, and under exact-tree advancement one
-    /// tree pass precedes even that.
+    /// unresolved dispatch is terminal, and one tree pass precedes even that.
     #[allow(
         clippy::too_many_arguments,
         reason = "the attempt loop keeps each captured authority explicit"
@@ -383,7 +382,7 @@ where
                     if ambiguity_seen && kind == ChainRejectionKind::NullifierAlreadySpent {
                         return self
                             .settle_nullifier_spent_after_dispatch(
-                                request, operation, lease, &derived, &reserved, recovery, control,
+                                request, operation, lease, &derived, &reserved, control,
                             )
                             .await;
                     }
@@ -1168,17 +1167,14 @@ where
     /// Resolves chain rejection code 2 observed after unresolved dispatch.
     ///
     /// Code 2 proves this generation's nullifiers are spent, so an earlier
-    /// dispatch landed. Under exact-tree advancement one tree pass runs first:
+    /// dispatch landed. One tree pass runs first in either recovery mode:
     /// a match confirms the generation with its positions; a completed valid
     /// no-match discards its retry authorization, which must never dispatch
     /// again, and ends the generation as `SubmittedWithoutHash`. A scan that
     /// cannot complete leaves the row `Recovering` with its dispatch evidence
-    /// so a later pass converges. Status-only advancement has no scan and ends
-    /// the generation at once.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the code-2 settlement keeps each captured authority explicit"
-    )]
+    /// so a later pass converges. Skipping the scan under status-only
+    /// advancement would end a landed generation without positions that no
+    /// later pass can recover.
     async fn settle_nullifier_spent_after_dispatch(
         &self,
         request: &StoreAdvancementRequest,
@@ -1186,7 +1182,6 @@ where
         lease: &SubmissionOperationLease,
         derived: &DerivedChainSubmission,
         current: &StoredChainSubmission,
-        recovery: ChainRecoveryMode,
         control: &dyn SubmissionControl,
     ) -> Result<ChainSubmissionResult, ChainSubmissionFailure> {
         let end_hashless = || {
@@ -1200,9 +1195,6 @@ where
             )?
             .public_result()
         };
-        if recovery == ChainRecoveryMode::StatusOnly {
-            return end_hashless();
-        }
         match self
             .scan_tree(derived, None, operation, lease, control)
             .await?
@@ -1316,7 +1308,7 @@ where
                 if ambiguity_preceded && kind == ChainRejectionKind::NullifierAlreadySpent {
                     return self
                         .settle_nullifier_spent_after_dispatch(
-                            request, operation, lease, &derived, &reserved, recovery, control,
+                            request, operation, lease, &derived, &reserved, control,
                         )
                         .await;
                 }

@@ -23,8 +23,8 @@ pub enum ChainSubmissionState {
     /// Terminal: the vote chain rejected a retry with "nullifier already
     /// spent" after this generation was possibly dispatched, which proves an
     /// earlier dispatch landed, but no transaction hash and no confirmation
-    /// positions are available. Under exact-tree advancement one complete
-    /// tree pass found no layout before this state was written.
+    /// positions are available. In either advancement mode one complete tree
+    /// pass found no layout before this state was written.
     ///
     /// This is not a confirmation. The lifecycle performs no further retry,
     /// polling, or tree recovery for the generation, and dependent work (such

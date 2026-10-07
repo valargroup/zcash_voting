@@ -34,8 +34,8 @@ that collision or any other ambiguous final attempt is local uncertainty, not
 chain evidence: the row stays hashless `Recovering` carrying the last attempt's
 dispatch diagnostic, and a later invocation receives a fresh budget. Only chain
 rejection code 2 received while the durable row still carries unresolved
-dispatch evidence produces terminal `SubmittedWithoutHash`, and under
-exact-tree advancement one complete no-match tree pass precedes even that.
+dispatch evidence produces terminal `SubmittedWithoutHash`, and in either
+advancement mode one complete no-match tree pass precedes even that.
 This outcome is not confirmation and carries no hash or positions.
 `Recovering` remains available for tracking-window expiry and exact-tree
 recovery; tree recovery never runs for `SubmittedWithoutHash`.
@@ -43,7 +43,8 @@ recovery; tree recovery never runs for `SubmittedWithoutHash`.
 Under exact-tree advancement a hashless dispatch-ambiguity row scans the tree
 before any POST, so a generation that already landed is confirmed with its
 positions rather than redispatched into a code-2 rejection. Only status-only
-advancement, which has no scan, re-POSTs such a row directly.
+advancement, which skips that scan, re-POSTs such a row directly; a code-2
+answer still receives the tree pass above before the generation can end.
 
 ## Scope and authority
 
@@ -437,8 +438,8 @@ Their meanings are:
   until confirmation, bounded hashless submission, or explicit deletion.
 - `SubmittedWithoutHash`: chain rejection code 2 proved this generation's
   nullifiers spent after unresolved dispatch, so an earlier dispatch landed,
-  but no candidate hash or confirmation positions are available; under
-  exact-tree advancement a complete tree pass found no layout first. It is
+  but no candidate hash or confirmation positions are available; a complete
+  tree pass found no layout first, in either advancement mode. It is
   terminal and schedules neither polling nor tree recovery. A generation that
   previously entered `Tracking` retains its immutable tracking-start timestamp.
 - `Confirmed`: chain success and all required local confirmation updates are
@@ -464,8 +465,8 @@ Recovering -> Recovering     reserve and classify another ambiguous POST,
                              including the final one of an invocation
 Recovering -> Tracking       hashless retry returns a usable success hash
 Recovering -> SubmittedWithoutHash
-                             retry code 2 after unresolved dispatch
-                             (exact tree: after a no-match pass)
+                             retry code 2 after unresolved dispatch,
+                             after a no-match tree pass
 Submitting -> Recovering     chain rejection code
 Submitting -> Rejected       definite rejection of a delegate_and_cast_vote_batch
                              (no prior ambiguity, code other than 2); the row
@@ -504,7 +505,7 @@ new
                               |-- possible dispatch --> Recovering
                               |                           |-- candidate, scan, or retry --> Recovering
                               |                           |-- code 2 after unresolved dispatch
-                              |                           |   (exact tree: after a no-match pass)
+                              |                           |   and a no-match tree pass
                               |                           |   --> SubmittedWithoutHash
                               |                           `-- candidate success or exact tree layout
                               |                               --> Confirmed
@@ -631,13 +632,16 @@ evidence, because each of those records a POST that left the wallet and never re
 committed unsuccessfully, which spent nothing; code 2 after such a row is
 handled like any other definite rejection.
 
-Under exact-tree advancement, code 2 after unresolved dispatch runs one tree
+In either advancement mode, code 2 after unresolved dispatch runs one tree
 pass before anything is persisted: a match confirms the generation with its
 positions; a completed valid no-match discards its retry authorization, which
 never dispatches, and persists `SubmittedWithoutHash`; a pass that cannot
 complete or is interrupted leaves the row `Recovering` with its dispatch
-evidence, so the next pass converges. Status-only advancement has no scan and
-persists `SubmittedWithoutHash` at once. Other deterministic rejections
+evidence, so the next pass converges. Status-only advancement runs the same
+pass: fresh submissions start status-only, and ending without it would leave a
+generation that landed without positions, which no later pass can recover
+(`nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_status_only`).
+Other deterministic rejections
 surface an operational error while preserving earlier durable ambiguity. A
 definite rejection with no earlier ambiguity may retain the compatibility
 `Recovering` behavior. A hash in an error response is never confirmation
@@ -1437,7 +1441,8 @@ Tests cover:
 - imported `Tracking` and `Recovering` never dispatch, scan, or retry, and a
   committed failure becomes terminal `Rejected` without becoming hashless;
 - rejection code 2 after durable ambiguity produces terminal
-  `SubmittedWithoutHash` by numeric code alone under status-only advancement
+  `SubmittedWithoutHash` by numeric code, after a no-match tree pass, under
+  status-only advancement too
   (`nullifier_spent_after_ambiguity_is_terminal_and_idempotent`), while other
   deterministic rejections surface an error and preserve earlier ambiguity;
 - `nullifier_spent_recovery_retry_after_unresolved_dispatch_is_terminal`,
@@ -1447,11 +1452,12 @@ Tests cover:
   authorized retry after an expired tracking window ends hashless after one
   more no-match pass, while one after a rejected POST or a committed failure
   surfaces an error and leaves the row recoverable;
-- `nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_exact_tree`,
+- `nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_status_only`,
+  `nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_exact_tree`,
   `nullifier_spent_recovery_retry_after_unresolved_dispatch_confirms_from_tree`,
   `nullifier_spent_after_unresolved_dispatch_with_no_match_is_terminal_under_exact_tree`,
   and `nullifier_spent_tree_pass_failure_keeps_unresolved_dispatch` prove that
-  exact-tree advancement runs one tree pass before persisting the code-2
+  both advancement modes run one tree pass before persisting the code-2
   terminal state: a match confirms with positions, a no-match ends hashless
   without dispatching the discarded authorization, and a failed pass leaves the
   row `Recovering` so the next pass confirms;

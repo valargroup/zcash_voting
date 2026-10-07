@@ -6,6 +6,16 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Fixed
+
+- A "nullifier already spent" rejection (code 2) after a possibly dispatched
+  POST now runs one tree pass before ending the generation as
+  `SubmittedWithoutHash` in status-only advancement too. Fresh submissions
+  start status-only, so a generation whose earlier POST had landed could end
+  without positions that no later pass recovers; it now confirms from the
+  tree. Vote chains report this rejection as code 1 until the vote-sdk
+  release that restores code 2, so the path is reached only from then on.
+
 ## v5.1.1-rc.3
 
 `zcash_voting` 5.1.1-rc.3 keeps the 5.1.1-rc.2 dependency stack and gates the

@@ -3736,6 +3736,11 @@ async fn nullifier_spent_after_ambiguity_is_terminal_and_idempotent() {
         422,
         br#"{"code":2,"log":"must not be retained"}"#.to_vec(),
     )));
+    // Status-only advancement still runs the code-2 tree pass, which finds no
+    // layout.
+    for response in tree_responses(&[[8; 32]]) {
+        transport.queue(Ok(response));
+    }
     let protocol = ChainProtocolClient::new(
         Arc::clone(&transport),
         Network::Testnet,
@@ -3765,7 +3770,7 @@ async fn nullifier_spent_after_ambiguity_is_terminal_and_idempotent() {
                     && !diagnostic.message().contains("must not be retained")
         ));
     }
-    assert_eq!(transport.methods(), vec!["POST", "POST"]);
+    assert_eq!(transport.methods(), vec!["POST", "POST", "GET", "GET"]);
     assert_eq!(
         store.record(&identity).unwrap().durable_state(),
         ChainSubmissionState::SubmittedWithoutHash
@@ -4689,6 +4694,45 @@ async fn post_timeout_after_the_dispatch_marker_is_ambiguous() {
     assert_eq!(
         store.record(&identity).unwrap().durable_state(),
         ChainSubmissionState::Recovering
+    );
+}
+
+#[tokio::test]
+async fn nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_status_only() {
+    // Fresh submissions start status-only. Ending hashless here without the
+    // tree pass would leave a landed generation with no positions.
+    let identity = identity(1, 0);
+    let store = Arc::new(InMemoryChainSubmissionStore::default());
+    store.seed_derivation(derived(identity.clone(), 1));
+    let transport = Arc::new(ScriptedTransport::default());
+    transport.queue(Err(ChainTransportError::possibly_dispatched("timeout")));
+    transport.queue(Ok(ChainHttpResponse::json(
+        422,
+        br#"{"code":2,"log":"nullifier already spent"}"#.to_vec(),
+    )));
+    for response in tree_responses(&[[8; 32], [3; 32], [4; 32], [7; 32]]) {
+        transport.queue(Ok(response));
+    }
+    let coordinator = coordinator_with_attempts(Arc::clone(&transport), Arc::clone(&store), 2);
+
+    let result = coordinator
+        .advance(
+            StoreAdvancementRequest::vote(identity.clone()),
+            &ManualControl::default(),
+        )
+        .await
+        .unwrap();
+
+    let ChainSubmissionResult::Confirmed(confirmation) = result else {
+        panic!("code 2 after ambiguity with a matching layout must confirm")
+    };
+    assert_eq!(confirmation.final_van_position(), 1);
+    assert_eq!(confirmation.vote_commitment_positions(), &[2]);
+    assert_eq!(transport.methods(), vec!["POST", "POST", "GET", "GET"]);
+    assert!(store.projection(&identity).is_some());
+    assert_eq!(
+        store.record(&identity).unwrap().durable_state(),
+        ChainSubmissionState::Confirmed
     );
 }
 
