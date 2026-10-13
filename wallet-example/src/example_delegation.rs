@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use voting_crypto_deps::pasta_curves::group::ff::PrimeField;
 
+use voting_crypto_deps::zip32::{fingerprint::SeedFingerprint, AccountId};
 use zcash_keys::keys::UnifiedSpendingKey;
 use zcash_protocol::consensus::Parameters;
 use zcash_voting::backend::{orchard, pasta_curves, zcash_client_sqlite, zcash_keys};
@@ -20,7 +21,6 @@ use zcash_voting::prelude::{
 };
 use zcash_voting::wire::PirLayout;
 use zcash_voting::{BundlePolicy, HyperTransport, PirFleet, VotingRoundParams};
-use zip32::{fingerprint::SeedFingerprint, AccountId};
 
 /// Inputs for preparing one reusable delegation bundle context.
 ///

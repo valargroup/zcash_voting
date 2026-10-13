@@ -4,7 +4,6 @@ mod ingress_timeout;
 mod interrupted_reservation;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use incrementalmerkletree::frontier::Frontier;
 use std::{
     collections::VecDeque,
     sync::{
@@ -14,6 +13,7 @@ use std::{
 };
 use tokio::sync::Notify;
 use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
+use voting_crypto_deps::incrementalmerkletree::frontier::Frontier;
 
 use super::*;
 use crate::{

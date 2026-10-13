@@ -10,10 +10,12 @@ use crate::{
     types::{Network, NoteInfo, VotingError, VotingRoundParams, WitnessData},
 };
 
-use incrementalmerkletree::{frontier::CommitmentTree, Hashable, Level, MerklePath, Position};
 use orchard::tree::MerkleHashOrchard;
 use prost::Message;
 use subtle::CtOption;
+use voting_crypto_deps::incrementalmerkletree::{
+    frontier::CommitmentTree, Hashable, Level, MerklePath, Position,
+};
 use zcash_client_backend::proto::service::TreeState;
 use zcash_client_sqlite::WalletDb;
 use zcash_protocol::consensus::{BlockHeight, Parameters};
@@ -409,10 +411,10 @@ mod tests {
     use super::*;
 
     pub(crate) use crate::backend::pasta_curves;
-    use incrementalmerkletree::frontier::{CommitmentTree, Frontier};
-    use incrementalmerkletree::Retention;
     use pasta_curves::group::ff::PrimeField;
     use pasta_curves::pallas;
+    use voting_crypto_deps::incrementalmerkletree::frontier::{CommitmentTree, Frontier};
+    use voting_crypto_deps::incrementalmerkletree::Retention;
     use zcash_client_backend::data_api::WalletCommitmentTrees;
     use zcash_client_backend::proto::service::TreeState;
     use zcash_client_sqlite::util::SystemClock;

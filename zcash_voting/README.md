@@ -398,7 +398,7 @@ metadata. The selected wallet facade release is `zakura-wallet-lib
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
-This release line requires Rust 1.91 or newer.
+This release line requires Rust 1.97 or newer.
 
 - **`orchard 0.15`** from [zcash/orchard](https://github.com/zcash/orchard),
   with `unstable-voting-circuits` enabled for the governance proof paths

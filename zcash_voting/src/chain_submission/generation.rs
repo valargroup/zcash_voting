@@ -1233,7 +1233,7 @@ mod tests {
             primitives::redpallas::{SpendAuth, VerificationKey},
         };
         use crate::backend::zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::AccountId;
+        use voting_crypto_deps::zip32::AccountId;
 
         let account = AccountId::try_from(0).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&Network::Testnet, seed, account).unwrap();

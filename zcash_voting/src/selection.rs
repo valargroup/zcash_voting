@@ -707,11 +707,11 @@ mod tests {
     };
     use rusqlite::{params, Connection};
     use secrecy::{ExposeSecret, SecretVec};
+    use voting_crypto_deps::zip32::Scope;
     use zcash_client_backend::data_api::{chain::ChainState, AccountBirthday, WalletWrite};
     use zcash_client_sqlite::{util::SystemClock, wallet::init::init_wallet_db};
     use zcash_primitives::block::BlockHash;
     use zcash_protocol::consensus::{NetworkUpgrade, Parameters};
-    use zip32::Scope;
 
     #[test]
     fn select_snapshot_notes_returns_snapshot_eligible_ironwood_notes() {

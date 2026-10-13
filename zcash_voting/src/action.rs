@@ -17,13 +17,13 @@ use orchard::pczt::Zip32Derivation;
 use orchard::value::NoteValue;
 use orchard::Address;
 use voting_circuits::delegation::synthetic_padding_note_parts;
+use voting_crypto_deps::zip32::Scope;
 use zcash_keys::address::UnifiedAddress;
 use zcash_primitives::transaction::builder::PcztParts;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::{
     BlockHeight, BranchId, Network as ConsensusNetwork, NetworkConstants, Parameters,
 };
-use zip32::Scope;
 
 use crate::governance::{self, BUNDLE_NOTE_SLOTS};
 use crate::shielded_protocol::VotingShieldedProtocol;
@@ -905,7 +905,7 @@ mod tests {
         value::ValueCommitment,
         Action,
     };
-    use zcash_note_encryption::try_output_recovery_with_ovk;
+    use voting_crypto_deps::zcash_note_encryption::try_output_recovery_with_ovk;
 
     fn mock_note() -> NoteInfo {
         NoteInfo {

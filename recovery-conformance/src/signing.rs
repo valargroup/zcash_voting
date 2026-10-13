@@ -63,21 +63,19 @@ pub fn software_signer(seed: Vec<u8>) -> Arc<dyn SpendAuthSigner> {
     Arc::new(
         move |request: zcash_voting::delegate::DelegationSigningRequest| {
             let fingerprint =
-                zip32::fingerprint::SeedFingerprint::from_seed(&seed).ok_or_else(|| {
-                    VotingError::InvalidInput {
+                voting_crypto_deps::zip32::fingerprint::SeedFingerprint::from_seed(&seed)
+                    .ok_or_else(|| VotingError::InvalidInput {
                         message: "seed length is not valid for ZIP-32".to_string(),
-                    }
-                })?;
+                    })?;
             if fingerprint.to_bytes() != request.seed_fingerprint {
                 return Err(VotingError::InvalidInput {
                     message: "seed does not match the delegation signing request".to_string(),
                 });
             }
-            let account = zip32::AccountId::try_from(request.account_index).map_err(|_| {
-                VotingError::InvalidInput {
+            let account = voting_crypto_deps::zip32::AccountId::try_from(request.account_index)
+                .map_err(|_| VotingError::InvalidInput {
                     message: format!("invalid account index {}", request.account_index),
-                }
-            })?;
+                })?;
             let usk = zcash_voting::backend::zcash_keys::keys::UnifiedSpendingKey::from_seed(
                 &request.network,
                 &seed,
@@ -115,7 +113,7 @@ pub fn wallet_matches_seed(wallet_db: &std::path::Path, seed: &[u8]) -> Result<b
     let derived = zcash_voting::backend::zcash_keys::keys::UnifiedSpendingKey::from_seed(
         &crate::environment::ZCASH_NETWORK,
         seed,
-        zip32::AccountId::ZERO,
+        voting_crypto_deps::zip32::AccountId::ZERO,
     )
     .map_err(|error| anyhow::anyhow!("deriving the viewing key: {error:?}"))?
     .to_unified_full_viewing_key()
