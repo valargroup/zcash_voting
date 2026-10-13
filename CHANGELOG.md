@@ -6,6 +6,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Updated the default dependency family to Zakura Common 3.0.0 and Rust 1.97.
+- Pinned the coordinated circuit, PIR, and wallet updates to exact source
+  revisions; address, witness, and note-encryption APIs follow the selected backend.
+
+
 ## v5.1.1-rc.3
 
 `zcash_voting` 5.1.1-rc.3 keeps the 5.1.1-rc.2 dependency stack and gates the

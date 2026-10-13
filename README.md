@@ -133,7 +133,7 @@ lockfile and resolved metadata contain no Zakura forks.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
-The current PIR and IMT releases require Rust 1.91 or newer.
+The current PIR and IMT releases require Rust 1.97 or newer.
 
 ## FFI
 

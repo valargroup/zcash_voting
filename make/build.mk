@@ -63,14 +63,14 @@ proofs: ## Run the #[ignore] Halo2 proof tests (release only; slow)
 		cargo nextest run -P $(NEXTEST_PROFILE) --release -p zcash_voting \
 		--no-default-features --features lrz --locked --run-ignored ignored-only
 
-msrv: ## Check every package at the 1.91 MSRV
+msrv: ## Check every package at the 1.97 MSRV
 	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)/msrv" \
-		cargo +1.91.0 check $(APP_PACKAGES) --all-targets --features test-fixtures --locked
+		cargo +1.97.0 check $(APP_PACKAGES) --all-targets --features test-fixtures --locked
 	@CARGO_TARGET_DIR="$(LRZ_TARGET_DIR)/msrv" \
-		cargo +1.91.0 check $(APP_PACKAGES) --all-targets \
+		cargo +1.97.0 check $(APP_PACKAGES) --all-targets \
 		--no-default-features --features lrz --locked
 	@CARGO_TARGET_DIR="$(VCT_TARGET_DIR)/msrv" \
-		cargo +1.91.0 check $(VCT_PACKAGES) --all-targets \
+		cargo +1.97.0 check $(VCT_PACKAGES) --all-targets \
 		--features vote-commitment-tree-client/cli --locked
 
 FMT_FLAGS ?= --check

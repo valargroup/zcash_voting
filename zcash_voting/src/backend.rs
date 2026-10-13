@@ -10,7 +10,7 @@ pub use zakura_wallet_lib::{
     keys as zcash_keys, orchard, pczt, primitives as zcash_primitives,
 };
 
-#[cfg(feature = "zakura")]
-pub use ::zcash_protocol;
 #[cfg(feature = "lrz")]
 pub use ::lrz_zcash_protocol as zcash_protocol;
+#[cfg(feature = "zakura")]
+pub use ::zcash_protocol;

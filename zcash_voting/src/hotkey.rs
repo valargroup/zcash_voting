@@ -2,9 +2,9 @@
 pub(crate) use crate::backend::{orchard, zcash_keys};
 use orchard::keys::{FullViewingKey, SpendingKey};
 use rand::RngCore;
+use voting_crypto_deps::zip32::{AccountId, Scope};
 use zcash_keys::keys::UnifiedSpendingKey;
 use zeroize::Zeroizing;
-use zip32::{AccountId, Scope};
 
 use crate::types::{Network, VotingError, VotingHotkey};
 

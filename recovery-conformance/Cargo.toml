@@ -32,7 +32,6 @@ zcash_voting = { path = "../zcash_voting", default-features = false }
 secrecy = "0.8"
 tonic = { version = "0.14", default-features = false }
 zeroize = "1"
-zip32 = "0.2"
 
 [dev-dependencies]
 # Only the tests build a `RouteRequest` by hand, to drive the fault wrappers

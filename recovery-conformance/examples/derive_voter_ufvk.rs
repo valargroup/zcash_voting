@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
         ("32-byte entropy", &entropy[..]),
     ] {
         for account in 0..3u32 {
-            let index = zip32::AccountId::try_from(account)
+            let index = voting_crypto_deps::zip32::AccountId::try_from(account)
                 .map_err(|_| anyhow::anyhow!("bad account index"))?;
             if let Ok(usk) = UnifiedSpendingKey::from_seed(&Network::Testnet, seed, index) {
                 println!(

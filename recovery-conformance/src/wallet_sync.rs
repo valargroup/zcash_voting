@@ -123,7 +123,13 @@ pub async fn sync_wallet(
     .map_err(|error| anyhow::anyhow!("initialising the wallet database: {error:?}"))?;
 
     let (account, _usk) = wallet
-        .import_account_hd("voter", &secret, zip32::AccountId::ZERO, &birthday, None)
+        .import_account_hd(
+            "voter",
+            &secret,
+            voting_crypto_deps::zip32::AccountId::ZERO,
+            &birthday,
+            None,
+        )
         .map_err(|error| anyhow::anyhow!("importing the voter account: {error:?}"))?;
     let account_uuid = account.id().expose_uuid().to_string();
 
