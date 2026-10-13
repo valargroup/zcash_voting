@@ -17,8 +17,8 @@ default-members = [
 resolver = "2"
 
 [workspace.dependencies]
-voting-circuits = { git = "https://github.com/valargroup/voting-circuits", rev = "fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1", version = "=0.12.2", default-features = false }
-voting-crypto-deps = { git = "https://github.com/valargroup/voting-circuits", rev = "fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1", version = "=0.2.4", default-features = false }
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits", rev = "35f0cd33cf419a89effa3246862ec82da20e7ee2", version = "=0.12.2", default-features = false }
+voting-crypto-deps = { git = "https://github.com/valargroup/voting-circuits", rev = "35f0cd33cf419a89effa3246862ec82da20e7ee2", version = "=0.2.4", default-features = false }
 # Zakura 3.0 publishes protocol as `zakura-protocol` with lib name `zcash_protocol`.
 # Packages select one of these through the `zakura` / `lrz` features.
 zcash_protocol = { version = "=3.0.0", package = "zakura-protocol", default-features = false }
