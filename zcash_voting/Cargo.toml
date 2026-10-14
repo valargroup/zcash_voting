@@ -50,11 +50,11 @@ prost = "0.14"
 sha2 = "0.10"
 ed25519-dalek = "2"
 
-pir-client = { git = "https://github.com/valargroup/vote-nullifier-pir", rev = "1b862cf61f30caf71d21cfb72e0418db9721c215", version = "=0.7.4", default-features = false }
-pir-types = { git = "https://github.com/valargroup/vote-nullifier-pir", rev = "1b862cf61f30caf71d21cfb72e0418db9721c215", version = "=0.6.4", default-features = false }
+pir-client = { git = "https://github.com/valargroup/vote-nullifier-pir", rev = "f4a341a48b82de23febc7e865a1c0bbac3b95d1d", version = "=0.7.4", default-features = false }
+pir-types = { git = "https://github.com/valargroup/vote-nullifier-pir", rev = "f4a341a48b82de23febc7e865a1c0bbac3b95d1d", version = "=0.6.4", default-features = false }
 valar-spiral-rs = { version = "=0.5.3-rc.1", default-features = false }
 valar-ypir = { version = "=0.2.1", default-features = false }
-imt-tree = { git = "https://github.com/valargroup/vote-nullifier-pir", rev = "1b862cf61f30caf71d21cfb72e0418db9721c215", version = "=0.5.4", default-features = false }
+imt-tree = { git = "https://github.com/valargroup/vote-nullifier-pir", rev = "f4a341a48b82de23febc7e865a1c0bbac3b95d1d", version = "=0.5.4", default-features = false }
 
 bytes = "1"
 http = "1"
@@ -82,7 +82,7 @@ nonempty = "0.11"
 
 zcash_protocol = { workspace = true, optional = true }
 lrz_zcash_protocol = { workspace = true, optional = true }
-zakura-wallet-lib = { git = "https://github.com/zakura-core/wallet-libraries", rev = "2968117403a6e9f93f4ae35b3cd0c1d72520377a", version = "=0.1.0-rc7", default-features = false }
+zakura-wallet-lib = { git = "https://github.com/zakura-core/wallet-libraries", rev = "fc24cdd8d4f81738911e13b5faecb5bd1c8887ea", version = "=0.1.0-rc8", default-features = false }
 uuid = "1.23.1"
 
 [dev-dependencies]

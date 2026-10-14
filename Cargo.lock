@@ -1509,12 +1509,12 @@ dependencies = [
 [[package]]
 name = "imt-tree"
 version = "0.5.4"
-source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=1b862cf61f30caf71d21cfb72e0418db9721c215#1b862cf61f30caf71d21cfb72e0418db9721c215"
+source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=f4a341a48b82de23febc7e865a1c0bbac3b95d1d#f4a341a48b82de23febc7e865a1c0bbac3b95d1d"
 dependencies = [
  "anyhow",
  "hex",
  "rayon",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1)",
+ "voting-crypto-deps",
 ]
 
 [[package]]
@@ -2017,7 +2017,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pir-client"
 version = "0.7.4"
-source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=1b862cf61f30caf71d21cfb72e0418db9721c215#1b862cf61f30caf71d21cfb72e0418db9721c215"
+source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=f4a341a48b82de23febc7e865a1c0bbac3b95d1d#f4a341a48b82de23febc7e865a1c0bbac3b95d1d"
 dependencies = [
  "anyhow",
  "futures",
@@ -2028,18 +2028,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "valar-ypir",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1)",
+ "voting-crypto-deps",
 ]
 
 [[package]]
 name = "pir-types"
 version = "0.6.4"
-source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=1b862cf61f30caf71d21cfb72e0418db9721c215#1b862cf61f30caf71d21cfb72e0418db9721c215"
+source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=f4a341a48b82de23febc7e865a1c0bbac3b95d1d#f4a341a48b82de23febc7e865a1c0bbac3b95d1d"
 dependencies = [
  "anyhow",
  "imt-tree",
  "serde",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1)",
+ "voting-crypto-deps",
 ]
 
 [[package]]
@@ -2338,7 +2338,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tonic",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
  "zakura-protocol",
  "zcash_protocol",
  "zcash_voting",
@@ -2827,7 +2827,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
  "zcash_voting",
  "zeroize",
 ]
@@ -3344,7 +3344,7 @@ dependencies = [
  "rand 0.8.7",
  "shardtree 0.7.1",
  "voting-circuits",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
 ]
 
 [[package]]
@@ -3364,7 +3364,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "vote-commitment-tree",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
 ]
 
 [[package]]
@@ -3375,7 +3375,7 @@ dependencies = [
  "blake2b_simd",
  "itertools",
  "lazy_static",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
 ]
 
 [[package]]
@@ -3402,17 +3402,6 @@ dependencies = [
  "zcash_note_encryption",
  "zip32 0.2.1",
  "zip32 0.3.0",
-]
-
-[[package]]
-name = "voting-crypto-deps"
-version = "0.2.4"
-source = "git+https://github.com/valargroup/voting-circuits?rev=fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1#fce06c37b3a537ef0ad77fdfb38ed2039dec4ee1"
-dependencies = [
- "halo2_gadgets",
- "pasta_curves",
- "zakura-halo2-gadgets",
- "zakura-pasta-curves",
 ]
 
 [[package]]
@@ -3676,8 +3665,8 @@ dependencies = [
 
 [[package]]
 name = "zakura-client-backend"
-version = "0.1.0-rc8"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=2968117403a6e9f93f4ae35b3cd0c1d72520377a#2968117403a6e9f93f4ae35b3cd0c1d72520377a"
+version = "0.1.0-rc9"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
 dependencies = [
  "base64",
  "bech32",
@@ -3710,6 +3699,7 @@ dependencies = [
  "zakura-bls12-381",
  "zakura-keys",
  "zakura-note-encryption",
+ "zakura-one-time-ivk",
  "zakura-orchard",
  "zakura-pasta-curves",
  "zakura-pir-enhance-types",
@@ -3725,8 +3715,8 @@ dependencies = [
 
 [[package]]
 name = "zakura-client-sqlite"
-version = "0.1.0-rc8"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=2968117403a6e9f93f4ae35b3cd0c1d72520377a#2968117403a6e9f93f4ae35b3cd0c1d72520377a"
+version = "0.1.0-rc9"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
 dependencies = [
  "bitflags 2.13.1",
  "bs58",
@@ -3756,6 +3746,8 @@ dependencies = [
  "zakura-client-backend",
  "zakura-jubjub",
  "zakura-keys",
+ "zakura-note-encryption",
+ "zakura-one-time-ivk",
  "zakura-orchard",
  "zakura-pczt",
  "zakura-primitives",
@@ -3874,6 +3866,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zakura-one-time-ivk"
+version = "0.0.1-rc0"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+dependencies = [
+ "blake2b_simd",
+ "ff",
+ "zakura-orchard",
+ "zakura-pasta-curves",
+ "zakura-protocol",
+ "zeroize",
+]
+
+[[package]]
 name = "zakura-orchard"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3939,7 +3944,7 @@ dependencies = [
 [[package]]
 name = "zakura-pczt"
 version = "0.1.0-rc5"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=2968117403a6e9f93f4ae35b3cd0c1d72520377a#2968117403a6e9f93f4ae35b3cd0c1d72520377a"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
 dependencies = [
  "blake2b_simd",
  "document-features",
@@ -3968,7 +3973,7 @@ dependencies = [
 [[package]]
 name = "zakura-pir-enhance-types"
 version = "0.0.1-rc1"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=2968117403a6e9f93f4ae35b3cd0c1d72520377a#2968117403a6e9f93f4ae35b3cd0c1d72520377a"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
 
 [[package]]
 name = "zakura-primitives"
@@ -4121,8 +4126,8 @@ dependencies = [
 
 [[package]]
 name = "zakura-wallet-lib"
-version = "0.1.0-rc7"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=2968117403a6e9f93f4ae35b3cd0c1d72520377a#2968117403a6e9f93f4ae35b3cd0c1d72520377a"
+version = "0.1.0-rc8"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
 dependencies = [
  "orchard",
  "pczt",
@@ -4187,7 +4192,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
  "zakura-protocol",
  "zcash_protocol",
  "zcash_voting",
@@ -4520,7 +4525,7 @@ dependencies = [
  "vote-commitment-tree",
  "vote-commitment-tree-client",
  "voting-circuits",
- "voting-crypto-deps 0.2.4 (git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2)",
+ "voting-crypto-deps",
  "zakura-protocol",
  "zakura-wallet-lib",
  "zcash_protocol",
