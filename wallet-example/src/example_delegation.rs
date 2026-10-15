@@ -498,7 +498,7 @@ fn example_sign_delegation_request(
         .map_err(|_| anyhow::anyhow!("invalid account_index {}", request.account_index))?;
     let usk = UnifiedSpendingKey::from_seed(&request.network, seed, account)
         .context("derive account unified spending key")?;
-    let sk = *usk.orchard();
+    let sk = usk.orchard().to_owned();
     let ask = orchard::keys::SpendAuthorizingKey::from(&sk);
     let alpha = Option::<pasta_curves::pallas::Scalar>::from(
         pasta_curves::pallas::Scalar::from_repr(request.alpha),

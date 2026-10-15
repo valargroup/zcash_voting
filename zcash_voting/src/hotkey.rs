@@ -88,7 +88,7 @@ pub(crate) fn spending_key_from_hotkey_seed(
         }
     })?;
 
-    Ok(*usk.orchard())
+    Ok(usk.orchard().to_owned())
 }
 
 fn raw_orchard_address_from_seed(

@@ -1237,7 +1237,7 @@ mod tests {
 
         let account = AccountId::try_from(0).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&Network::Testnet, seed, account).unwrap();
-        let sk: SpendingKey = *usk.orchard();
+        let sk: SpendingKey = usk.orchard().to_owned();
         let randomized = SpendAuthorizingKey::from(&sk).randomize(alpha);
         let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&randomized)).into();
         let signature = randomized.sign(voting_crypto_deps::rand::rngs::OsRng, sighash);

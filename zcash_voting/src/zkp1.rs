@@ -693,7 +693,7 @@ mod tests {
         let account = AccountId::try_from(0u32).unwrap();
         let usk = UnifiedSpendingKey::from_seed(network, &seed, account).unwrap();
         let ufvk = usk.to_unified_full_viewing_key();
-        let ufvk_str = ufvk.encode(network);
+        let ufvk_str = crate::backend::encode_full_viewing_key(&ufvk, network).unwrap();
         let fvk = ufvk.orchard().unwrap().clone();
         (ufvk_str, fvk)
     }
@@ -866,7 +866,7 @@ mod tests {
         let account = AccountId::try_from(0u32).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&MAIN_NETWORK, &seed, account).unwrap();
         let ufvk = usk.to_unified_full_viewing_key();
-        let ufvk_str = ufvk.encode(&MAIN_NETWORK);
+        let ufvk_str = crate::backend::encode_full_viewing_key(&ufvk, &MAIN_NETWORK).unwrap();
         let fvk = ufvk.orchard().unwrap().clone();
 
         // 2. Hotkey (output note recipient)

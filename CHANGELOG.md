@@ -6,12 +6,26 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v6.0.0
+
+Version 6 moves the default backend from Zakura Common v2 to v3 and requires
+Rust 1.97. Public notes, addresses, witnesses, and cryptographic keys must come
+from the matching dependency family. The v5 voting lifecycle and persisted
+state remain unchanged. See [Migrating from v5 to v6](docs/migrating-to-v6.md).
+
 ### Changed
 
-- Updated the default dependency family to Zakura Common 3.0.0 and Rust 1.97.
-- Pinned the coordinated circuit, PIR, and wallet updates to exact source
-  revisions; address, witness, and note-encryption APIs follow the selected backend.
-
+- Use published `voting-circuits 0.13.0`, `voting-crypto-deps 0.3.0`,
+  `imt-tree 0.6.0`, `pir-types 0.7.0`, `pir-client 0.8.0`, and
+  `zakura-wallet-lib 0.1.0-rc8`; remove the temporary source pins.
+- Release `vote-commitment-tree 0.7.0` and
+  `vote-commitment-tree-client 0.9.0` with the matching cryptographic types.
+- Adapt the alternate upstream backend to its fallible viewing-key encoding,
+  non-expiring address constructors, and caller-supplied PCZT signing RNG.
+  Keep vote-tree frontiers on their own tree API rather than Orchard's.
+- Include the SQLite writer reservation and tree-recovery fixes from v5.0.2,
+  and the opt-in Ledger output review from v5.1.0. These changes are already
+  present for integrations upgrading from those versions.
 
 ## v5.1.1-rc.3
 

@@ -1508,8 +1508,9 @@ dependencies = [
 
 [[package]]
 name = "imt-tree"
-version = "0.5.4"
-source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=f4a341a48b82de23febc7e865a1c0bbac3b95d1d#f4a341a48b82de23febc7e865a1c0bbac3b95d1d"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bfdd7e8edb57388496c2301caa1bedcc1a4dd0f1b76c3d4b6b39014d6e42739"
 dependencies = [
  "anyhow",
  "hex",
@@ -2016,8 +2017,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pir-client"
-version = "0.7.4"
-source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=f4a341a48b82de23febc7e865a1c0bbac3b95d1d#f4a341a48b82de23febc7e865a1c0bbac3b95d1d"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07d45468f73256a06c245c6405e4ba4c05dbbbc4f4bb60cc6b723aabd3f9d236"
 dependencies = [
  "anyhow",
  "futures",
@@ -2033,8 +2035,9 @@ dependencies = [
 
 [[package]]
 name = "pir-types"
-version = "0.6.4"
-source = "git+https://github.com/valargroup/vote-nullifier-pir?rev=f4a341a48b82de23febc7e865a1c0bbac3b95d1d#f4a341a48b82de23febc7e865a1c0bbac3b95d1d"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c56756f86457150ceef77efec23b041950dba05a5f5df6e01c2fe3b311106c7d"
 dependencies = [
  "anyhow",
  "imt-tree",
@@ -2902,7 +2905,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3334,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "vote-commitment-tree"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "imt-tree",
@@ -3349,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "vote-commitment-tree-client"
-version = "0.8.3"
+version = "0.9.0"
 dependencies = [
  "base64",
  "bytes",
@@ -3369,8 +3372,9 @@ dependencies = [
 
 [[package]]
 name = "voting-circuits"
-version = "0.12.2"
-source = "git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2#35f0cd33cf419a89effa3246862ec82da20e7ee2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "419f236c639abd38749ddbd48cde1269cb305bce627b47eb4f890f0c6939ab6e"
 dependencies = [
  "blake2b_simd",
  "itertools",
@@ -3380,8 +3384,9 @@ dependencies = [
 
 [[package]]
 name = "voting-crypto-deps"
-version = "0.2.4"
-source = "git+https://github.com/valargroup/voting-circuits?rev=35f0cd33cf419a89effa3246862ec82da20e7ee2#35f0cd33cf419a89effa3246862ec82da20e7ee2"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0ac3dca50588107ea34acfd7bb0774f03fa5b9df36cd06f187555883b29452b"
 dependencies = [
  "halo2_gadgets",
  "halo2_poseidon",
@@ -3666,7 +3671,8 @@ dependencies = [
 [[package]]
 name = "zakura-client-backend"
 version = "0.1.0-rc9"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5992381bcb58449536da7823a777a97b178077d7e2be468a1163603f0def778e"
 dependencies = [
  "base64",
  "bech32",
@@ -3716,7 +3722,8 @@ dependencies = [
 [[package]]
 name = "zakura-client-sqlite"
 version = "0.1.0-rc9"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab5b8e5045216a793c80081bca4222c4610fd45b99588f2e8eca24ed096b2cb4"
 dependencies = [
  "bitflags 2.13.1",
  "bs58",
@@ -3868,7 +3875,8 @@ dependencies = [
 [[package]]
 name = "zakura-one-time-ivk"
 version = "0.0.1-rc0"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4975a9b1cde0a686abd9e26d4a2b98adaffb59c005544dbd6760f72ebfb57c1b"
 dependencies = [
  "blake2b_simd",
  "ff",
@@ -3943,8 +3951,9 @@ dependencies = [
 
 [[package]]
 name = "zakura-pczt"
-version = "0.1.0-rc5"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+version = "0.1.0-rc6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81af511f181cf680162b21b0ca04c74dab85a11e3d99a729d2e0e1923bb6a651"
 dependencies = [
  "blake2b_simd",
  "document-features",
@@ -3973,7 +3982,8 @@ dependencies = [
 [[package]]
 name = "zakura-pir-enhance-types"
 version = "0.0.1-rc1"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26c74b1db6e7ce961c67e441c723d1a78e3a141c45b149862b21c59505fa4227"
 
 [[package]]
 name = "zakura-primitives"
@@ -4127,7 +4137,8 @@ dependencies = [
 [[package]]
 name = "zakura-wallet-lib"
 version = "0.1.0-rc8"
-source = "git+https://github.com/zakura-core/wallet-libraries?rev=fc24cdd8d4f81738911e13b5faecb5bd1c8887ea#fc24cdd8d4f81738911e13b5faecb5bd1c8887ea"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd8049cdb8eeca8ff4a68eeb66d827831b8214b49a3dedecc5d98d35340ccb19"
 dependencies = [
  "orchard",
  "pczt",
@@ -4486,7 +4497,7 @@ dependencies = [
 
 [[package]]
 name = "zcash_voting"
-version = "5.1.1-rc.3"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "base64",
