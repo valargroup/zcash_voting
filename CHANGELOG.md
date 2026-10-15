@@ -6,12 +6,15 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-## v6.0.0
+## v5.2.0-rc.1
 
-Version 6 moves the default backend from Zakura Common v2 to v3 and requires
+Version 5.2 moves the default backend from Zakura Common v2 to v3 and requires
 Rust 1.97. Public notes, addresses, witnesses, and cryptographic keys must come
-from the matching dependency family. The v5 voting lifecycle and persisted
-state remain unchanged. See [Migrating from v5 to v6](docs/migrating-to-v6.md).
+from the matching dependency family. The voting lifecycle and voting-sidecar
+schema remain unchanged.
+The 5.1.x line keeps its existing dependencies; LRZ clients must opt into 5.2
+after adapting and validating their integration, including existing wallet
+databases. See [Migrating from 5.1 to 5.2](docs/migrating-to-common-v3.md).
 
 ### Changed
 

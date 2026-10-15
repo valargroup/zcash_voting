@@ -4,7 +4,7 @@ Client-side library for integrating [Zcash shielded voting](https://github.com/v
 
 ## Usage
 
-**Upgrading from v5?** See [Migrating from v5 to v6](../docs/migrating-to-v6.md).
+**Upgrading from v5?** See [Migrating from 5.1 to 5.2](../docs/migrating-to-common-v3.md).
 
 **Upgrading from v3.x or v4.0.x?** Read
 [Migrating to v5](../docs/migrating-to-v5.md) for release-specific prerequisites,
@@ -405,7 +405,7 @@ The default backend uses Zakura Common 3.0.0, `voting-circuits 0.13.0`,
 `voting-crypto-deps 0.3.0`, `vote-commitment-tree 0.7.0`, and
 `vote-commitment-tree-client 0.9.0`. The alternate backend selects upstream
 `orchard 0.16` and matching wallet prereleases through the same facade.
-See the [v6 migration guide](../docs/migrating-to-v6.md) for the complete
+See the [5.2 migration guide](../docs/migrating-to-common-v3.md) for the complete
 coordinated dependency matrix and type-boundary guidance.
 
 ## Downstream test fixtures
