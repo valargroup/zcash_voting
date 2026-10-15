@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Deserialize;
+use vote_commitment_tree::incrementalmerkletree::frontier::Frontier;
 use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
-use voting_crypto_deps::incrementalmerkletree::frontier::Frontier;
 
 use super::{
     coordination::{CapturedSubmissionOperation, SubmissionOperationLease},

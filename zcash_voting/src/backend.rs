@@ -14,3 +14,35 @@ pub use zakura_wallet_lib::{
 pub use ::lrz_zcash_protocol as zcash_protocol;
 #[cfg(feature = "zakura")]
 pub use ::zcash_protocol;
+
+/// Builds a non-expiring unified address containing only the supplied Orchard receiver.
+pub(crate) fn orchard_unified_address(
+    receiver: orchard::Address,
+) -> Option<zcash_keys::address::UnifiedAddress> {
+    #[cfg(feature = "zakura")]
+    {
+        zcash_keys::address::UnifiedAddress::from_receivers(Some(receiver), None, None)
+    }
+    #[cfg(feature = "lrz")]
+    {
+        zcash_keys::address::UnifiedAddress::from_receivers(Some(receiver), None, None, None, None)
+    }
+}
+
+/// Encodes a viewing key for the selected network, returning unsupported encodings to callers.
+pub(crate) fn encode_full_viewing_key<P: zcash_protocol::consensus::Parameters>(
+    key: &zcash_keys::keys::UnifiedFullViewingKey,
+    network: &P,
+) -> Result<String, crate::types::VotingError> {
+    #[cfg(feature = "zakura")]
+    {
+        Ok(key.encode(network))
+    }
+    #[cfg(feature = "lrz")]
+    {
+        key.encode(network)
+            .map_err(|error| crate::types::VotingError::InvalidInput {
+                message: format!("Cannot encode the unified full viewing key: {error:?}"),
+            })
+    }
+}

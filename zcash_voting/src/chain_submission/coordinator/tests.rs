@@ -12,8 +12,8 @@ use std::{
     },
 };
 use tokio::sync::Notify;
+use vote_commitment_tree::incrementalmerkletree::frontier::Frontier;
 use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
-use voting_crypto_deps::incrementalmerkletree::frontier::Frontier;
 
 use super::*;
 use crate::{

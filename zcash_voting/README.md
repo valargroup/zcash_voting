@@ -4,6 +4,8 @@ Client-side library for integrating [Zcash shielded voting](https://github.com/v
 
 ## Usage
 
+**Upgrading from v5?** See [Migrating from v5 to v6](../docs/migrating-to-v6.md).
+
 **Upgrading from v3.x or v4.0.x?** Read
 [Migrating to v5](../docs/migrating-to-v5.md) for release-specific prerequisites,
 API replacements, examples, and database compatibility limits. The
@@ -393,26 +395,18 @@ two complete backend modes: `zakura` and `lrz`. Unlike its former generic
 capability selectors, those features never weak-reference both optional
 backend families. External-consumer regression tests verify that selecting
 `zcash_voting/lrz` puts no Zakura forks in Cargo lockfiles or resolved
-metadata. The selected wallet facade release is `zakura-wallet-lib
-0.1.0-rc5`.
+metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc8`.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
-This release line requires Rust 1.97 or newer.
+This release requires Rust 1.97 or newer.
 
-- **`orchard 0.15`** from [zcash/orchard](https://github.com/zcash/orchard),
-  with `unstable-voting-circuits` enabled for the governance proof paths
-  (or `zakura-orchard 1.2.0` with the `zakura` feature).
-- **`voting-circuits 0.12.1`** from [valargroup/voting-circuits](https://github.com/valargroup/voting-circuits)
-  for the delegation and vote proof circuits.
-- **`vote-commitment-tree 0.6.1`** and
-  **`vote-commitment-tree-client 0.8.1`** for vote commitment tree state
-  and HTTP sync.
-- **`pczt 0.9.3`, `zcash_client_backend 0.24.0`,
-  `zcash_client_sqlite 0.22.0`, `zcash_keys 0.16.1`,
-  `zcash_primitives 0.30.1`, and `zcash_protocol 0.10.5`** from published
-  librustzcash releases (or the stable `zakura-*` family and RC5 wallet crates in
-  `zakura` builds).
+The default backend uses Zakura Common 3.0.0, `voting-circuits 0.13.0`,
+`voting-crypto-deps 0.3.0`, `vote-commitment-tree 0.7.0`, and
+`vote-commitment-tree-client 0.9.0`. The alternate backend selects upstream
+`orchard 0.16` and matching wallet prereleases through the same facade.
+See the [v6 migration guide](../docs/migrating-to-v6.md) for the complete
+coordinated dependency matrix and type-boundary guidance.
 
 ## Downstream test fixtures
 

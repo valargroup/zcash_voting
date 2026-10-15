@@ -3488,7 +3488,7 @@ mod tests {
 
         let account = AccountId::try_from(account_index).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&TEST_NETWORK, seed, account).unwrap();
-        let sk: SpendingKey = *usk.orchard();
+        let sk: SpendingKey = usk.orchard().to_owned();
         let ask = SpendAuthorizingKey::from(&sk);
         let rsk = ask.randomize(alpha);
         let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&rsk)).into();
@@ -3509,7 +3509,7 @@ mod tests {
         assert_eq!(seed_fingerprint, request.seed_fingerprint);
         let account = AccountId::try_from(request.account_index).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&request.network, seed, account).unwrap();
-        let sk = *usk.orchard();
+        let sk = usk.orchard().to_owned();
         let ask = SpendAuthorizingKey::from(&sk);
         let alpha = Option::<pallas::Scalar>::from(pallas::Scalar::from_repr(request.alpha))
             .expect("test stores a valid alpha scalar");

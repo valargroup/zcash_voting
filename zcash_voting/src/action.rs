@@ -18,7 +18,6 @@ use orchard::value::NoteValue;
 use orchard::Address;
 use voting_circuits::delegation::synthetic_padding_note_parts;
 use voting_crypto_deps::zip32::Scope;
-use zcash_keys::address::UnifiedAddress;
 use zcash_primitives::transaction::builder::PcztParts;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::{
@@ -579,7 +578,7 @@ pub(crate) fn build_governance_pczt(
     // Use Creator::build_from_parts to construct the PCZT with the selected
     // Orchard or Ironwood bundle, matching the wallet transaction builder path.
     let consensus_network = consensus_network_for_voting_network(network);
-    let hotkey_user_address = UnifiedAddress::from_receivers(Some(hotkey_addr.clone()), None, None)
+    let hotkey_user_address = crate::backend::orchard_unified_address(hotkey_addr.clone())
         .expect("an Orchard receiver forms a valid Unified Address")
         .encode(&consensus_network);
 
@@ -724,11 +723,14 @@ pub(crate) fn build_governance_pczt(
         })?;
 
         // Run IO Finalizer so the Signer (Keystone) can compute the sighash.
-        let pczt = pczt::roles::io_finalizer::IoFinalizer::new(pczt)
-            .finalize_io()
-            .map_err(|e| VotingError::Internal {
-                message: format!("IoFinalizer::finalize_io failed: {:?}", e),
-            })?;
+        let finalizer = pczt::roles::io_finalizer::IoFinalizer::new(pczt);
+        #[cfg(feature = "zakura")]
+        let finalized = finalizer.finalize_io();
+        #[cfg(feature = "lrz")]
+        let finalized = finalizer.finalize_io(voting_crypto_deps::rand::rngs::SysRng);
+        let pczt = finalized.map_err(|e| VotingError::Internal {
+            message: format!("IoFinalizer::finalize_io failed: {:?}", e),
+        })?;
 
         let pczt_bytes = pczt.serialize().map_err(|e| VotingError::Internal {
             message: format!("PCZT serialization failed: {:?}", e),
@@ -1120,7 +1122,7 @@ mod tests {
         let hotkey_addr = Address::from_raw_address_bytes(&hotkey_raw)
             .into_option()
             .expect("mock hotkey address is valid");
-        let expected_user_address = UnifiedAddress::from_receivers(Some(hotkey_addr), None, None)
+        let expected_user_address = crate::backend::orchard_unified_address(hotkey_addr)
             .expect("an Orchard receiver forms a valid Unified Address")
             .encode(&consensus_network_for_voting_network(
                 VotingNetwork::Regtest,

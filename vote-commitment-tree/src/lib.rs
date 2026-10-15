@@ -37,6 +37,9 @@ pub mod sync_api;
 
 // -- Re-exports (public API) -----------------------------------------------
 
+/// The tree API used by this crate, independent of the selected Orchard backend.
+pub use incrementalmerkletree;
+
 pub use anchor::Anchor;
 pub use client::{SyncError, SyncLimits, TreeClient};
 pub use hash::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
