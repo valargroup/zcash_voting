@@ -82,7 +82,7 @@ nonempty = "0.11"
 
 zcash_protocol = { workspace = true, optional = true }
 lrz_zcash_protocol = { workspace = true, optional = true }
-zakura-wallet-lib = { git = "https://github.com/zakura-core/wallet-libraries", rev = "323b62b6298c6ac4c175eeffa0a738abde04b297", version = "=0.1.0-rc8", default-features = false }
+zakura-wallet-lib = { git = "https://github.com/zakura-core/wallet-libraries", rev = "d382c248f0e847275e455b8de9b41132a5bb2493", version = "=0.1.0-rc8", default-features = false }
 uuid = "1.23.1"
 
 [dev-dependencies]
