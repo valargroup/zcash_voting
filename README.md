@@ -54,6 +54,9 @@ labels and the rules for what may ship on a maintenance line, and
 
 ## Wallet API Lifecycle
 
+**Upgrading from v5?** See [Migrating from 5.1 to 5.2](docs/migrating-to-common-v3.md)
+for the Common v3 dependency and type changes.
+
 **Upgrading from v3.x or v4.0.x?** Start with
 [Migrating to v5](docs/migrating-to-v5.md) and the
 [v5 release notes](CHANGELOG.md#v500). The guide distinguishes the release
@@ -133,7 +136,7 @@ lockfile and resolved metadata contain no Zakura forks.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
-The current PIR and IMT releases require Rust 1.91 or newer.
+The current PIR and IMT releases require Rust 1.97 or newer.
 
 ## FFI
 

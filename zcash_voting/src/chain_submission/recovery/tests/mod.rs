@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::Mutex};
 
-use incrementalmerkletree::frontier::Frontier;
+use vote_commitment_tree::incrementalmerkletree::frontier::Frontier;
 
 use super::*;
 use crate::{

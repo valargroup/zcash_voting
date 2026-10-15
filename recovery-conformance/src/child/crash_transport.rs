@@ -93,9 +93,7 @@ impl<T> CrashTransport<T> {
         }
         // Counted only for POSTs of the armed class, so unrelated traffic
         // cannot consume the skip and move the crash to a different bundle.
-        let seen = self
-            .seen
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let seen = self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         (seen >= self.skip).then_some(armed)
     }
 }

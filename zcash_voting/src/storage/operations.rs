@@ -3482,13 +3482,13 @@ mod tests {
             keys::{SpendAuthorizingKey, SpendingKey},
             primitives::redpallas::{SpendAuth, VerificationKey},
         };
+        use voting_crypto_deps::zip32::AccountId;
         use zcash_keys::keys::UnifiedSpendingKey;
         use zcash_protocol::consensus::TEST_NETWORK;
-        use zip32::AccountId;
 
         let account = AccountId::try_from(account_index).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&TEST_NETWORK, seed, account).unwrap();
-        let sk: SpendingKey = *usk.orchard();
+        let sk: SpendingKey = usk.orchard().to_owned();
         let ask = SpendAuthorizingKey::from(&sk);
         let rsk = ask.randomize(alpha);
         let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&rsk)).into();
@@ -3500,8 +3500,8 @@ mod tests {
 
     fn sign_delegation_request(seed: &[u8], request: &DelegationSigningRequest) -> [u8; 64] {
         use orchard::keys::SpendAuthorizingKey;
+        use voting_crypto_deps::zip32::{fingerprint::SeedFingerprint, AccountId};
         use zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::{fingerprint::SeedFingerprint, AccountId};
 
         let seed_fingerprint = SeedFingerprint::from_seed(seed)
             .expect("test seed length is valid")
@@ -3509,7 +3509,7 @@ mod tests {
         assert_eq!(seed_fingerprint, request.seed_fingerprint);
         let account = AccountId::try_from(request.account_index).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&request.network, seed, account).unwrap();
-        let sk = *usk.orchard();
+        let sk = usk.orchard().to_owned();
         let ask = SpendAuthorizingKey::from(&sk);
         let alpha = Option::<pallas::Scalar>::from(pallas::Scalar::from_repr(request.alpha))
             .expect("test stores a valid alpha scalar");
@@ -3836,8 +3836,8 @@ mod tests {
     }
 
     fn valid_tree_witness(position: u64, leaf: orchard::tree::MerkleHashOrchard) -> WitnessData {
-        use incrementalmerkletree::{Hashable, Level};
         use orchard::tree::MerkleHashOrchard;
+        use voting_crypto_deps::incrementalmerkletree::{Hashable, Level};
 
         let mut current = leaf;
         let mut auth_path = Vec::with_capacity(32);
@@ -3869,8 +3869,8 @@ mod tests {
     }
 
     fn valid_empty_tree_witness(position: u64) -> WitnessData {
-        use incrementalmerkletree::Hashable;
         use orchard::tree::MerkleHashOrchard;
+        use voting_crypto_deps::incrementalmerkletree::Hashable;
 
         valid_tree_witness(position, MerkleHashOrchard::empty_leaf())
     }
@@ -4122,8 +4122,8 @@ mod tests {
             value::NoteValue,
         };
         use voting_crypto_deps::rand::rngs::OsRng;
+        use voting_crypto_deps::zip32::{AccountId, Scope};
         use zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::{AccountId, Scope};
 
         let seed = [0x42u8; 32];
         let account = AccountId::try_from(0u32).unwrap();
@@ -4206,9 +4206,9 @@ mod tests {
         };
         use voting_circuits::delegation::ImtProvider;
         use voting_crypto_deps::rand::rngs::OsRng;
+        use voting_crypto_deps::zip32::{AccountId, Scope};
         use zcash_keys::keys::UnifiedSpendingKey;
         use zcash_protocol::consensus::TEST_NETWORK;
-        use zip32::{AccountId, Scope};
 
         let seed = [0x42u8; 32];
         let account = AccountId::try_from(0u32).unwrap();
@@ -7099,8 +7099,8 @@ mod tests {
             value::NoteValue,
         };
         use voting_crypto_deps::rand::rngs::OsRng;
+        use voting_crypto_deps::zip32::{fingerprint::SeedFingerprint, AccountId, Scope};
         use zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::{fingerprint::SeedFingerprint, AccountId, Scope};
 
         struct StaticBranchId(u32);
 

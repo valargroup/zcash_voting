@@ -96,8 +96,8 @@ pub(super) fn ironwood_setup_fixture_with_note_count(
         value::NoteValue,
     };
     use voting_crypto_deps::rand::rngs::OsRng;
+    use voting_crypto_deps::zip32::{AccountId, Scope};
     use zcash_keys::keys::UnifiedSpendingKey;
-    use zip32::{AccountId, Scope};
 
     let seed = [0x42u8; 32];
     let account = AccountId::try_from(0u32).unwrap();

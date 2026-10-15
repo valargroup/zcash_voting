@@ -6,7 +6,6 @@ use halo2_proofs::{
     plonk,
     transcript::{Blake2bWrite, Challenge255},
 };
-use incrementalmerkletree::Hashable;
 use orchard::{
     keys::{Diversifier, FullViewingKey, Scope, SpendValidatingKey},
     note::{ExtractedNoteCommitment, NoteVersion, RandomSeed, Rho},
@@ -20,6 +19,7 @@ use voting_circuits::delegation::{
     build_delegation_bundle, delegation_cached_keys, ImtError, ImtProofData, ImtProvider,
     PrecomputedRandomness, RealNoteInput,
 };
+use voting_crypto_deps::incrementalmerkletree::Hashable;
 use zcash_keys::keys::UnifiedFullViewingKey;
 
 use crate::governance::BUNDLE_NOTE_SLOTS;
@@ -582,13 +582,13 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 
-    use incrementalmerkletree::{Hashable, Level};
     use orchard::{
         keys::Scope, note::commitment::ExtractedNoteCommitment, note::Rho, tree::MerkleHashOrchard,
         value::NoteValue, NOTE_COMMITMENT_TREE_DEPTH as TEST_TREE_DEPTH,
     };
     use pasta_curves::group::ff::Field;
     use voting_circuits::delegation::SpacedLeafImtProvider;
+    use voting_crypto_deps::incrementalmerkletree::{Hashable, Level};
     use voting_crypto_deps::rand::rngs::OsRng;
     use voting_crypto_deps::rand::Rng;
 
@@ -686,14 +686,14 @@ mod tests {
     }
 
     fn test_viewing_key(network: &Network) -> (String, FullViewingKey) {
+        use voting_crypto_deps::zip32::AccountId;
         use zcash_keys::keys::UnifiedSpendingKey;
-        use zip32::AccountId;
 
         let seed = [0x42u8; 64];
         let account = AccountId::try_from(0u32).unwrap();
         let usk = UnifiedSpendingKey::from_seed(network, &seed, account).unwrap();
         let ufvk = usk.to_unified_full_viewing_key();
-        let ufvk_str = ufvk.encode(network);
+        let ufvk_str = crate::backend::encode_full_viewing_key(&ufvk, network).unwrap();
         let fvk = ufvk.orchard().unwrap().clone();
         (ufvk_str, fvk)
     }
@@ -854,9 +854,9 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_delegation_proof() {
+        use voting_crypto_deps::zip32::AccountId;
         use zcash_keys::keys::UnifiedSpendingKey;
         use zcash_protocol::consensus::MAIN_NETWORK;
-        use zip32::AccountId;
 
         println!("=== Real Delegation Proof Test ===");
         println!("Setting up test keys...");
@@ -866,7 +866,7 @@ mod tests {
         let account = AccountId::try_from(0u32).unwrap();
         let usk = UnifiedSpendingKey::from_seed(&MAIN_NETWORK, &seed, account).unwrap();
         let ufvk = usk.to_unified_full_viewing_key();
-        let ufvk_str = ufvk.encode(&MAIN_NETWORK);
+        let ufvk_str = crate::backend::encode_full_viewing_key(&ufvk, &MAIN_NETWORK).unwrap();
         let fvk = ufvk.orchard().unwrap().clone();
 
         // 2. Hotkey (output note recipient)

@@ -3,7 +3,7 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use incrementalmerkletree::frontier::Frontier;
+use vote_commitment_tree::incrementalmerkletree::frontier::Frontier;
 use vote_commitment_tree::{MerkleHashVote, TREE_DEPTH};
 
 use super::{super::*, fixtures::*};

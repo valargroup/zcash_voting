@@ -8,13 +8,13 @@ use pasta_curves::pallas;
 use serde::{Deserialize, Serialize};
 use subtle::CtOption;
 use thiserror::Error;
+use voting_crypto_deps::zip32::Scope;
 use zcash_client_backend::proto::service::TreeState;
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_protocol::consensus::{
     self, BlockHeight, Network as ZcashNetwork, NetworkType, NetworkUpgrade, Parameters,
 };
 use zeroize::Zeroizing;
-use zip32::Scope;
 
 use crate::governance::BUNDLE_NOTE_SLOTS;
 pub use crate::wire::VotingRoundParams;
@@ -362,9 +362,7 @@ impl Parameters for Network {
                 NetworkUpgrade::Nu6_3 => {
                     Some(BlockHeight::from_u32(REGTEST_NU6_3_ACTIVATION_HEIGHT))
                 }
-                // Zakura protocol 2.0 defines Nu7; crates.io zcash_protocol 0.10
-                // does not. Match public Zakura networks: not yet activated.
-                #[cfg(feature = "zakura")]
+                // Both selected protocol families leave Nu7 inactive on regtest.
                 NetworkUpgrade::Nu7 => None,
             },
         }
@@ -670,7 +668,7 @@ impl NoteInfo {
             rho: note.rho().to_bytes().to_vec(),
             rseed: note.rseed().as_bytes().to_vec(),
             scope,
-            ufvk_str: ufvk.encode(network),
+            ufvk_str: crate::backend::encode_full_viewing_key(ufvk, network)?,
         })
     }
 }
@@ -1436,9 +1434,9 @@ mod tests {
     use orchard::note::{ExtractedNoteCommitment, NoteVersion, Rho};
     use orchard::value::NoteValue;
     use voting_crypto_deps::rand::rngs::OsRng;
+    use voting_crypto_deps::zip32::{AccountId, Scope};
     use zcash_keys::keys::UnifiedSpendingKey;
     use zcash_protocol::consensus::TEST_NETWORK;
-    use zip32::{AccountId, Scope};
 
     fn placeholder_tree_state(snapshot_height: u64) -> TreeState {
         TreeState {
@@ -1588,7 +1586,10 @@ mod tests {
         assert_eq!(note_info.rho, note.rho().to_bytes().to_vec());
         assert_eq!(note_info.rseed, note.rseed().as_bytes().to_vec());
         assert_eq!(note_info.scope, 0);
-        assert_eq!(note_info.ufvk_str, ufvk.encode(&TEST_NETWORK));
+        assert_eq!(
+            note_info.ufvk_str,
+            crate::backend::encode_full_viewing_key(&ufvk, &TEST_NETWORK).unwrap()
+        );
     }
 
     #[test]

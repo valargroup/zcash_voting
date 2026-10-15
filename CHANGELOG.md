@@ -6,6 +6,30 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.2.0-rc.1
+
+Version 5.2 moves the default backend from Zakura Common v2 to v3 and requires
+Rust 1.97. Public notes, addresses, witnesses, and cryptographic keys must come
+from the matching dependency family. The voting lifecycle and voting-sidecar
+schema remain unchanged.
+The 5.1.x line keeps its existing dependencies; LRZ clients must opt into 5.2
+after adapting and validating their integration, including existing wallet
+databases. See [Migrating from 5.1 to 5.2](docs/migrating-to-common-v3.md).
+
+### Changed
+
+- Use published `voting-circuits 0.13.0`, `voting-crypto-deps 0.3.0`,
+  `imt-tree 0.6.0`, `pir-types 0.7.0`, `pir-client 0.8.0`, and
+  `zakura-wallet-lib 0.1.0-rc8`; remove the temporary source pins.
+- Release `vote-commitment-tree 0.7.0` and
+  `vote-commitment-tree-client 0.9.0` with the matching cryptographic types.
+- Adapt the alternate upstream backend to its fallible viewing-key encoding,
+  non-expiring address constructors, and caller-supplied PCZT signing RNG.
+  Keep vote-tree frontiers on their own tree API rather than Orchard's.
+- Include the SQLite writer reservation and tree-recovery fixes from v5.0.2,
+  and the opt-in Ledger output review from v5.1.0. These changes are already
+  present for integrations upgrading from those versions.
+
 ## v5.1.1-rc.3
 
 `zcash_voting` 5.1.1-rc.3 keeps the 5.1.1-rc.2 dependency stack and gates the

@@ -2541,6 +2541,7 @@ mod tests {
     };
     use rusqlite::{params, Connection};
     use secrecy::{ExposeSecret, SecretVec};
+    use voting_crypto_deps::zip32::Scope;
     use zcash_client_backend::data_api::{chain::ChainState, AccountBirthday, WalletWrite};
     use zcash_client_sqlite::{util::SystemClock, wallet::init::init_wallet_db};
     use zcash_primitives::block::BlockHash;
@@ -2548,7 +2549,6 @@ mod tests {
     use zcash_protocol::consensus::{
         Network as ZcashNetwork, NetworkConstants, NetworkUpgrade, Parameters,
     };
-    use zip32::Scope;
 
     const TESTNET_NU6_SNAPSHOT_HEIGHT: u64 = 3_536_500;
     const TESTNET_NU6_BRANCH_ID: u32 = 0x4DEC_4DF0;
