@@ -36,6 +36,12 @@ fn assert_output_recovery(ledger_output_review: bool) {
 
     for index in 0..crate::tx1::TX1_ACTION_COUNT {
         let start = 1 + index * crate::tx1::TX1_ACTION_EFFECTS_LEN;
+        let enc_ciphertext: [u8; 580] = result.tx1_effects[start + 160..start + 740]
+            .try_into()
+            .unwrap();
+        #[cfg(feature = "lrz")]
+        let enc_ciphertext =
+            voting_crypto_deps::zcash_note_encryption::NoteBytesData(enc_ciphertext);
         let action = Action::from_parts(
             Nullifier::from_bytes(
                 result.tx1_effects[start + 32..start + 64]
@@ -57,9 +63,7 @@ fn assert_output_recovery(ledger_output_review: bool) {
                 epk_bytes: result.tx1_effects[start + 128..start + 160]
                     .try_into()
                     .unwrap(),
-                enc_ciphertext: result.tx1_effects[start + 160..start + 740]
-                    .try_into()
-                    .unwrap(),
+                enc_ciphertext,
                 out_ciphertext: result.tx1_effects[start + 740..start + 820]
                     .try_into()
                     .unwrap(),
