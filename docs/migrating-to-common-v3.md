@@ -1,6 +1,6 @@
-# Migrating from v5 to v6
+# Moving the v5.1 release line to Common v3
 
-Version 6 keeps the v5 round, signing, submission, and share-tracking APIs.
+Version 5.1.1-rc.4 keeps the v5.1 round, signing, submission, and share-tracking APIs.
 The breaking change is the cryptographic dependency family exposed by those APIs.
 Use Rust 1.97 or newer and rebuild bindings and downstream Rust consumers together.
 
@@ -8,7 +8,7 @@ Use Rust 1.97 or newer and rebuild bindings and downstream Rust consumers togeth
 
 | Dependency | Version for this release |
 | --- | --- |
-| zcash_voting | 6.0.0 |
+| zcash_voting | 5.1.1-rc.4 |
 | voting-circuits | 0.13.0 |
 | voting-crypto-deps | 0.3.0 |
 | imt-tree | 0.6.0 |
@@ -45,7 +45,7 @@ Integrations from v3 or v4 must first follow the applicable
 in-flight historical submissions. The dependency update does not expand
 those supported upgrade paths or make old databases safe to downgrade.
 
-Version 6 also includes the v5.0.2 SQLite writer reservation and tree-recovery
+This release also includes the v5.0.2 SQLite writer reservation and tree-recovery
 fixes, plus v5.1.0's opt-in Ledger output review. Integrations already using
 those releases retain that behavior; consult the historical changelog entries
 for their caller requirements.

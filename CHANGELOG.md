@@ -6,12 +6,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-## v6.0.0
+## v5.1.1-rc.4
 
-Version 6 moves the default backend from Zakura Common v2 to v3 and requires
+Version 5.1.1-rc.4 moves the default backend from Zakura Common v2 to v3 and requires
 Rust 1.97. Public notes, addresses, witnesses, and cryptographic keys must come
 from the matching dependency family. The v5 voting lifecycle and persisted
-state remain unchanged. See [Migrating from v5 to v6](docs/migrating-to-v6.md).
+state remain unchanged. This is an explicitly coordinated prerelease update
+for the v5.1 maintenance line. See [Moving to Common v3](docs/migrating-to-common-v3.md).
 
 ### Changed
 
