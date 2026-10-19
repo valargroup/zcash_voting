@@ -93,7 +93,7 @@ pub fn software_signer(seed: Vec<u8>) -> Arc<dyn SpendAuthSigner> {
             message: "alpha is not a valid Pallas scalar".to_string(),
         })?;
             let signature = ask
-                .randomize(&alpha)
+                .randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha))
                 .sign(voting_crypto_deps::rand::rngs::OsRng, &request.sighash);
             Ok((&signature).into())
         },

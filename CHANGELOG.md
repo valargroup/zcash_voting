@@ -6,6 +6,12 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Use the unpublished Common 4 voting API, voting-circuits, nullifier PIR,
+  and wallet-library branches as one coordinated dependency family. Adapt
+  signing randomizers and PCZT randomizer encoding to the Common 4 public types.
+
 ## v5.2.0-rc.1
 
 Version 5.2 moves the default backend from Zakura Common v2 to v3 and requires

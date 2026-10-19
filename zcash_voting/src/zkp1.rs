@@ -543,7 +543,8 @@ pub(crate) fn observe_build_and_prove_delegation(
 
             // Extract named outputs from the instance.
             let ak: SpendValidatingKey = fvk.clone().into();
-            let rk_bytes: [u8; 32] = (&ak.randomize(&alpha)).into();
+            let rk_bytes: [u8; 32] =
+                (&ak.randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha))).into();
 
             Ok(DelegationProofResult {
                 proof: proof_bytes,

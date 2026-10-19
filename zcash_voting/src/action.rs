@@ -649,7 +649,10 @@ pub(crate) fn build_governance_pczt(
             .ok_or_else(|| VotingError::Internal {
                 message: "PCZT spend missing alpha".to_string(),
             })?;
-        let alpha_bytes: [u8; 32] = alpha.to_repr();
+        #[cfg(feature = "zakura")]
+        let alpha_bytes = alpha.to_bytes();
+        #[cfg(feature = "lrz")]
+        let alpha_bytes = alpha.to_repr();
         let rseed_signed_from_pczt =
             governance_action
                 .spend()

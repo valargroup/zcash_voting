@@ -3490,7 +3490,7 @@ mod tests {
         let usk = UnifiedSpendingKey::from_seed(&TEST_NETWORK, seed, account).unwrap();
         let sk: SpendingKey = usk.orchard().to_owned();
         let ask = SpendAuthorizingKey::from(&sk);
-        let rsk = ask.randomize(alpha);
+        let rsk = ask.randomize(&voting_crypto_deps::spend_auth_randomizer(alpha));
         let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&rsk)).into();
         let mut rng = voting_crypto_deps::rand::rngs::OsRng;
         let sig = rsk.sign(&mut rng, sighash);
@@ -3513,7 +3513,7 @@ mod tests {
         let ask = SpendAuthorizingKey::from(&sk);
         let alpha = Option::<pallas::Scalar>::from(pallas::Scalar::from_repr(request.alpha))
             .expect("test stores a valid alpha scalar");
-        let rsk = ask.randomize(&alpha);
+        let rsk = ask.randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha));
         let mut rng = voting_crypto_deps::rand::rngs::OsRng;
         let sig = rsk.sign(&mut rng, &request.sighash);
 
