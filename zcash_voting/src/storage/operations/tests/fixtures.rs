@@ -91,10 +91,7 @@ pub(super) fn ironwood_setup_fixture() -> (VotingDb, NoteInfo, Vec<u8>) {
 pub(super) fn ironwood_setup_fixture_with_note_count(
     note_count: usize,
 ) -> (VotingDb, Vec<NoteInfo>, Vec<u8>) {
-    use orchard::{
-        note::{NoteVersion, Rho},
-        value::NoteValue,
-    };
+    use orchard::{note::NoteVersion, value::NoteValue};
     use voting_crypto_deps::rand::rngs::OsRng;
     use voting_crypto_deps::zip32::{AccountId, Scope};
     use zcash_keys::keys::UnifiedSpendingKey;
@@ -109,11 +106,12 @@ pub(super) fn ironwood_setup_fixture_with_note_count(
     let mut rng = OsRng;
     let notes = (0..note_count)
         .map(|note_index| {
-            let (_, _, parent_note) = orchard::Note::dummy(&mut rng, None, NoteVersion::V3);
-            let note = orchard::Note::new(
+            let (_, _, parent_note) =
+                voting_crypto_deps::dummy_note(&mut rng, None, NoteVersion::V3);
+            let note = voting_crypto_deps::new_note(
                 address,
                 NoteValue::from_raw(13_000_000 - note_index as u64),
-                Rho::from_nf_old(parent_note.nullifier(&fvk)),
+                voting_crypto_deps::rho_from_nullifier(parent_note.nullifier(&fvk)),
                 NoteVersion::V3,
                 &mut rng,
             );

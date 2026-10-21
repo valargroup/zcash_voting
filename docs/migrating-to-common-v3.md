@@ -7,10 +7,15 @@ Use Rust 1.97 or newer and rebuild bindings and downstream Rust consumers togeth
 ## Release lines and client opt-in
 
 `release/v5.1.x` remains the compatibility line for existing clients and keeps
-its existing dependency family. The coordinated upgrade is introduced as
-`5.2.0-rc.1` on `release/v5.2.x`. Although this uses a new minor release line,
-it changes public dependency types and raises the MSRV; it is not a drop-in
-upgrade for Rust integrations. Pin the prerelease explicitly while qualifying it.
+its existing dependency family. The coordinated upgrade is introduced on
+`release/v5.2.x`. Although this uses a new minor release line, it changes
+public dependency types and raises the MSRV; it is not a drop-in upgrade for
+Rust integrations. Pin the prerelease explicitly while qualifying it.
+
+`5.2.0-rc.1` used Zakura Common v3. `5.2.0-rc.2` moves to Common 4.0.0, so
+integrations already qualifying rc.1 must move their direct Common, wallet,
+circuit, and PIR dependencies to the matrix below together; rc.1 and rc.2
+cryptographic types are not interchangeable.
 
 LRZ clients must opt into 5.2 only after adapting their wallet integration and
 validating existing wallet databases. This workspace's LRZ tests establish
@@ -25,18 +30,19 @@ can be downgraded. Keep clients on 5.1 until their qualification is complete.
 
 | Dependency | Version for this release |
 | --- | --- |
-| zcash_voting | 5.2.0-rc.1 |
-| voting-circuits | 0.13.0 |
-| voting-crypto-deps | 0.3.0 |
-| imt-tree | 0.6.0 |
-| pir-types | 0.7.0 |
-| pir-client | 0.8.0 |
-| vote-commitment-tree | 0.7.0 |
-| vote-commitment-tree-client | 0.9.0 |
-| zakura-wallet-lib | 0.1.0-rc8 |
+| zcash_voting | 5.2.0-rc.2 |
+| voting-circuits | 0.14.0 |
+| voting-crypto-deps | 0.4.0 |
+| imt-tree | 0.7.0 |
+| pir-types | 0.8.0 |
+| pir-client | 0.9.0 |
+| vote-commitment-tree | 0.8.0 |
+| vote-commitment-tree-client | 0.10.0 |
+| zakura-wallet-lib | 0.1.0-rc9.2 |
+| zakura-protocol | 4.0.0 |
 
-The default `zakura` backend uses Common 3.0.0. Replace direct Common v2
-requirements with the matching Common v3 packages, and remove temporary Git
+The default `zakura` backend uses Common 4.0.0. Replace direct Common v2 or v3
+requirements with the matching Common 4 packages, and remove temporary Git
 patches used during integration. A note, field element, address, or witness
 from a different package version is a different Rust type even if its bytes
 have the same format. Prefer the matching exports from `voting-crypto-deps`

@@ -29,6 +29,21 @@ pub(crate) fn orchard_unified_address(
     }
 }
 
+/// Returns the canonical 32-byte scalar encoding of a PCZT spend-authorization randomizer.
+pub(crate) fn spend_auth_randomizer_bytes(
+    randomizer: &voting_crypto_deps::SpendAuthRandomizer,
+) -> [u8; 32] {
+    #[cfg(feature = "zakura")]
+    {
+        randomizer.to_bytes()
+    }
+    #[cfg(feature = "lrz")]
+    {
+        use pasta_curves::group::ff::PrimeField;
+        randomizer.to_repr()
+    }
+}
+
 /// Encodes a viewing key for the selected network, returning unsupported encodings to callers.
 pub(crate) fn encode_full_viewing_key<P: zcash_protocol::consensus::Parameters>(
     key: &zcash_keys::keys::UnifiedFullViewingKey,

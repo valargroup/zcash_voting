@@ -145,7 +145,7 @@ pub(crate) fn sign_cast_vote_digest(
         })?;
 
     // Compute rsk_v = ask_v.randomize(alpha_v)
-    let rsk_v = ask.randomize(&alpha_v_scalar);
+    let rsk_v = ask.randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha_v_scalar));
 
     // Sign
     let sig = rsk_v.sign(voting_crypto_deps::rand::rngs::OsRng, digest);

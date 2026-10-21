@@ -55,7 +55,7 @@ labels and the rules for what may ship on a maintenance line, and
 ## Wallet API Lifecycle
 
 **Upgrading from v5?** See [Migrating from 5.1 to 5.2](docs/migrating-to-common-v3.md)
-for the Common v3 dependency and type changes.
+for the Common 4 dependency and type changes.
 
 **Upgrading from v3.x or v4.0.x?** Start with
 [Migrating to v5](docs/migrating-to-v5.md) and the

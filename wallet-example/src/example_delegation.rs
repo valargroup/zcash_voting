@@ -504,7 +504,7 @@ fn example_sign_delegation_request(
         pasta_curves::pallas::Scalar::from_repr(request.alpha),
     )
     .ok_or_else(|| anyhow::anyhow!("delegation alpha is not a valid Pallas scalar"))?;
-    let rsk = ask.randomize(&alpha);
+    let rsk = ask.randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha));
     let mut rng = voting_crypto_deps::rand::rngs::OsRng;
     let sig = rsk.sign(&mut rng, &request.sighash);
     Ok(((&sig).into(), request.sighash))

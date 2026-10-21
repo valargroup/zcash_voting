@@ -1203,10 +1203,7 @@ mod pir_tests {
     #[test]
     fn precompute_snapshot_bundles_reuses_cached_real_note_proofs_for_a_full_bundle() {
         use crate::backend::{orchard, pasta_curves, zcash_keys};
-        use orchard::{
-            note::{NoteVersion, Rho},
-            value::NoteValue,
-        };
+        use orchard::{note::NoteVersion, value::NoteValue};
         use pasta_curves::group::ff::PrimeField;
         use pasta_curves::pallas;
         use voting_circuits::delegation::ImtProvider;
@@ -1224,11 +1221,12 @@ mod pir_tests {
         let mut rng = OsRng;
         let mut notes = Vec::new();
         for position in 0..crate::governance::BUNDLE_NOTE_SLOTS {
-            let (_, _, parent_note) = orchard::Note::dummy(&mut rng, None, NoteVersion::V2);
-            let note = orchard::Note::new(
+            let (_, _, parent_note) =
+                voting_crypto_deps::dummy_note(&mut rng, None, NoteVersion::V2);
+            let note = voting_crypto_deps::new_note(
                 address,
                 NoteValue::from_raw(13_000_000),
-                Rho::from_nf_old(parent_note.nullifier(&fvk)),
+                voting_crypto_deps::rho_from_nullifier(parent_note.nullifier(&fvk)),
                 NoteVersion::V3,
                 &mut rng,
             );

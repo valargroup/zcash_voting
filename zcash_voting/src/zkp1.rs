@@ -543,7 +543,8 @@ pub(crate) fn observe_build_and_prove_delegation(
 
             // Extract named outputs from the instance.
             let ak: SpendValidatingKey = fvk.clone().into();
-            let rk_bytes: [u8; 32] = (&ak.randomize(&alpha)).into();
+            let rk_bytes: [u8; 32] =
+                (&ak.randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha))).into();
 
             Ok(DelegationProofResult {
                 proof: proof_bytes,
@@ -583,7 +584,7 @@ mod tests {
     use std::sync::Arc;
 
     use orchard::{
-        keys::Scope, note::commitment::ExtractedNoteCommitment, note::Rho, tree::MerkleHashOrchard,
+        keys::Scope, note::ExtractedNoteCommitment, note::Rho, tree::MerkleHashOrchard,
         value::NoteValue, NOTE_COMMITMENT_TREE_DEPTH as TEST_TREE_DEPTH,
     };
     use pasta_curves::group::ff::Field;
@@ -713,11 +714,12 @@ mod tests {
         address: orchard::Address,
         value: u64,
         version: NoteVersion,
-        rng: &mut impl Rng,
+        rng: &mut (impl Rng + voting_crypto_deps::rand::CryptoRng),
     ) -> orchard::Note {
         loop {
-            let (_, _, dummy_parent) = orchard::Note::dummy(&mut *rng, None, NoteVersion::V2);
-            let rho = Rho::from_nf_old(dummy_parent.nullifier(fvk));
+            let (_, _, dummy_parent) =
+                voting_crypto_deps::dummy_note(&mut *rng, None, NoteVersion::V2);
+            let rho = voting_crypto_deps::rho_from_nullifier(dummy_parent.nullifier(fvk));
             let rseed = random_seed_for_rho(&rho, rng);
             if let Some(note) = Option::<orchard::Note>::from(orchard::Note::from_parts(
                 address,
@@ -893,11 +895,12 @@ mod tests {
         for &v in &note_values {
             // Voting notes are Ironwood/V3: `reconstruct_note` accepts no other
             // version, and `voting-circuits` rejects non-V3 real notes.
-            let (_, _, dummy_parent) = orchard::Note::dummy(&mut rng, None, NoteVersion::V3);
-            let note = orchard::Note::new(
+            let (_, _, dummy_parent) =
+                voting_crypto_deps::dummy_note(&mut rng, None, NoteVersion::V3);
+            let note = voting_crypto_deps::new_note(
                 address,
                 NoteValue::from_raw(v),
-                Rho::from_nf_old(dummy_parent.nullifier(&fvk)),
+                voting_crypto_deps::rho_from_nullifier(dummy_parent.nullifier(&fvk)),
                 NoteVersion::V3,
                 &mut rng,
             );

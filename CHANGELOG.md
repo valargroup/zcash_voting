@@ -6,6 +6,25 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.2.0-rc.2
+
+Version 5.2.0-rc.2 moves the default backend from Zakura Common v3 to Common
+4.0.0. This changes the public cryptographic type family again for
+integrations qualifying 5.2.0-rc.1: upgrade direct Common, wallet, circuit, and
+PIR dependencies together. The voting lifecycle, wire formats, vote-tree
+encoding, and voting-sidecar schema remain unchanged, and Rust 1.97 remains
+the minimum. As with rc.1, this is an opt-in upgrade for the 5.2 line only;
+5.1.x keeps its existing dependencies. See
+[Migrating from 5.1 to 5.2](docs/migrating-to-common-v3.md).
+
+### Changed
+
+- Use published `zakura-protocol 4.0.0`, `voting-circuits 0.14.0`,
+  `voting-crypto-deps 0.4.0`, `imt-tree 0.7.0`, `pir-types 0.8.0`,
+  `pir-client 0.9.0`, and `zakura-wallet-lib 0.1.0-rc9.2`.
+- Release `vote-commitment-tree 0.8.0` and
+  `vote-commitment-tree-client 0.10.0` with the matching cryptographic types.
+
 ## v5.2.0-rc.1
 
 Version 5.2 moves the default backend from Zakura Common v2 to v3 and requires
