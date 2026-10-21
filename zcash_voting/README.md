@@ -395,15 +395,15 @@ two complete backend modes: `zakura` and `lrz`. Unlike its former generic
 capability selectors, those features never weak-reference both optional
 backend families. External-consumer regression tests verify that selecting
 `zcash_voting/lrz` puts no Zakura forks in Cargo lockfiles or resolved
-metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc8`.
+metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc9.2`.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
 This release requires Rust 1.97 or newer.
 
-The default backend uses Zakura Common 3.0.0, `voting-circuits 0.13.0`,
-`voting-crypto-deps 0.3.0`, `vote-commitment-tree 0.7.0`, and
-`vote-commitment-tree-client 0.9.0`. The alternate backend selects upstream
+The default backend uses Zakura Common 4.0.0, `voting-circuits 0.14.0`,
+`voting-crypto-deps 0.4.0`, `vote-commitment-tree 0.8.0`, and
+`vote-commitment-tree-client 0.10.0`. The alternate backend selects upstream
 `orchard 0.16` and matching wallet prereleases through the same facade.
 See the [5.2 migration guide](../docs/migrating-to-common-v3.md) for the complete
 coordinated dependency matrix and type-boundary guidance.

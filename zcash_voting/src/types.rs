@@ -1431,7 +1431,7 @@ mod tests {
 
     use super::*;
     use crate::governance::BALLOT_DIVISOR;
-    use orchard::note::{ExtractedNoteCommitment, NoteVersion, Rho};
+    use orchard::note::{ExtractedNoteCommitment, NoteVersion};
     use orchard::value::NoteValue;
     use voting_crypto_deps::rand::rngs::OsRng;
     use voting_crypto_deps::zip32::{AccountId, Scope};
@@ -1619,11 +1619,11 @@ mod tests {
         version: NoteVersion,
         rng: &mut OsRng,
     ) -> orchard::Note {
-        let (_, _, parent_note) = orchard::Note::dummy(&mut *rng, None, NoteVersion::V2);
-        orchard::Note::new(
+        let (_, _, parent_note) = voting_crypto_deps::dummy_note(&mut *rng, None, NoteVersion::V2);
+        voting_crypto_deps::new_note(
             address,
             NoteValue::from_raw(12_500_000),
-            Rho::from_nf_old(parent_note.nullifier(fvk)),
+            voting_crypto_deps::rho_from_nullifier(parent_note.nullifier(fvk)),
             version,
             rng,
         )

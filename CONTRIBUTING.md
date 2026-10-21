@@ -33,5 +33,5 @@ use the `release/vMAJOR.MINOR.x` naming pattern. Read
 [Release branches and backports](docs/release-branches.md) before deciding where
 a change lands or applying a backport label.
 
-Keep the coordinated Common v3 and LRZ wallet dependency upgrade on 5.2.x.
+Keep the coordinated Common 4 and LRZ wallet dependency upgrade on 5.2.x.
 The 5.1.x line retains its existing dependencies for client compatibility.

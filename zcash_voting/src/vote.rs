@@ -5701,7 +5701,7 @@ mod tests {
             )
             .unwrap();
             let ask = SpendAuthorizingKey::from(&sk);
-            VerificationKey::from(&ask.randomize(alpha))
+            VerificationKey::from(&ask.randomize(&voting_crypto_deps::spend_auth_randomizer(alpha)))
         }
 
         let hotkey = VotingHotkey::from_stored_secret(&[0xAB; 64], Network::Regtest).unwrap();
