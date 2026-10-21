@@ -16,7 +16,7 @@ Apply each label whose maintenance line should receive this change:
 - `A:backport/v5.1.x` for `release/v5.1.x`
 - `A:backport/v5.2.x` for `release/v5.2.x`
 
-Keep the Common v3 and LRZ wallet dependency upgrade off the 5.1.x line.
+Keep the Common 4 and LRZ wallet dependency upgrade off the 5.1.x line.
 
 Otherwise, leave the target labels unset. See
 [Release branches and backports](docs/release-branches.md).

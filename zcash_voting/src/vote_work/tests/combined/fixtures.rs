@@ -45,7 +45,8 @@ pub(super) fn database() -> (Arc<round::VotingDb>, Arc<Driver>) {
     )
     .unwrap();
     let alpha = pallas::Scalar::from(7);
-    let randomized = SpendAuthorizingKey::from(key.orchard()).randomize(&alpha);
+    let randomized = SpendAuthorizingKey::from(key.orchard())
+        .randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha));
     let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&randomized)).into();
     let signature = randomized.sign(voting_crypto_deps::rand::rngs::OsRng, &[0x49; 32]);
     {
