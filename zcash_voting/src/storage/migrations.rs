@@ -199,6 +199,26 @@ pub fn migrate(conn: &mut Connection) -> Result<(), VotingError> {
             VotingError::from_sqlite("failed to start database migration transaction", &e)
         })?;
 
+    // Another process may have upgraded while we waited for the write lock.
+    // Only the version read under that lock can select the migration ladder.
+    let version: u32 = tx
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(|e| VotingError::from_sqlite("failed to read locked database version", &e))?;
+    if version > CURRENT_VERSION {
+        return Err(VotingError::Internal {
+            message: format!(
+                "unsupported newer database version: expected at most {}, got {}",
+                CURRENT_VERSION, version
+            ),
+        });
+    }
+    if version == CURRENT_VERSION {
+        tx.commit().map_err(|e| {
+            VotingError::from_sqlite("failed to finish concurrent database upgrade", &e)
+        })?;
+        return ensure_current_chain_submission_schema(conn);
+    }
+
     if version < LAUNCH_VERSION {
         tx.execute_batch(RESET_SQL).map_err(|e| {
             VotingError::from_sqlite("failed to reset pre-launch database schema", &e)
