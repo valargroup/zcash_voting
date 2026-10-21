@@ -3490,7 +3490,7 @@ mod tests {
         let usk = UnifiedSpendingKey::from_seed(&TEST_NETWORK, seed, account).unwrap();
         let sk: SpendingKey = usk.orchard().to_owned();
         let ask = SpendAuthorizingKey::from(&sk);
-        let rsk = ask.randomize(alpha);
+        let rsk = ask.randomize(&voting_crypto_deps::spend_auth_randomizer(alpha));
         let rk: [u8; 32] = (&VerificationKey::<SpendAuth>::from(&rsk)).into();
         let mut rng = voting_crypto_deps::rand::rngs::OsRng;
         let sig = rsk.sign(&mut rng, sighash);
@@ -3513,7 +3513,7 @@ mod tests {
         let ask = SpendAuthorizingKey::from(&sk);
         let alpha = Option::<pallas::Scalar>::from(pallas::Scalar::from_repr(request.alpha))
             .expect("test stores a valid alpha scalar");
-        let rsk = ask.randomize(&alpha);
+        let rsk = ask.randomize(&voting_crypto_deps::spend_auth_randomizer(&alpha));
         let mut rng = voting_crypto_deps::rand::rngs::OsRng;
         let sig = rsk.sign(&mut rng, &request.sighash);
 
@@ -4117,10 +4117,7 @@ mod tests {
 
     #[test]
     fn test_padded_pir_nullifiers_match_persisted_dummy_nullifiers() {
-        use orchard::{
-            note::{NoteVersion, Rho},
-            value::NoteValue,
-        };
+        use orchard::{note::NoteVersion, value::NoteValue};
         use voting_crypto_deps::rand::rngs::OsRng;
         use voting_crypto_deps::zip32::{AccountId, Scope};
         use zcash_keys::keys::UnifiedSpendingKey;
@@ -4133,11 +4130,11 @@ mod tests {
         let address = fvk.address_at(0u32, Scope::External);
 
         let mut rng = OsRng;
-        let (_, _, parent_note) = orchard::Note::dummy(&mut rng, None, NoteVersion::V3);
-        let note = orchard::Note::new(
+        let (_, _, parent_note) = voting_crypto_deps::dummy_note(&mut rng, None, NoteVersion::V3);
+        let note = voting_crypto_deps::new_note(
             address,
             NoteValue::from_raw(13_000_000),
-            Rho::from_nf_old(parent_note.nullifier(&fvk)),
+            voting_crypto_deps::rho_from_nullifier(parent_note.nullifier(&fvk)),
             NoteVersion::V3,
             &mut rng,
         );
@@ -4200,10 +4197,7 @@ mod tests {
 
     #[test]
     fn test_padded_secret_warmup_reuses_cached_pir_proofs_without_pczt() {
-        use orchard::{
-            note::{NoteVersion, Rho},
-            value::NoteValue,
-        };
+        use orchard::{note::NoteVersion, value::NoteValue};
         use voting_circuits::delegation::ImtProvider;
         use voting_crypto_deps::rand::rngs::OsRng;
         use voting_crypto_deps::zip32::{AccountId, Scope};
@@ -4220,12 +4214,13 @@ mod tests {
         let mut rng = OsRng;
         let mut notes = Vec::new();
         for position in 0..BUNDLE_NOTE_SLOTS {
-            let (_, _, parent_note) = orchard::Note::dummy(&mut rng, None, NoteVersion::V2);
+            let (_, _, parent_note) =
+                voting_crypto_deps::dummy_note(&mut rng, None, NoteVersion::V2);
             // Voting notes are Ironwood/V3; `from_orchard_note` rejects V2.
-            let note = orchard::Note::new(
+            let note = voting_crypto_deps::new_note(
                 address,
                 NoteValue::from_raw(13_000_000),
-                Rho::from_nf_old(parent_note.nullifier(&fvk)),
+                voting_crypto_deps::rho_from_nullifier(parent_note.nullifier(&fvk)),
                 NoteVersion::V3,
                 &mut rng,
             );
@@ -7094,10 +7089,7 @@ mod tests {
 
     #[test]
     fn test_delegation_signing_request_signature_path_submits() {
-        use orchard::{
-            note::{NoteVersion, Rho},
-            value::NoteValue,
-        };
+        use orchard::{note::NoteVersion, value::NoteValue};
         use voting_crypto_deps::rand::rngs::OsRng;
         use voting_crypto_deps::zip32::{fingerprint::SeedFingerprint, AccountId, Scope};
         use zcash_keys::keys::UnifiedSpendingKey;
@@ -7122,11 +7114,11 @@ mod tests {
         let fvk = ufvk.orchard().unwrap().clone();
         let address = fvk.address_at(0u32, Scope::External);
         let mut rng = OsRng;
-        let (_, _, parent_note) = orchard::Note::dummy(&mut rng, None, NoteVersion::V3);
-        let note = orchard::Note::new(
+        let (_, _, parent_note) = voting_crypto_deps::dummy_note(&mut rng, None, NoteVersion::V3);
+        let note = voting_crypto_deps::new_note(
             address,
             NoteValue::from_raw(13_000_000),
-            Rho::from_nf_old(parent_note.nullifier(&fvk)),
+            voting_crypto_deps::rho_from_nullifier(parent_note.nullifier(&fvk)),
             NoteVersion::V3,
             &mut rng,
         );
