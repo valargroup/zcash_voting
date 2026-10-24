@@ -4114,6 +4114,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zakura-service-config"
+version = "0.1.0"
+source = "git+https://github.com/zakura-core/wallet-libraries?rev=b46a8c2bb6e2ce9161fc3d21200de9c059b366a5#b46a8c2bb6e2ce9161fc3d21200de9c059b366a5"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "zakura-sinsemilla"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4552,6 +4564,7 @@ dependencies = [
  "voting-circuits",
  "voting-crypto-deps",
  "zakura-protocol",
+ "zakura-service-config",
  "zakura-wallet-lib",
  "zcash_protocol",
  "zeroize",
