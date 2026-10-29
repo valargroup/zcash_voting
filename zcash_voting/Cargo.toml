@@ -65,7 +65,8 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "
 tower-service = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
-tonic = { version = "0.14", features = ["channel", "tls-webpki-roots", "tls-ring"] }
+# lightwalletd requires a gRPC client, without Tonic's default server/router.
+tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "tls-webpki-roots", "tls-ring"] }
 
 vote-commitment-tree = { path = "../vote-commitment-tree", version = "=0.8.0", default-features = false }
 vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "=0.10.0", default-features = false, features = ["http"] }
