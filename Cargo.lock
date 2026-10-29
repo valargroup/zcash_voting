@@ -138,6 +138,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+<<<<<<< HEAD
 name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -187,6 +188,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+=======
+>>>>>>> ed2e9c4 (Keep Tonic server dependencies out of voting clients (#381))
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1346,12 +1349,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
-name = "httpdate"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
-
-[[package]]
 name = "hybrid-array"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1374,7 +1371,6 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
- "httpdate",
  "itoa",
  "pin-project-lite",
  "smallvec",
@@ -1738,12 +1734,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "matchit"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
-
-[[package]]
 name = "maybe-rayon"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1764,12 +1754,6 @@ name = "memuse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d97bbf43eb4f088f8ca469930cde17fa036207c9a5e02ccc5107c4e8b17c964"
-
-[[package]]
-name = "mime"
-version = "0.3.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "minimal-lexical"
@@ -3056,10 +3040,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
 dependencies = [
  "async-trait",
- "axum",
  "base64",
  "bytes",
- "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -3068,7 +3050,6 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
