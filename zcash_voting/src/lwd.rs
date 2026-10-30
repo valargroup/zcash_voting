@@ -293,13 +293,18 @@ mod tests {
             }
 
             let nu6_3_activation_height = u64::from(crate::types::REGTEST_NU6_3_ACTIVATION_HEIGHT);
+            let nu7_activation_height = u64::from(crate::types::REGTEST_NU7_ACTIVATION_HEIGHT);
             assert_eq!(
                 branch_id_for_height(Network::Regtest, nu6_3_activation_height - 1).unwrap(),
                 0x5437_F330
             );
             assert_eq!(
-                branch_id_for_height(Network::Regtest, nu6_3_activation_height).unwrap(),
+                branch_id_for_height(Network::Regtest, nu7_activation_height - 1).unwrap(),
                 u32::from(BranchId::Nu6_3)
+            );
+            assert_eq!(
+                branch_id_for_height(Network::Regtest, nu7_activation_height).unwrap(),
+                u32::from(BranchId::Nu7)
             );
         }
     }
