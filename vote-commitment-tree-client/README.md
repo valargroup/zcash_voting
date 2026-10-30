@@ -9,6 +9,9 @@ An LRZ consumer uses `default-features = false, features = ["lrz"]`. The two
 backend features are mutually exclusive; `http` and `cli` remain
 independent transport features.
 
+The library selects only the field and tree hashing dependencies it uses.
+Standalone consumers do not pull in the full Orchard wallet cryptography bundle.
+
 ## Binary
 
 ```bash

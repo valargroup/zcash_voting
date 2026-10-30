@@ -2831,7 +2831,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "voting-crypto-deps",
  "zcash_voting",
  "zeroize",
 ]
@@ -3340,11 +3339,8 @@ dependencies = [
 name = "vote-commitment-tree"
 version = "0.8.0"
 dependencies = [
- "anyhow",
  "imt-tree",
  "incrementalmerkletree 0.8.2",
- "lazy_static",
- "libc",
  "rand 0.8.7",
  "shardtree 0.7.1",
  "voting-circuits",
@@ -4210,7 +4206,6 @@ dependencies = [
  "bytes",
  "http",
  "http-body-util",
- "hyper",
  "hyper-rustls",
  "hyper-util",
  "rand 0.8.7",
@@ -4525,7 +4520,6 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
- "imt-tree",
  "nonempty",
  "pir-client",
  "pir-types",
@@ -4545,7 +4539,6 @@ dependencies = [
  "tower-service",
  "url",
  "uuid",
- "valar-spiral-rs",
  "valar-ypir",
  "vote-commitment-tree",
  "vote-commitment-tree-client",
