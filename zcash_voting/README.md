@@ -15,8 +15,8 @@ Import `zcash_voting::prelude::*` and use the SDK-owned lifecycle:
 
 1. Open a wallet-scoped sidecar with `VotingDb::open_wallet_sidecar` and persist
    bundle setup through `DelegationPipeline::setup_bundles` or the round APIs.
-   Snapshot selection is Ironwood / NU6.3-only. Bundle policy is persisted per
-   round; its default includes privacy trimming. Use
+   Snapshot selection supports Ironwood notes on NU6.3 and NU7. Bundle policy
+   is persisted per round; its default includes privacy trimming. Use
    `recoverable_bundle_policy_v1()` when reproducible bundle reconstruction is
    required, and preserve the existing sidecar and voting hotkey secret.
 2. Bind a `RoundExecutor` to the round, network, authenticated proposal roster,

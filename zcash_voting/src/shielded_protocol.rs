@@ -13,12 +13,12 @@ pub(crate) enum VotingShieldedProtocol {
 
 impl VotingShieldedProtocol {
     pub(crate) fn for_branch_id(branch_id: BranchId) -> Result<Self, VotingError> {
-        if matches!(branch_id, BranchId::Nu6_3) {
+        if matches!(branch_id, BranchId::Nu6_3 | BranchId::Nu7) {
             return Ok(Self::Ironwood);
         }
 
         Err(VotingError::InvalidInput {
-            message: "zcash voting only supports Ironwood / NU6.3 shielded voting notes"
+            message: "zcash voting only supports Ironwood / NU6.3 or later shielded voting notes"
                 .to_string(),
         })
     }
@@ -53,4 +53,9 @@ impl VotingShieldedProtocol {
             Self::Ironwood => "Ironwood",
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    mod branch_selection;
 }
