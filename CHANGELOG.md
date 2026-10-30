@@ -10,8 +10,9 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 - Accept the NU7 consensus branch for Ironwood shielded voting notes and
   activate NU7 on `Network::Regtest` at height 11. The Ironwood note and bundle
-  versions are unchanged; this only updates the branch allowlist and the regtest
-  activation schedule.
+  versions are unchanged. The delegation signing transaction (TX1) still signs
+  under the fixed V6 / NU6.3 profile for NU7 snapshots, so existing vote chains
+  verify NU7 delegations without an upgrade.
 - Limit standalone vote-tree libraries to their field and Poseidon dependency
   features instead of enabling the full Orchard cryptography bundle. Remove
   unused direct dependencies and use the standard library for lazy empty roots.
