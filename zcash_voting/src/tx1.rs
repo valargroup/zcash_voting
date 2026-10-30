@@ -3,7 +3,8 @@
 //! TX1 remains a PCZT-only signing artifact. This encoding carries only the
 //! fields needed to reconstruct its V6 shielded signature digest.
 //!
-//! Version 1 fixes the remaining profile to NU6.3, zero lock and expiry,
+//! Version 1 fixes the remaining profile to V6 on NU6.3 (see
+//! [`TX1_CONSENSUS_BRANCH_ID`]), zero lock and expiry,
 //! absent transparent, Sapling, and Orchard bundles, and one Ironwood V3
 //! bundle with flags `0x07`, a positive 1-zatoshi value balance, and one
 //! action. V6 signatures do not commit to the shielded anchor.
@@ -11,9 +12,16 @@
 #[allow(unused_imports)]
 pub(crate) use crate::backend::{orchard, pczt};
 use crate::VotingError;
+use zcash_protocol::consensus::BranchId;
 
 /// Version byte for the current TX1 effects encoding.
 pub const TX1_EFFECTS_VERSION: u8 = 1;
+/// Consensus branch ID that TX1 effects version 1 signs under.
+///
+/// This is fixed rather than taken from the snapshot height because vote-chain
+/// verifiers rebuild the sighash from the effects alone. TX1 is never
+/// broadcast, so the branch ID only separates its signature domain.
+pub(crate) const TX1_CONSENSUS_BRANCH_ID: BranchId = BranchId::Nu6_3;
 /// Number of Ironwood actions in the current TX1 construction.
 pub const TX1_ACTION_COUNT: usize = 1;
 /// Length of an Orchard/Ironwood encrypted note ciphertext.
@@ -188,10 +196,7 @@ mod tests {
         assert_eq!(fixture.transaction_version, 6);
         assert_eq!(
             fixture.consensus_branch_id,
-            format!(
-                "{:08x}",
-                u32::from(zcash_protocol::consensus::BranchId::Nu6_3)
-            )
+            format!("{:08x}", u32::from(TX1_CONSENSUS_BRANCH_ID))
         );
         assert_eq!(fixture.lock_time, 0);
         assert_eq!(fixture.expiry_height, 0);

@@ -33,6 +33,7 @@ pub const MIN_VOTE_OPTIONS: u32 = 2;
 pub const MAX_VOTE_OPTIONS: u32 = 8;
 
 pub(crate) const REGTEST_NU6_3_ACTIVATION_HEIGHT: u32 = 10;
+pub(crate) const REGTEST_NU7_ACTIVATION_HEIGHT: u32 = 11;
 
 /// Delegation setup field that write-once persistence refuses to overwrite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -362,8 +363,8 @@ impl Parameters for Network {
                 NetworkUpgrade::Nu6_3 => {
                     Some(BlockHeight::from_u32(REGTEST_NU6_3_ACTIVATION_HEIGHT))
                 }
-                // Both selected protocol families leave Nu7 inactive on regtest.
-                NetworkUpgrade::Nu7 => None,
+                // Regtest mirrors the Zebra/Zakura fixtures that activate NU7 at height 11.
+                NetworkUpgrade::Nu7 => Some(BlockHeight::from_u32(REGTEST_NU7_ACTIVATION_HEIGHT)),
             },
         }
     }
