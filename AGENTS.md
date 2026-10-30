@@ -28,6 +28,7 @@ Use the `make` targets. They are the only supported entry points:
 | Command | When |
 | --- | --- |
 | `make test-lrz` | Only for changes to LRZ-gated code, backend feature wiring, or `Cargo.toml` feature definitions. |
+| `make check-vct` | Check tree library features without circuit dev-dependencies. |
 | `make test-vct` | Only for changes under `vote-commitment-tree/` or `vote-commitment-tree-client/`. |
 | `make doc-test` | Only when doc comments containing examples changed. |
 | `make msrv` | Only when adding a dependency or using a newer language feature. |

@@ -97,6 +97,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.138
+      - name: Check standalone VCT library features
+        run: make check-vct
       - name: Test LRZ VCT crates
         run: |
           cargo nextest run -P ci -p vote-commitment-tree -p vote-commitment-tree-client \

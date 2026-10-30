@@ -18,7 +18,7 @@ VCT_PACKAGES  := -p vote-commitment-tree -p vote-commitment-tree-client
 # runs the whole suite without failing fast.
 NEXTEST_PROFILE ?= agent
 
-.PHONY: help check test test-lrz test-vct doc-test proofs msrv fmt clippy \
+.PHONY: help check test test-lrz check-vct test-vct doc-test proofs msrv fmt clippy \
 	recovery-conformance-check recovery-conformance recovery-conformance-crash \
 	recovery-conformance-stalls recovery-conformance-fleet \
 	stage-bench-check stage-bench-worker stage-bench stage-bench-unit
@@ -44,6 +44,15 @@ test-lrz: ## Run the LRZ Ironwood / NU6.3 test suite
 	@CARGO_TARGET_DIR="$(LRZ_TARGET_DIR)" \
 		cargo nextest run -P $(NEXTEST_PROFILE) $(APP_PACKAGES) \
 		--all-targets --no-default-features --features lrz --locked
+
+# Library-only checks keep the circuit dev-dependency from enabling the full
+# crypto family and hiding missing features in the standalone tree libraries.
+check-vct: ## Type-check standalone tree libraries on both backends
+	@CARGO_TARGET_DIR="$(VCT_TARGET_DIR)" \
+		cargo check $(VCT_PACKAGES) --lib --no-default-features \
+		--features vote-commitment-tree/lrz,vote-commitment-tree-client/lrz --locked
+	@CARGO_TARGET_DIR="$(VCT_TARGET_DIR)" \
+		cargo check $(VCT_PACKAGES) --lib --locked
 
 test-vct: ## Run the vote-commitment-tree crates on both backends
 	@CARGO_TARGET_DIR="$(VCT_TARGET_DIR)" \
