@@ -6,6 +6,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Limit standalone vote-tree libraries to their field and Poseidon dependency
+  features instead of enabling the full Orchard cryptography bundle. Remove
+  unused direct dependencies and use the standard library for lazy empty roots.
+  Public APIs, tree hashes, and wire formats remain unchanged.
+
 ## v5.2.0-rc.2
 
 Version 5.2.0-rc.2 moves the default backend from Zakura Common v3 to Common

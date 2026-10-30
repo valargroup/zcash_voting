@@ -10,8 +10,8 @@ readme = "README.md"
 
 [features]
 default = ["zakura"]
-zakura = ["vote-commitment-tree/zakura", "voting-crypto-deps/default"]
-lrz = ["vote-commitment-tree/lrz", "voting-crypto-deps/lrz"]
+zakura = ["vote-commitment-tree/zakura", "voting-crypto-deps/pasta"]
+lrz = ["vote-commitment-tree/lrz", "voting-crypto-deps/lrz-pasta"]
 # HTTP transport for syncing the tree from a vote chain node's REST API.
 # Enables the `http_sync_api` module without selecting a concrete HTTP stack.
 http = []
