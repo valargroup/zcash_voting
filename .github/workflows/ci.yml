@@ -230,7 +230,9 @@ jobs:
           consumer = pathlib.Path(os.environ["CONSUMER_DIR"]) / "gemini"
           metadata_path = consumer / "metadata.json"
           metadata = json.loads(metadata_path.read_text())
-          allowed = {"zakura-wallet-lib"}
+          # zakura-service-config parses config bytes only; it has no wallet
+          # backend or crypto stack, so it is backend-neutral like the facade.
+          allowed = {"zakura-wallet-lib", "zakura-service-config"}
           packages_by_id = {
               package["id"]: package["name"]
               for package in metadata["packages"]
