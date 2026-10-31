@@ -21,7 +21,7 @@ use voting_crypto_deps::zip32::Scope;
 use zcash_primitives::transaction::builder::PcztParts;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::{
-    BlockHeight, BranchId, Network as ConsensusNetwork, NetworkConstants, Parameters,
+    BlockHeight, Network as ConsensusNetwork, NetworkConstants, Parameters,
 };
 
 use crate::governance::{self, BUNDLE_NOTE_SLOTS};
@@ -150,15 +150,8 @@ pub(crate) fn derive_governance_output_cmx(
         .ok_or_else(|| VotingError::Internal {
             message: "stored rseed_output is not valid for nf_signed".to_string(),
         })?;
-    let consensus_branch_id = crate::lwd::branch_id_for_height(network, snapshot_height)?;
-    let branch_id =
-        BranchId::try_from(consensus_branch_id).map_err(|error| VotingError::Internal {
-            message: format!(
-                "stored snapshot resolves to invalid consensus branch id \
-                 0x{consensus_branch_id:08X}: {error}"
-            ),
-        })?;
-    let note_version = VotingShieldedProtocol::for_branch_id(branch_id)?.note_version();
+    let note_version =
+        VotingShieldedProtocol::for_height(&network, snapshot_height)?.note_version();
     let output_note =
         orchard::Note::from_parts(hotkey_address, NoteValue::ZERO, rho, rseed, note_version)
             .into_option()
@@ -298,29 +291,6 @@ fn consensus_network_for_voting_network(network: VotingNetwork) -> ConsensusNetw
     }
 }
 
-fn validate_consensus_branch_id(
-    network: VotingNetwork,
-    snapshot_height: u64,
-    consensus_branch_id: u32,
-) -> Result<BranchId, VotingError> {
-    let branch_id =
-        BranchId::try_from(consensus_branch_id).map_err(|e| VotingError::InvalidInput {
-            message: format!(
-                "invalid consensus_branch_id 0x{:08X}: {}",
-                consensus_branch_id, e
-            ),
-        })?;
-    let expected = crate::lwd::branch_id_for_height(network, snapshot_height)?;
-    if consensus_branch_id != expected {
-        return Err(VotingError::InvalidInput {
-            message: format!(
-                "consensus_branch_id 0x{consensus_branch_id:08X} does not match snapshot height {snapshot_height} branch id 0x{expected:08X}",
-            ),
-        });
-    }
-    Ok(branch_id)
-}
-
 /// Build a governance-specific PCZT for Keystone signing.
 ///
 /// Constructs a PCZT whose real governance action belongs to the selected
@@ -335,9 +305,6 @@ fn validate_consensus_branch_id(
 /// - `network`: network that owns the persisted voting round snapshot.
 /// - `fvk_bytes`: 96-byte orchard FullViewingKey (ak[32] || nk[32] || rivk[32])
 /// - `hotkey_raw_address`: 43-byte hotkey raw orchard address
-/// - `consensus_branch_id`: network consensus branch ID active at the snapshot
-///   height. It selects note eligibility only. The PCZT itself always uses
-///   [`TX1_CONSENSUS_BRANCH_ID`].
 /// - `coin_type`: BIP-44 coin type (133 for mainnet, 1 for testnet/regtest)
 /// - `seed_fingerprint`: 32-byte ZIP-32 seed fingerprint (Keystone needs this to
 ///   identify which seed to derive the spending key from)
@@ -350,7 +317,6 @@ pub(crate) fn build_governance_pczt(
     network: VotingNetwork,
     fvk_bytes: &[u8],
     hotkey_raw_address: &[u8],
-    consensus_branch_id: u32,
     coin_type: u32,
     seed_fingerprint: &[u8; 32],
     account_index: u32,
@@ -361,8 +327,7 @@ pub(crate) fn build_governance_pczt(
 ) -> Result<GovernancePczt, VotingError> {
     validate_notes(notes)?;
     validate_round_params(params)?;
-    let branch_id =
-        validate_consensus_branch_id(network, params.snapshot_height, consensus_branch_id)?;
+    let shielded_protocol = VotingShieldedProtocol::for_height(&network, params.snapshot_height)?;
     let expected_coin_type = network.network_type().coin_type();
     if coin_type != expected_coin_type {
         return Err(VotingError::InvalidInput {
@@ -416,7 +381,6 @@ pub(crate) fn build_governance_pczt(
 
     let mut rng = rand::thread_rng();
     let mut crypto_rng = voting_crypto_deps::rand::rngs::OsRng;
-    let shielded_protocol = VotingShieldedProtocol::for_branch_id(branch_id)?;
     let bundle_version = shielded_protocol.bundle_version();
 
     // --- Compute governance nullifiers ---
@@ -705,7 +669,7 @@ pub(crate) fn build_governance_pczt(
         let ironwood_bundle = Some(pczt_bundle);
         let orchard_bundle = None;
 
-        // The snapshot branch only selects note eligibility above. TX1 signs
+        // The snapshot height only selects note eligibility above. TX1 signs
         // under the fixed profile that vote-chain verifiers reconstruct.
         let parts = PcztParts {
             params: consensus_network,
@@ -915,6 +879,7 @@ mod tests {
         Action,
     };
     use voting_crypto_deps::zcash_note_encryption::try_output_recovery_with_ovk;
+    use zcash_protocol::consensus::BranchId;
 
     fn mock_note() -> NoteInfo {
         NoteInfo {
@@ -956,7 +921,6 @@ mod tests {
             VotingNetwork::Regtest,
             &mock_fvk_bytes(),
             &mock_hotkey_address(),
-            u32::from(BranchId::Nu6_3),
             VotingNetwork::Regtest.network_type().coin_type(),
             &MOCK_SEED_FP,
             MOCK_ACCOUNT,
@@ -1039,8 +1003,6 @@ mod tests {
 
     // --- build_governance_pczt tests ---
 
-    /// NU5 mainnet consensus branch ID
-    const NU5_BRANCH_ID: u32 = 0xC2D6D0B4;
     /// Mock seed fingerprint (32 bytes)
     const MOCK_SEED_FP: [u8; 32] = [0xAA; 32];
     /// Mock account index
@@ -1164,34 +1126,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_governance_pczt_rejects_nu6_3_branch_before_activation() {
-        let mut params = mock_params();
-        params.snapshot_height = u64::from(crate::types::REGTEST_NU6_3_ACTIVATION_HEIGHT) - 1;
-
-        let err = build_governance_pczt(
-            &[mock_note()],
-            &params,
-            VotingNetwork::Regtest,
-            &mock_fvk_bytes(),
-            &mock_hotkey_address(),
-            u32::from(BranchId::Nu6_3),
-            VotingNetwork::Regtest.network_type().coin_type(),
-            &MOCK_SEED_FP,
-            MOCK_ACCOUNT,
-            "Test Round",
-            &sample_padded_note_secrets(1).unwrap(),
-            None,
-            false,
-        )
-        .unwrap_err();
-
-        assert!(
-            err.to_string().contains("does not match snapshot height"),
-            "{err}"
-        );
-    }
-
-    #[test]
     fn test_build_governance_pczt_uses_ironwood_for_nu6_3() {
         let result = build_mock_nu6_3_pczt(&[mock_note()]);
 
@@ -1256,12 +1190,11 @@ mod tests {
     fn test_build_governance_pczt_rejects_coin_type_network_mismatch() {
         let err = build_governance_pczt(
             &[mock_note()],
-            &mock_params(),
-            VotingNetwork::Mainnet,
+            &mock_nu6_3_params(),
+            VotingNetwork::Regtest,
             &mock_fvk_bytes(),
             &mock_hotkey_address(),
-            NU5_BRANCH_ID,
-            VotingNetwork::Testnet.network_type().coin_type(),
+            VotingNetwork::Mainnet.network_type().coin_type(),
             &MOCK_SEED_FP,
             MOCK_ACCOUNT,
             "Test Round",

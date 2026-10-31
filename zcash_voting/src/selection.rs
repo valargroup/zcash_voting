@@ -546,7 +546,7 @@ where
         });
     }
 
-    let voting_protocol = VotingShieldedProtocol::for_height(db.params(), snapshot_block_height)?;
+    let voting_protocol = VotingShieldedProtocol::for_height(db.params(), snapshot_height)?;
     let voting_note_version = voting_protocol.note_version();
     let selected = db
         .get_unspent_ironwood_notes_at_historical_height(account.id(), snapshot_block_height)

@@ -13,7 +13,6 @@ pub(super) fn request(
 ) -> Result<KeystoneSigningRequest, VotingError> {
     let scoped_db = voting_db.scoped(&voting_db.wallet_id())?;
     let voting_db = &scoped_db;
-    prepared.validate_snapshot_branch_id_provider()?;
     // The setup lease can return Busy during background setup. A later retry
     // reloads the winner's exact PCZT without waiting for proof generation.
     if voting_db.delegation_phase(&prepared.round_id, prepared.bundle_index)?

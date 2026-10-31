@@ -47,26 +47,6 @@ fn nullifier_bytes_to_base(bytes: &[u8], label: &str) -> Result<pallas::Base, Vo
     })
 }
 
-fn validate_consensus_branch_id_for_round(
-    params: &VotingRoundParams,
-    stored_network: Network,
-    keys: &DelegationKeys,
-    consensus_branch_id: u32,
-) -> Result<(), VotingError> {
-    validate_delegation_keys_for_round(params, stored_network, keys)?;
-
-    let expected = crate::lwd::branch_id_for_height(stored_network, params.snapshot_height)?;
-    if consensus_branch_id != expected {
-        return Err(VotingError::InvalidInput {
-            message: format!(
-                "consensus_branch_id 0x{consensus_branch_id:08X} does not match snapshot height {} branch id 0x{expected:08X}",
-                params.snapshot_height
-            ),
-        });
-    }
-    Ok(())
-}
-
 fn validate_delegation_keys_for_round(
     params: &VotingRoundParams,
     stored_network: Network,
@@ -1229,7 +1209,9 @@ impl VotingDb {
     /// Computes governance values and builds a PCZT whose governance action
     /// belongs to the selected shielded protocol.
     ///
-    /// - `consensus_branch_id`: branch ID active at the stored round snapshot height
+    /// - `consensus_branch_id`: ignored, retained for source compatibility.
+    ///   Eligibility uses the stored round network and snapshot height. TX1
+    ///   always uses the fixed signing profile described in [`crate::tx1`].
     /// - `keys`: wallet account and voting hotkey metadata for the delegation PCZT
     pub fn build_governance_pczt(
         &self,
@@ -1237,7 +1219,7 @@ impl VotingDb {
         bundle_index: u32,
         notes: &[NoteInfo],
         keys: &DelegationKeys,
-        consensus_branch_id: u32,
+        _consensus_branch_id: u32,
     ) -> Result<GovernancePczt, VotingError> {
         let wallet_id = self.wallet_id();
         // Every setup writer takes its bundle's lifecycle gate before
@@ -1249,13 +1231,13 @@ impl VotingDb {
             let conn = self.conn();
             let (params, stored_network) =
                 queries::load_round_params_with_network(&conn, round_id, &wallet_id)?;
-            validate_consensus_branch_id_for_round(
-                &params,
-                stored_network,
-                keys,
-                consensus_branch_id,
-            )?;
+            validate_delegation_keys_for_round(&params, stored_network, keys)?;
             queries::require_bundle_notes(&conn, round_id, &wallet_id, bundle_index, notes)?;
+            // Reject ineligible snapshots before setup or padded secrets can change.
+            crate::shielded_protocol::VotingShieldedProtocol::for_height(
+                &stored_network,
+                params.snapshot_height,
+            )?;
             (params, stored_network)
         };
         // Before any stored setup is reused, make sure it belongs to the hotkey
@@ -1280,7 +1262,6 @@ impl VotingDb {
             stored_network,
             &keys.fvk_bytes,
             &keys.hotkey_raw_address,
-            consensus_branch_id,
             keys.coin_type,
             &keys.seed_fingerprint,
             keys.account_index,
@@ -5584,8 +5565,9 @@ mod tests {
         assert!(err.to_string().contains("note identity mismatch"));
     }
 
+    /// Ignoring a branch hint must not allow snapshots before Ironwood exists.
     #[test]
-    fn test_build_governance_pczt_rejects_branch_mismatch_before_padded_secrets() {
+    fn test_build_governance_pczt_rejects_pre_ironwood_snapshot_before_padded_secrets() {
         use orchard::keys::{FullViewingKey, SpendingKey};
 
         let db = test_db();
@@ -5608,7 +5590,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            err.to_string().contains("does not match snapshot height"),
+            err.to_string().contains("before NU6.3/Ironwood activation"),
             "{err}"
         );
         let conn = db.conn();
@@ -5941,7 +5923,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            err.to_string().contains("does not match snapshot height"),
+            err.to_string().contains("before NU6.3/Ironwood activation"),
             "{err}"
         );
         let conn = db.conn();

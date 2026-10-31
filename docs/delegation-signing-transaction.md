@@ -110,8 +110,8 @@ The wallet MUST fix the following inputs before building TX1:
 | Input | Requirement |
 | --- | --- |
 | Network | The network stored for the voting round. |
-| Snapshot height | The height at which eligible notes and witnesses were selected. |
-| Consensus branch ID | The branch active at the snapshot height. It MUST match the network and height, and MUST be NU6.3 or NU7. It selects note eligibility only, not the TX1 signing branch. |
+| Snapshot height | The height at which eligible notes and witnesses were selected. NU6.3 MUST be active on the stored round network at this height. |
+| Legacy consensus branch ID argument | Ignored by delegation setup. Retained for source compatibility only; it selects neither eligible notes nor the TX1 signing branch. |
 | Account FVK | The 96-byte Ironwood-capable full viewing key for the account that owns the eligible notes. |
 | Seed fingerprint | The ZIP-32 fingerprint used by an external signer to select the correct seed. |
 | Account index | The ZIP-32 account index for the spending key. |
@@ -278,6 +278,20 @@ The wallet MUST construct the PCZT global fields as follows:
 | Sapling bundle | Absent |
 | Orchard bundle | Absent |
 | Ironwood bundle | Present, V3 |
+
+Snapshot eligibility depends on NU6.3 activation, not an allowlist of later
+branch IDs. The wallet still selects only Ironwood V3 notes, validates witnesses
+against the round's commitment root, and uses the existing voting circuit.
+For example, a newer wallet may supply a branch ID unknown to this library;
+setup still builds the same V6 / NU6.3 authorization for an eligible snapshot.
+No vote-chain upgrade is needed for this behavior.
+
+This is compatibility with a branch-ID change alone. It does not add support
+for changes to note formats, commitment trees, or circuits, or make an old
+wallet capable of scanning every future transaction format. Adopting a newer
+protocol dependency can still require a library release. Legacy branch
+providers remain callable and their errors still propagate, but their values
+are not validated or used for authorization.
 
 The signing branch is fixed rather than taken from the snapshot height.
 Vote-chain verifiers rebuild the sighash from the submitted effecting data
