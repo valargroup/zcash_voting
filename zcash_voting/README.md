@@ -4,7 +4,10 @@ Client-side library for integrating [Zcash shielded voting](https://github.com/v
 
 ## Usage
 
-**Upgrading from v5?** See [Migrating from 5.1 to 5.2](../docs/migrating-to-common-v3.md).
+**Upgrading from 5.2?** See [Migrating from 5.2 to 5.3](../docs/migrating-to-5.3.md).
+
+**Upgrading from 5.0 or 5.1?** See [Migrating from 5.1 to 5.2](../docs/migrating-to-common-v3.md),
+then [Migrating from 5.2 to 5.3](../docs/migrating-to-5.3.md).
 
 **Upgrading from v3.x or v4.0.x?** Read
 [Migrating to v5](../docs/migrating-to-v5.md) for release-specific prerequisites,

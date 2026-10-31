@@ -30,7 +30,7 @@ The 5.3.x line moves the wallet facade to `zakura-wallet-lib 0.1.0-rc9.6`. Its
 `lrz` backend requires the stable upstream wallet releases, and its Zakura
 backend requires `zakura-client-backend` and `zakura-client-sqlite`
 `0.1.0-rc9.6`, whose APIs and wallet database migrations differ from the
-rc9.2 releases 5.2.x pins. Zakura clients opt in by moving those packages
+rc9.2 releases that 5.2.x's facade was built against. Zakura clients opt in by moving those packages
 together. Staying on 5.2.x keeps the rc9.2 facade but not, by itself, earlier
 wallet crates, because the facade's pre-release requirements accept rc9.6.
 See [Migrating from 5.2 to 5.3](migrating-to-5.3.md). Do not backport this

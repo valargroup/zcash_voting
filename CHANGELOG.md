@@ -25,11 +25,12 @@ voting-sidecar schema, and Rust 1.97 minimum are unchanged. See
   Move direct dependencies and Git patches for those crates in the same change.
   `zcash_voting` runs no wallet migrations, so back up and qualify existing
   wallet databases with your own wallet upgrade before adopting this release.
-- `zcash_voting::backend` re-exports the wallet crates, whose APIs follow
-  `zakura-wallet-lib`'s versioning. The Zakura crates are pre-releases that
-  Cargo treats as compatible across `0.1.0-rc9.N`, so a fresh resolution of
-  5.2.0 already selects rc9.6. Pin wallet crates or keep your lockfile to stay
-  on an earlier wallet stack, whichever `zcash_voting` release you use.
+- This ships as a minor release because it raises minimums within ranges that
+  5.2.0 already accepts. The rc9.2 facade's pre-release requirements admit
+  newer `0.1.0-rc9.N` wallet crates, so a fresh resolution of 5.2.0 already
+  selects rc9.6. To keep an earlier wallet stack, stay on 5.2.x and keep your
+  wallet crate pins or lockfile. 5.3.0 cannot resolve with wallet crates older
+  than rc9.6.
 
 ### Changed
 
