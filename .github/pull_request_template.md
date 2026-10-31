@@ -15,8 +15,10 @@ Apply each label whose maintenance line should receive this change:
 - `A:backport/v5.0.x` for `release/v5.0.x`
 - `A:backport/v5.1.x` for `release/v5.1.x`
 - `A:backport/v5.2.x` for `release/v5.2.x`
+- `A:backport/v5.3.x` for `release/v5.3.x`
 
 Keep the Common 4 and LRZ wallet dependency upgrade off the 5.1.x line.
+Keep the `zakura-wallet-lib 0.1.0-rc9.6` upgrade off the 5.2.x line.
 
 Otherwise, leave the target labels unset. See
 [Release branches and backports](docs/release-branches.md).

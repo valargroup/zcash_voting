@@ -120,7 +120,8 @@ wholesale as a side effect of an unrelated change.
 
 `main` is the development line for the next release. Shipped release series are
 maintained on release branches. The supported lines are currently
-`release/v3.x`, `release/v4.0.x`, `release/v5.0.x`, and `release/v5.1.x`.
+`release/v3.x`, `release/v4.0.x`, `release/v5.0.x`, `release/v5.1.x`,
+`release/v5.2.x`, and `release/v5.3.x`.
 V3 retains its historical branch name, while new lines use `release/vMAJOR.MINOR.x`.
 
 Do not push a fix directly to a maintenance branch. Land it on `main` first,

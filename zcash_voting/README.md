@@ -4,7 +4,10 @@ Client-side library for integrating [Zcash shielded voting](https://github.com/v
 
 ## Usage
 
-**Upgrading from v5?** See [Migrating from 5.1 to 5.2](../docs/migrating-to-common-v3.md).
+**Upgrading from 5.2?** See [Migrating from 5.2 to 5.3](../docs/migrating-to-5.3.md).
+
+**Upgrading from 5.0 or 5.1?** See [Migrating from 5.1 to 5.2](../docs/migrating-to-common-v3.md),
+then [Migrating from 5.2 to 5.3](../docs/migrating-to-5.3.md).
 
 **Upgrading from v3.x or v4.0.x?** Read
 [Migrating to v5](../docs/migrating-to-v5.md) for release-specific prerequisites,
@@ -395,7 +398,7 @@ two complete backend modes: `zakura` and `lrz`. Unlike its former generic
 capability selectors, those features never weak-reference both optional
 backend families. External-consumer regression tests verify that selecting
 `zcash_voting/lrz` puts no Zakura forks in Cargo lockfiles or resolved
-metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc9.2`.
+metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc9.6`.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.
@@ -404,9 +407,11 @@ This release requires Rust 1.97 or newer.
 The default backend uses Zakura Common 4.0.0, `voting-circuits 0.14.0`,
 `voting-crypto-deps 0.4.0`, `vote-commitment-tree 0.8.1`, and
 `vote-commitment-tree-client 0.10.1`. The alternate backend selects upstream
-`orchard 0.16` and matching wallet prereleases through the same facade.
-See the [5.2 migration guide](../docs/migrating-to-common-v3.md) for the complete
-coordinated dependency matrix and type-boundary guidance.
+`orchard 0.16` and the stable upstream wallet releases through the same facade.
+See [Migrating from 5.2 to 5.3](../docs/migrating-to-5.3.md) for the current
+dependency matrices and wallet database guidance, and the
+[5.2 migration guide](../docs/migrating-to-common-v3.md) for type-boundary
+guidance when moving from 5.1.
 
 ## Downstream test fixtures
 

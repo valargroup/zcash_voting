@@ -22,7 +22,7 @@ voting-crypto-deps = { version = "=0.4.0", default-features = false }
 # Zakura 4.0 publishes protocol as `zakura-protocol` with lib name `zcash_protocol`.
 # Packages select one of these through the `zakura` / `lrz` features.
 zcash_protocol = { version = "=4.0.0", package = "zakura-protocol", default-features = false }
-lrz_zcash_protocol = { version = "0.11.0-pre.0", package = "zcash_protocol" }
+lrz_zcash_protocol = { version = "0.11", package = "zcash_protocol" }
 
 [profile.test.package.imt-tree]
 opt-level = 3

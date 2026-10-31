@@ -27,11 +27,14 @@ polling, or recovery, read
 
 `main` is the development line for the next release. Shipped release series are
 maintained on release branches (`release/v3.x`, `release/v4.0.x`,
-`release/v5.0.x`, `release/v5.1.x`, and `release/v5.2.x` are currently supported). Semver-compatible
+`release/v5.0.x`, `release/v5.1.x`, `release/v5.2.x`, and `release/v5.3.x` are currently
+supported). Semver-compatible
 fixes reach them through reviewed automated backports rather than direct pushes. New lines
 use the `release/vMAJOR.MINOR.x` naming pattern. Read
 [Release branches and backports](docs/release-branches.md) before deciding where
 a change lands or applying a backport label.
 
-Keep the coordinated Common 4 and LRZ wallet dependency upgrade on 5.2.x.
+Keep the coordinated Common 4 and LRZ wallet dependency upgrade on 5.2.x and later.
+Keep the `zakura-wallet-lib 0.1.0-rc9.6` upgrade on 5.3.x, since it changes the
+Zakura wallet types that 5.2.x clients build against.
 The 5.1.x line retains its existing dependencies for client compatibility.
