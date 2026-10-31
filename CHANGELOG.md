@@ -6,8 +6,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-<<<<<<< HEAD
-=======
 ### Changed
 
 - Accept the NU7 consensus branch for Ironwood shielded voting notes and
@@ -20,7 +18,6 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   unused direct dependencies and use the standard library for lazy empty roots.
   Public APIs, tree hashes, and wire formats remain unchanged.
 
->>>>>>> c8cc006 (Accept NU7 for Ironwood voting with a fixed TX1 signing profile (#385))
 ## v5.2.0-rc.2
 
 Version 5.2.0-rc.2 moves the default backend from Zakura Common v3 to Common
