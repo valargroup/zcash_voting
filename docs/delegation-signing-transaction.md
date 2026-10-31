@@ -111,7 +111,7 @@ The wallet MUST fix the following inputs before building TX1:
 | --- | --- |
 | Network | The network stored for the voting round. |
 | Snapshot height | The height at which eligible notes and witnesses were selected. |
-| Consensus branch ID | The branch active at the snapshot height. It MUST match the network and height. |
+| Consensus branch ID | The branch active at the snapshot height. It MUST match the network and height, and MUST be NU6.3 or NU7. It selects note eligibility only, not the TX1 signing branch. |
 | Account FVK | The 96-byte Ironwood-capable full viewing key for the account that owns the eligible notes. |
 | Seed fingerprint | The ZIP-32 fingerprint used by an external signer to select the correct seed. |
 | Account index | The ZIP-32 account index for the spending key. |
@@ -270,8 +270,8 @@ The wallet MUST construct the PCZT global fields as follows:
 
 | Field | Value |
 | --- | --- |
-| Transaction version | `TxVersion::suggested_for_branch(branch_id)` |
-| Consensus branch ID | Branch active at the voting snapshot height |
+| Transaction version | V6 |
+| Consensus branch ID | NU6.3 (`0x37a5165b`), for every eligible snapshot |
 | Lock time | `0` |
 | Expiry height | `0` |
 | Transparent bundle | Absent |
@@ -279,8 +279,12 @@ The wallet MUST construct the PCZT global fields as follows:
 | Orchard bundle | Absent |
 | Ironwood bundle | Present, V3 |
 
-The current library accepts only the NU6.3 branch, so the suggested
-transaction version resolves to V6.
+The signing branch is fixed rather than taken from the snapshot height.
+Vote-chain verifiers rebuild the sighash from the submitted effecting data
+with this fixed profile and no branch input, so a TX1 built on the NU7 branch
+would carry a signature the chain rejects. TX1 never reaches consensus, so the
+branch ID only separates the signature domain. A different signing branch
+needs a new TX1 effects version that the chain accepts first.
 
 The zero expiry height is part of the PCZT signing digest only; TX1 never
 becomes a transaction whose expiry could be evaluated by consensus.

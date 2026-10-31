@@ -26,6 +26,7 @@ use zcash_protocol::consensus::{
 
 use crate::governance::{self, BUNDLE_NOTE_SLOTS};
 use crate::shielded_protocol::VotingShieldedProtocol;
+use crate::tx1::TX1_CONSENSUS_BRANCH_ID;
 use crate::types::{
     validate_notes, validate_round_params, GovernancePczt, Network as VotingNetwork, NoteInfo,
     VotingError, VotingRoundParams,
@@ -334,7 +335,9 @@ fn validate_consensus_branch_id(
 /// - `network`: network that owns the persisted voting round snapshot.
 /// - `fvk_bytes`: 96-byte orchard FullViewingKey (ak[32] || nk[32] || rivk[32])
 /// - `hotkey_raw_address`: 43-byte hotkey raw orchard address
-/// - `consensus_branch_id`: network consensus branch ID active at the snapshot height.
+/// - `consensus_branch_id`: network consensus branch ID active at the snapshot
+///   height. It selects note eligibility only. The PCZT itself always uses
+///   [`TX1_CONSENSUS_BRANCH_ID`].
 /// - `coin_type`: BIP-44 coin type (133 for mainnet, 1 for testnet/regtest)
 /// - `seed_fingerprint`: 32-byte ZIP-32 seed fingerprint (Keystone needs this to
 ///   identify which seed to derive the spending key from)
@@ -702,10 +705,12 @@ pub(crate) fn build_governance_pczt(
         let ironwood_bundle = Some(pczt_bundle);
         let orchard_bundle = None;
 
+        // The snapshot branch only selects note eligibility above. TX1 signs
+        // under the fixed profile that vote-chain verifiers reconstruct.
         let parts = PcztParts {
             params: consensus_network,
-            version: TxVersion::suggested_for_branch(branch_id),
-            consensus_branch_id: branch_id,
+            version: TxVersion::suggested_for_branch(TX1_CONSENSUS_BRANCH_ID),
+            consensus_branch_id: TX1_CONSENSUS_BRANCH_ID,
             // Keystone's determine_lock_time returns global.lock_time() for shielded-only PCZTs
             // (no transparent inputs). Without a lock_time, it returns None → error.
             lock_time: 0,
@@ -897,6 +902,8 @@ pub fn extract_spend_auth_sig(
 mod tests {
     #[path = "output_recovery.rs"]
     mod output_recovery;
+    #[path = "tx1_profile.rs"]
+    mod tx1_profile;
 
     use super::*;
     use orchard::{
