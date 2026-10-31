@@ -213,7 +213,10 @@ fn retry_backoff(attempt: u32) -> Duration {
     Duration::from_millis(500) * attempt
 }
 
-/// Resolves the consensus branch ID active at `height` for `network`.
+/// Resolves the branch ID using this build's known upgrade schedule.
+///
+/// An unknown future upgrade resolves to the last known branch. This helper is
+/// informational; voting eligibility and TX1 signing do not depend on its value.
 pub fn branch_id_for_height(network: Network, height: u64) -> Result<u32, VotingError> {
     let height = u32::try_from(height)
         .map(BlockHeight::from_u32)

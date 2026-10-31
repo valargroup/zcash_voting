@@ -159,7 +159,7 @@ where
             })?;
         let snapshot_block_height = BlockHeight::from_u32(snapshot_height);
         let voting_protocol =
-            VotingShieldedProtocol::for_height(&stored_network, snapshot_block_height)?;
+            VotingShieldedProtocol::for_height(&stored_network, params.snapshot_height)?;
 
         let note_commitment_tree: CommitmentTree<
             MerkleHashOrchard,

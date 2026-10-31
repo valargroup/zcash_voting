@@ -276,19 +276,22 @@ pub enum DelegationProgress {
 #[deprecated(note = "use DelegationProgress")]
 pub type DelegationStage = DelegationProgress;
 
-/// Supplies the consensus branch id used for a delegation PCZT.
+/// Supplies an informational consensus branch ID for legacy integrations.
+///
+/// Delegation setup ignores the returned value. Provider errors still propagate;
+/// eligibility comes from the stored snapshot and TX1 uses a fixed signing profile.
 pub trait BranchIdProvider {
     fn consensus_branch_id(&self) -> Result<u32, VotingError>;
 }
 
-/// Resolved branch-id provider for delegation PCZT construction.
+/// Resolved informational branch ID retained for source compatibility.
 #[derive(Clone, Debug)]
 pub struct LightwalletdBranchIdProvider {
     resolved: u32,
 }
 
 impl LightwalletdBranchIdProvider {
-    /// Resolves the branch id active at the voting snapshot height.
+    /// Resolves the snapshot branch using this build's known upgrade schedule.
     pub fn for_height(network: Network, height: u64) -> Result<Self, VotingError> {
         let resolved = crate::lwd::branch_id_for_height(network, height)?;
         Ok(Self { resolved })
@@ -297,7 +300,7 @@ impl LightwalletdBranchIdProvider {
     /// Fetches the current lightwalletd tip and resolves the active branch id.
     ///
     /// Round delegation setup should use [`Self::for_height`] with the round
-    /// snapshot height so PCZT construction matches note selection and witnesses.
+    /// snapshot height. This informational value does not select the TX1 profile.
     pub async fn resolve(lightwalletd_url: &str, network: Network) -> Result<Self, VotingError> {
         let branch_height = crate::lwd::latest_block_height_with_retry(lightwalletd_url).await?;
         let resolved = crate::lwd::branch_id_for_height(network, branch_height)?;
@@ -504,7 +507,7 @@ impl DelegationLwdInputs {
     /// # Errors
     ///
     /// Returns [`VotingError::InvalidInput`] when the round params are invalid
-    /// or no consensus branch id is known for the snapshot height.
+    /// or the snapshot height does not fit in `u32`.
     pub fn from_anchor_tree_state(
         network: Network,
         round_params: crate::VotingRoundParams,
@@ -1053,24 +1056,6 @@ pub struct PreparedDelegationReport {
 }
 
 impl PreparedDelegationBundle {
-    fn snapshot_branch_id_provider(&self) -> Result<LightwalletdBranchIdProvider, VotingError> {
-        LightwalletdBranchIdProvider::for_height(self.network, self.round_params.snapshot_height)
-    }
-
-    fn validate_snapshot_branch_id_provider(&self) -> Result<(), VotingError> {
-        let expected = self.snapshot_branch_id_provider()?.consensus_branch_id()?;
-        let actual = self.branch_id_provider.consensus_branch_id()?;
-        if actual != expected {
-            return Err(VotingError::InvalidInput {
-                message: format!(
-                    "delegation branch id 0x{actual:08X} does not match snapshot height {} branch id 0x{expected:08X}",
-                    self.round_params.snapshot_height
-                ),
-            });
-        }
-        Ok(())
-    }
-
     /// Returns the quantized weight represented by this prepared bundle.
     ///
     /// This is the weight used in delegation payload metadata. Display text may
@@ -1268,19 +1253,16 @@ impl PreparedDelegationBundle {
         observations.bind_round_id(&self.round_id);
         let observation_stage = observations.stage("delegation::setup");
         let observations = observation_stage.scope();
-        let operation_result: Result<DelegationSetup, VotingError> = (|| {
-            self.validate_snapshot_branch_id_provider()?;
-            crate::delegate::observe_setup(
-                voting_db,
-                &self.round_id,
-                self.bundle_index,
-                &self.bundle_note_infos,
-                &self.delegation_keys,
-                &self.branch_id_provider,
-                stages,
-                observations,
-            )
-        })();
+        let operation_result = crate::delegate::observe_setup(
+            voting_db,
+            &self.round_id,
+            self.bundle_index,
+            &self.bundle_note_infos,
+            &self.delegation_keys,
+            &self.branch_id_provider,
+            stages,
+            observations,
+        );
         // `SetupAlreadyPersisted` on a tolerated field is reuse, not failure;
         // see `delegation_setup_outcome`.
         let outcome = crate::observability::delegation_setup_outcome(&operation_result);
@@ -1687,6 +1669,7 @@ impl PreparedDelegationBundle {
     /// A stored setup for another hotkey returns
     /// [`VotingError::DelegationTargetMismatch`]. Request creation preserves it;
     /// call [`Self::setup`] to explicitly replace an unusable unbroadcast setup.
+    /// The legacy branch-ID hint is ignored for both creation and reload.
     pub fn keystone_request(
         &self,
         voting_db: &VotingDb,
@@ -1814,7 +1797,8 @@ fn parse_account_uuid(account_uuid: &str) -> Result<AccountUuid, VotingError> {
 ///
 /// The bundle must already exist via [`VotingDb::ensure_bundles`]. The returned
 /// sighash is the exact message that an external signer must sign. Keys created
-/// from a public round-bound target must match the stored round.
+/// from a public round-bound target must match the stored round. The branch
+/// provider's value is ignored, but its errors still propagate.
 pub fn setup(
     db: &VotingDb,
     round_id: &str,
@@ -2527,6 +2511,7 @@ fn array64_slice(label: &str, value: &[u8]) -> Result<[u8; 64], VotingError> {
 
 #[cfg(test)]
 mod tests {
+    mod branch_independence;
     mod observability;
     mod pipeline_observability;
     mod setup_observability;
@@ -3348,25 +3333,6 @@ mod tests {
             provider.consensus_branch_id().unwrap(),
             TESTNET_NU6_BRANCH_ID
         );
-    }
-
-    #[test]
-    fn prepared_setup_rejects_branch_id_that_does_not_match_snapshot_height() {
-        let voting_db = VotingDb::open_in_memory().unwrap();
-        let mut prepared =
-            prepared_bundle_fixture(vec![note_info(0, crate::governance::BALLOT_DIVISOR)]);
-        prepared.network = Network::Regtest;
-        prepared.round_params.snapshot_height =
-            u64::from(crate::types::REGTEST_NU6_3_ACTIVATION_HEIGHT) - 1;
-        prepared.branch_id_provider =
-            LightwalletdBranchIdProvider::resolved(u32::from(BranchId::Nu6_3));
-
-        let err = prepared
-            .setup(&voting_db, &crate::types::NoopProgressReporter)
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("does not match snapshot height"));
     }
 
     #[test]
