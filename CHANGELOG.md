@@ -9,8 +9,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 ## v5.3.0
 
 Version 5.3.0 moves the wallet facade from `zakura-wallet-lib 0.1.0-rc9.2` to
-`0.1.0-rc9.6`. The voting lifecycle, wire formats, vote-tree encoding,
-voting-sidecar schema, and Rust 1.97 minimum are unchanged.
+`0.1.0-rc9.6`, which raises the minimum wallet crate versions on both
+backends. The voting lifecycle, wire formats, vote-tree encoding,
+voting-sidecar schema, and Rust 1.97 minimum are unchanged. See
+[Migrating from 5.2 to 5.3](docs/migrating-to-5.3.md).
 
 - LRZ clients: the `lrz` backend now requires the stable upstream releases
   `zcash_primitives 0.31`, `zcash_protocol 0.11`, `zcash_client_backend 0.25`,
@@ -19,9 +21,15 @@ voting-sidecar schema, and Rust 1.97 minimum are unchanged.
   no other change.
 - Zakura clients: the default backend now requires `zakura-client-backend` and
   `zakura-client-sqlite` `0.1.0-rc9.6`. Those releases change wallet APIs and
-  add wallet database migrations, so move direct dependencies on them together
-  with this release and run the wallet's own migration path before opening a
-  `WalletDb` for voting. Clients that are not ready can stay on 5.2.x.
+  add wallet database migrations, including the irreversible `one_time_reset`.
+  Move direct dependencies and Git patches for those crates in the same change.
+  `zcash_voting` runs no wallet migrations, so back up and qualify existing
+  wallet databases with your own wallet upgrade before adopting this release.
+- `zcash_voting::backend` re-exports the wallet crates, whose APIs follow
+  `zakura-wallet-lib`'s versioning. The Zakura crates are pre-releases that
+  Cargo treats as compatible across `0.1.0-rc9.N`, so a fresh resolution of
+  5.2.0 already selects rc9.6. Pin wallet crates or keep your lockfile to stay
+  on an earlier wallet stack, whichever `zcash_voting` release you use.
 
 ### Changed
 

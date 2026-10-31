@@ -404,9 +404,11 @@ This release requires Rust 1.97 or newer.
 The default backend uses Zakura Common 4.0.0, `voting-circuits 0.14.0`,
 `voting-crypto-deps 0.4.0`, `vote-commitment-tree 0.8.1`, and
 `vote-commitment-tree-client 0.10.1`. The alternate backend selects upstream
-`orchard 0.16` and matching wallet prereleases through the same facade.
-See the [5.2 migration guide](../docs/migrating-to-common-v3.md) for the complete
-coordinated dependency matrix and type-boundary guidance.
+`orchard 0.16` and the stable upstream wallet releases through the same facade.
+See [Migrating from 5.2 to 5.3](../docs/migrating-to-5.3.md) for the current
+dependency matrices and wallet database guidance, and the
+[5.2 migration guide](../docs/migrating-to-common-v3.md) for type-boundary
+guidance when moving from 5.1.
 
 ## Downstream test fixtures
 
