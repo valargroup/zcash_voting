@@ -8,6 +8,10 @@ The default `zakura` feature uses the stable Zakura 1.0 cryptography family.
 An LRZ consumer uses `default-features = false, features = ["lrz"]`. The two
 backend features are mutually exclusive.
 
+Standalone library builds select only the field and Poseidon dependencies used
+by the tree. They do not enable the full Orchard wallet cryptography bundle.
+Circuit compatibility tests enable that bundle through dev-dependencies.
+
 ## Usage
 
 Sibling crate of [`zcash_voting`](../zcash_voting); typically consumed transitively by wallets that pull that top-level crate. Standalone usage:
