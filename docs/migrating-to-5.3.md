@@ -69,9 +69,11 @@ resolve with 5.3.
 
 The rc9.3 through rc9.6 releases change wallet APIs. `zcash_voting` itself does
 not use the changed APIs, so this matters only if your application calls them
-directly. The main adaptations are:
+directly. Some of the earlier APIs below were themselves added in rc9.4, so
+apply the rows that match the calls your application makes. The main
+adaptations are:
 
-| Before (rc9.2) | From rc9.6 |
+| Earlier rc9 releases | From rc9.6 |
 | --- | --- |
 | Scanning with one-time IVKs (`scan_cached_blocks_with_one_time_ivks`, `decrypt_transaction_with_one_time_ivks`, `OneTimeIvkRead`, `OneTimeIvkWrite`) | Ordinary sync scans with account keys. Private payment recovery runs through the bounded PIR lookup queue in `one_time_ivk::restore`. |
 | `WitnessRequest`, `WitnessAnswer`, `RecoveryStatus::witnesses`, `WalletDb::record_one_time_witness`, `WalletDb::refresh_one_time_witness` | Witness payloads arrive with each lookup record and are stored by `WalletDb::record_one_time_lookup`. |
