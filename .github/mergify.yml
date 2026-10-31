@@ -51,3 +51,12 @@ pull_request_rules:
       backport:
         branches:
           - release/v5.2.x
+
+  - name: backport marked changes to release/v5.3.x
+    conditions:
+      - base=main
+      - label=A:backport/v5.3.x
+    actions:
+      backport:
+        branches:
+          - release/v5.3.x

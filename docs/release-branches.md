@@ -12,8 +12,9 @@ The currently supported maintenance lines are:
 - `release/v3.x`, selected by `A:backport/v3.x`;
 - `release/v4.0.x`, selected by `A:backport/v4.0.x`;
 - `release/v5.0.x`, selected by `A:backport/v5.0.x`;
-- `release/v5.1.x`, selected by `A:backport/v5.1.x`; and
-- `release/v5.2.x`, selected by `A:backport/v5.2.x`.
+- `release/v5.1.x`, selected by `A:backport/v5.1.x`;
+- `release/v5.2.x`, selected by `A:backport/v5.2.x`; and
+- `release/v5.3.x`, selected by `A:backport/v5.3.x`.
 
 The 5.1.x line retains its existing dependency family for compatibility.
 The 5.2.x line introduces the coordinated Zakura Common and LRZ wallet
@@ -24,6 +25,13 @@ its minor version number: public dependency types and the MSRV change.
 LRZ clients must validate their integration, including existing wallet databases,
 before adopting it. See [the migration guide](migrating-to-common-v3.md).
 Do not backport this dependency upgrade to 5.1.x.
+
+The 5.3.x line moves the wallet facade to `zakura-wallet-lib 0.1.0-rc9.6`. Its
+`lrz` backend requires the stable upstream wallet releases, and its Zakura
+backend requires `zakura-client-backend` and `zakura-client-sqlite`
+`0.1.0-rc9.6`, whose APIs and wallet database migrations differ from the
+rc9.2 releases 5.2.x uses. Zakura clients opt in by moving those packages
+together. Do not backport this upgrade to 5.2.x.
 
 Cut a maintenance branch from the chosen release commit before the first release
 candidate on that line. Every release tag for the line should be reachable from

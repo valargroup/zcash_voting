@@ -395,7 +395,7 @@ two complete backend modes: `zakura` and `lrz`. Unlike its former generic
 capability selectors, those features never weak-reference both optional
 backend families. External-consumer regression tests verify that selecting
 `zcash_voting/lrz` puts no Zakura forks in Cargo lockfiles or resolved
-metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc9.2`.
+metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc9.6`.
 
 `Cargo.toml` is the source of truth for version and feature requirements, and
 `Cargo.lock` records the exact package sources and versions used by this branch.

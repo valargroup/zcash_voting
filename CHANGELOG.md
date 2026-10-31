@@ -6,6 +6,28 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.3.0
+
+Version 5.3.0 moves the wallet facade from `zakura-wallet-lib 0.1.0-rc9.2` to
+`0.1.0-rc9.6`. The voting lifecycle, wire formats, vote-tree encoding,
+voting-sidecar schema, and Rust 1.97 minimum are unchanged.
+
+- LRZ clients: the `lrz` backend now requires the stable upstream releases
+  `zcash_primitives 0.31`, `zcash_protocol 0.11`, `zcash_client_backend 0.25`,
+  `zcash_client_sqlite 0.23`, `zcash_keys 0.17`, and `pczt 0.10` instead of
+  accepting their pre-releases. Clients already on those stable releases need
+  no other change.
+- Zakura clients: the default backend now requires `zakura-client-backend` and
+  `zakura-client-sqlite` `0.1.0-rc9.6`. Those releases change wallet APIs and
+  add wallet database migrations, so move direct dependencies on them together
+  with this release and run the wallet's own migration path before opening a
+  `WalletDb` for voting. Clients that are not ready can stay on 5.2.x.
+
+### Changed
+
+- Use `zakura-wallet-lib 0.1.0-rc9.6`.
+- Require `zcash_protocol 0.11` for the `lrz` backend.
+
 ## v5.2.0
 
 Version 5.2.0 is the first stable release of the 5.2 line. It moves the
