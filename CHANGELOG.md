@@ -6,17 +6,44 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.2.0
+
+Version 5.2.0 is the first stable release of the 5.2 line. It moves the
+default backend to Zakura Common 4.0.0 and requires Rust 1.97. Public notes,
+addresses, witnesses, and cryptographic keys must come from the matching
+dependency family, so this is an opt-in upgrade for Rust integrations despite
+its minor version number. The 5.1.x line keeps its existing dependencies. The
+voting lifecycle, wire formats, vote-tree encoding, and voting-sidecar schema
+are unchanged. See [Migrating from 5.1 to 5.2](docs/migrating-to-common-v3.md).
+
+Upgrade paths:
+
+- From 5.1.0 or a 5.1.1 prerelease, follow the migration guide. LRZ clients
+  must validate existing wallet databases before adopting 5.2. This release
+  already includes the v5.0.2 SQLite writer reservation and tree-recovery
+  fixes and v5.1.0's opt-in Ledger output review.
+- From 5.2.0-rc.2, the dependency family and public types are unchanged.
+- From 5.2.0-rc.1, move direct Common, wallet, circuit, and PIR dependencies
+  from Common v3 to the Common 4 matrix in the migration guide together.
+
 ### Changed
 
-- Accept the NU7 consensus branch for Ironwood shielded voting notes and
-  activate NU7 on `Network::Regtest` at height 11. The Ironwood note and bundle
-  versions are unchanged. The delegation signing transaction (TX1) still signs
-  under the fixed V6 / NU6.3 profile for NU7 snapshots, so existing vote chains
-  verify NU7 delegations without an upgrade.
-- Limit standalone vote-tree libraries to their field and Poseidon dependency
-  features instead of enabling the full Orchard cryptography bundle. Remove
-  unused direct dependencies and use the standard library for lazy empty roots.
-  Public APIs, tree hashes, and wire formats remain unchanged.
+- Use published `zakura-protocol 4.0.0`, `voting-circuits 0.14.0`,
+  `voting-crypto-deps 0.4.0`, `imt-tree 0.7.0`, `pir-types 0.8.0`,
+  `pir-client 0.9.0`, and `zakura-wallet-lib 0.1.0-rc9.2`. The alternate LRZ
+  backend adapts to upstream's fallible viewing-key encoding, non-expiring
+  address constructors, and caller-supplied PCZT signing RNG.
+- Accept Ironwood snapshots on the NU7 consensus branch in addition to NU6.3,
+  and activate NU7 on `Network::Regtest` at height 11. The delegation signing
+  transaction (TX1) keeps the fixed V6 / NU6.3 signing profile for NU7
+  snapshots, so existing vote chains verify NU7 delegations without an
+  upgrade. Ironwood note and bundle versions are unchanged.
+- Release `vote-commitment-tree 0.8.1` and `vote-commitment-tree-client 0.10.1`.
+  Their backend features now enable only the field and Poseidon dependencies
+  instead of the full Orchard cryptography bundle. Public APIs, tree hashes,
+  and wire formats are unchanged.
+- Build the lightwalletd gRPC client without Tonic's default server and Axum
+  router dependencies. Public APIs are unchanged.
 
 ## v5.2.0-rc.2
 
