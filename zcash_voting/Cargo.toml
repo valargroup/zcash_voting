@@ -1,6 +1,6 @@
 [package]
 name = "zcash_voting"
-version = "5.2.0-rc.2"
+version = "5.2.0"
 edition = "2021"
 rust-version = "1.97"
 description = "Client-side library for Zcash shielded voting: ZKP delegation and vote-commitment proofs (Halo 2), ElGamal encryption, governance PCZT construction, Merkle witness generation, and SQLite round-state persistence."
@@ -65,8 +65,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # lightwalletd requires a gRPC client, without Tonic's default server/router.
 tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "tls-webpki-roots", "tls-ring"] }
 
-vote-commitment-tree = { path = "../vote-commitment-tree", version = "=0.8.0", default-features = false }
-vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "=0.10.0", default-features = false, features = ["http"] }
+vote-commitment-tree = { path = "../vote-commitment-tree", version = "=0.8.1", default-features = false }
+vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "=0.10.1", default-features = false, features = ["http"] }
 
 rusqlite = { version = "0.37", features = ["bundled"] }
 

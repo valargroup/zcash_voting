@@ -402,8 +402,8 @@ metadata. The selected wallet facade release is `zakura-wallet-lib 0.1.0-rc9.2`.
 This release requires Rust 1.97 or newer.
 
 The default backend uses Zakura Common 4.0.0, `voting-circuits 0.14.0`,
-`voting-crypto-deps 0.4.0`, `vote-commitment-tree 0.8.0`, and
-`vote-commitment-tree-client 0.10.0`. The alternate backend selects upstream
+`voting-crypto-deps 0.4.0`, `vote-commitment-tree 0.8.1`, and
+`vote-commitment-tree-client 0.10.1`. The alternate backend selects upstream
 `orchard 0.16` and matching wallet prereleases through the same facade.
 See the [5.2 migration guide](../docs/migrating-to-common-v3.md) for the complete
 coordinated dependency matrix and type-boundary guidance.

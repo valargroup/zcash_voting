@@ -17,9 +17,9 @@ The currently supported maintenance lines are:
 
 The 5.1.x line retains its existing dependency family for compatibility.
 The 5.2.x line introduces the coordinated Zakura Common and LRZ wallet
-dependency changes. It started at `5.2.0-rc.1` with Common v3 and moves to
-Common 4.0.0 at `5.2.0-rc.2`, which changes the public type family again for
-`5.2.0-rc.1` adopters. This is an explicit opt-in upgrade despite
+dependency changes. It started at `5.2.0-rc.1` with Common v3, moved to
+Common 4.0.0 at `5.2.0-rc.2`, and ships that stack as stable `5.2.0`. Moving
+from rc.1 changes the public type family again. This is an explicit opt-in upgrade despite
 its minor version number: public dependency types and the MSRV change.
 LRZ clients must validate their integration, including existing wallet databases,
 before adopting it. See [the migration guide](migrating-to-common-v3.md).
