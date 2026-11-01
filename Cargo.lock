@@ -2778,7 +2778,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3250,8 +3250,7 @@ dependencies = [
 [[package]]
 name = "voting-circuits"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1c88ee79ee1dc06daa89ffdb7a0db92aa7e0da8c4337dc24b83156a4a362bfa"
+source = "git+https://github.com/valargroup/voting-circuits.git?rev=262e12ce86727016c7b125b284becf1c2695a364#262e12ce86727016c7b125b284becf1c2695a364"
 dependencies = [
  "blake2b_simd",
  "itertools",
@@ -3262,7 +3261,7 @@ dependencies = [
 [[package]]
 name = "voting-crypto-deps"
 version = "0.4.0"
-source = "git+https://github.com/valargroup/voting-circuits.git?rev=20ae924eafb53672ce3f7c6e99a4ecaf72f035d2#20ae924eafb53672ce3f7c6e99a4ecaf72f035d2"
+source = "git+https://github.com/valargroup/voting-circuits.git?rev=262e12ce86727016c7b125b284becf1c2695a364#262e12ce86727016c7b125b284becf1c2695a364"
 dependencies = [
  "halo2_gadgets",
  "halo2_poseidon",

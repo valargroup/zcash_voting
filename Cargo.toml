@@ -45,4 +45,5 @@ split-debuginfo = "unpacked"
 debug = false
 
 [patch.crates-io]
-voting-crypto-deps = { git = "https://github.com/valargroup/voting-circuits.git", rev = "20ae924eafb53672ce3f7c6e99a4ecaf72f035d2" }
+voting-crypto-deps = { git = "https://github.com/valargroup/voting-circuits.git", rev = "262e12ce86727016c7b125b284becf1c2695a364" }
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits.git", rev = "262e12ce86727016c7b125b284becf1c2695a364" }
