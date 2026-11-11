@@ -6,6 +6,41 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+## v5.4.0
+
+Version 5.4.0 moves the default backend from Zakura Common 4.0.0 to Common
+5.4.0 and the wallet facade to `zakura-wallet-lib 0.1.0-rc9.8`. Public notes,
+addresses, witnesses, and keys on the default backend now belong to Common 5,
+so this is an opt-in upgrade despite its minor version number. The voting
+lifecycle, wire formats, vote-tree encoding, voting-sidecar schema,
+verification keys, and Rust 1.97 minimum are unchanged. The `lrz` backend keeps
+the same upstream releases. See [Migrating from 5.3 to 5.4](docs/migrating-to-5.4.md).
+
+- Zakura clients: move direct Common, wallet, circuit, and PIR dependencies to
+  the Common 5.4 matrix in the migration guide in the same change. The wallet
+  crates' rc9.7 SQLite migrations only add indexes, but rc9.7 changes some
+  wallet APIs.
+- The default backend now pins `zakura-client-backend` and
+  `zakura-client-sqlite` to `0.1.0-rc9.8` and `zakura-pczt` to `0.1.0-rc9.1`
+  directly. The facade's pre-release
+  requirements also accept later wallet pre-releases, which may move to
+  another Common family.
+- A fresh resolution of 5.2.0 or 5.3.0 without a lockfile now selects the
+  Common 5.4 wallet crates beside those releases' Common 4 crates, and does not
+  build. Keep your lockfile, or pin the wallet crates as described in
+  [Staying on 5.3](docs/migrating-to-5.4.md#staying-on-53).
+
+### Changed
+
+- Use Zakura Common 5.4.0, `voting-circuits 0.15.0`, and
+  `voting-crypto-deps 0.5.0`.
+- Use `pir-client 0.10.0`, `pir-types 0.9.0`, and `imt-tree 0.8.0`.
+- Use `zakura-wallet-lib 0.1.0-rc9.8`, and pin `zakura-client-backend` and
+  `zakura-client-sqlite` `0.1.0-rc9.8` and `zakura-pczt` `0.1.0-rc9.1` on the
+  default backend.
+- Release `vote-commitment-tree 0.9.0` and `vote-commitment-tree-client 0.11.0`
+  on the Common 5.4 family.
+
 ## v5.3.0
 
 Version 5.3.0 moves the wallet facade from `zakura-wallet-lib 0.1.0-rc9.2` to
