@@ -6,6 +6,15 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Keep voting with the existing Ironwood V3 format independent of later
+  consensus branch IDs. Eligibility uses NU6.3 activation at the stored
+  snapshot height, and TX1 retains its fixed V6 / NU6.3 signing profile.
+  Legacy branch-ID arguments are now ignored instead of checked against the
+  compiled upgrade schedule; provider errors still propagate. Changes to
+  note, tree, or circuit formats still require explicit support.
+
 ## v5.4.0
 
 Version 5.4.0 moves the default backend from Zakura Common 4.0.0 to Common

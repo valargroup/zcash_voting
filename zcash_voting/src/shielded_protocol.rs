@@ -2,7 +2,7 @@
 pub(crate) use crate::backend::orchard;
 use orchard::bundle::BundleVersion;
 use orchard::note::NoteVersion;
-use zcash_protocol::consensus::{BlockHeight, BranchId, Parameters};
+use zcash_protocol::consensus::{BlockHeight, NetworkUpgrade, Parameters};
 
 use crate::types::VotingError;
 
@@ -12,22 +12,26 @@ pub(crate) enum VotingShieldedProtocol {
 }
 
 impl VotingShieldedProtocol {
-    pub(crate) fn for_branch_id(branch_id: BranchId) -> Result<Self, VotingError> {
-        if matches!(branch_id, BranchId::Nu6_3 | BranchId::Nu7) {
+    /// Selects Ironwood V3 once NU6.3 is active on the snapshot's network.
+    ///
+    /// Later branch IDs do not change eligibility. This does not add support
+    /// for changes to the note format, commitment tree, or voting circuit.
+    pub(crate) fn for_height<P: Parameters>(params: &P, height: u64) -> Result<Self, VotingError> {
+        let height = u32::try_from(height)
+            .map(BlockHeight::from_u32)
+            .map_err(|_| VotingError::InvalidInput {
+                message: format!("snapshot height {height} does not fit in u32"),
+            })?;
+        if params.is_nu_active(NetworkUpgrade::Nu6_3, height) {
             return Ok(Self::Ironwood);
         }
 
         Err(VotingError::InvalidInput {
-            message: "zcash voting only supports Ironwood / NU6.3 or later shielded voting notes"
-                .to_string(),
+            message: format!(
+                "snapshot height {height} is before NU6.3/Ironwood activation or activation is not configured for {:?}",
+                params.network_type()
+            ),
         })
-    }
-
-    pub(crate) fn for_height<P: Parameters>(
-        params: &P,
-        height: BlockHeight,
-    ) -> Result<Self, VotingError> {
-        Self::for_branch_id(BranchId::for_height(params, height))
     }
 
     pub(crate) fn bundle_version(self) -> BundleVersion {

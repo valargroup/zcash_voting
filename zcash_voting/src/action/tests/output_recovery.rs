@@ -17,7 +17,6 @@ fn assert_output_recovery(ledger_output_review: bool) {
         VotingNetwork::Regtest,
         &mock_fvk_bytes(),
         &mock_hotkey_address(),
-        u32::from(BranchId::Nu6_3),
         VotingNetwork::Regtest.network_type().coin_type(),
         &MOCK_SEED_FP,
         MOCK_ACCOUNT,
