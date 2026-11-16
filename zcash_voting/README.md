@@ -329,8 +329,9 @@ that should stay consistent across SDKs:
 - delayed helper-share `submit_at` scheduling, capped at 100 hours while still
   ending before the round's last-moment window
 - progressive helper timing: inspect ready responses after two seconds, keep
-  waiting for the half-fleet target (capped by protocol policy at 10 helpers),
-  and stop at 30 seconds
+  waiting for the half-fleet readiness target (capped at 10 helpers), and stop
+  at 30 seconds. Each share then goes to at most 5 helpers, drawn from a pool
+  sized by the readiness target
 - 30-second helper POST attempts with bounded initial-delivery concurrency
 - helper confirmation polling bounded to four concurrent requests and ten
   seconds per share so stalled helpers cannot starve later shares

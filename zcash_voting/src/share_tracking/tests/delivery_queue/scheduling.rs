@@ -3,7 +3,9 @@ use tokio::sync::Semaphore;
 
 #[tokio::test(start_paused = true)]
 async fn slow_successful_fanout_keeps_queued_shares_outside_the_deadline() {
-    let fixture = Fixture::with_helpers(2, 20);
+    // Twenty-five five-target shares fit the budget, so sixty-four shares need
+    // three 25-second waves: longer than the 60-second delivery deadline.
+    let fixture = Fixture::with_helpers(4, 20);
     let transport = ScriptedTransport::new(|_| ReplyPlan {
         delay: Duration::from_secs(25),
         ..Default::default()
@@ -14,14 +16,14 @@ async fn slow_successful_fanout_keeps_queued_shares_outside_the_deadline() {
         assert!(report.pending_share_indices.is_empty());
         assert_eq!(report.deliveries.len(), SHARE_COUNT);
         for delivery in report.deliveries {
-            assert_eq!(delivery.submission.accepted_urls.len(), 10);
+            assert_eq!(delivery.submission.accepted_urls.len(), 5);
             assert!(delivery.submission.ambiguous_urls.is_empty());
         }
     }
     assert_eq!(transport.count(), 320);
     let persisted = share::list(&fixture.db, ROUND_ID).unwrap();
-    assert_eq!(persisted.len(), 32);
-    assert!(persisted.iter().all(|share| share.sent_to_urls.len() == 10
+    assert_eq!(persisted.len(), 64);
+    assert!(persisted.iter().all(|share| share.sent_to_urls.len() == 5
         && share.ambiguous_urls.is_empty()
         && share.attempting_urls.is_empty()));
 }
@@ -193,7 +195,7 @@ async fn thirty_seven_proposals_finish_faster_with_identical_durable_results() {
 #[tokio::test(start_paused = true)]
 async fn helper_fanout_bounds_admitted_workflows() {
     for (helpers, admitted, peak_posts, target) in
-        [(2, 50, 50, 1), (8, 32, 128, 4), (20, 12, 120, 10)]
+        [(2, 50, 50, 1), (8, 32, 128, 4), (20, 25, 125, 5)]
     {
         let proposals = if helpers == 2 { 4 } else { 2 };
         let placements = proposals as usize * SHARE_COUNT * target;

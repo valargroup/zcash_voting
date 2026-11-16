@@ -23,8 +23,8 @@
 //! tried and withdrawn. It breaks two properties the delivery queue is built on:
 //! a slow share must not block its siblings
 //! (`combined_reconciliation_delivers_later_proposals_while_the_first_is_unfinished`),
-//! and a full commitment must still reach the 128-POST ceiling
-//! (`full_commitment_reaches_but_never_exceeds_128_posts`). Both are deliberate,
+//! and a full commitment must still post every target concurrently
+//! (`full_commitment_posts_every_target_concurrently`). Both are deliberate,
 //! and the measurement did not justify overriding them: every share ahead of the
 //! designated one belonged to *another* bundle, which is exactly what the gate
 //! addresses. Inside its own call the designated share is dispatched first and

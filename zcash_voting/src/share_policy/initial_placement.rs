@@ -5,8 +5,9 @@ use crate::{types::VotingError, wire::BoundedU32};
 use super::{
     server_order::{
         require_unique_share_servers, select_share_submission_targets,
-        select_share_submission_targets_from_order, share_server_order_random_bytes_required,
-        share_server_selection_policy, share_submission_target_count, shuffled_share_server_order,
+        select_share_submission_targets_from_order, share_helper_readiness_target_count,
+        share_server_order_random_bytes_required, share_server_selection_policy,
+        share_submission_target_count, shuffled_share_server_order,
         SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, VOTE_COMMITMENT_SHARE_COUNT,
     },
     submission_schedule::{
@@ -111,7 +112,8 @@ pub fn plan_share_submission(
 ///
 /// For a complete normal commitment, each share targets half of the configured
 /// helpers rounded up, capped by [`SHARE_HELPER_TARGET_COUNT_CAP`]. Assignments
-/// are balanced across the fleet and no helper receives more than the derived
+/// are balanced across a pool sized by
+/// [`share_helper_readiness_target_count`] and no helper receives more than the derived
 /// three-quarters quota. Each returned plan contains its final initial target
 /// list. This guarantee applies only to initial planning. Fallback and recovery
 /// may exceed the quota when needed to preserve liveness.
@@ -236,7 +238,7 @@ pub fn plan_share_submissions_with_preferred_servers(
     let minimum_planning_server_count = if complete_normal_batch {
         selection_policy.min_server_count as usize
     } else {
-        target_count
+        share_helper_readiness_target_count(ranked_server_urls.len())
     };
     if minimum_planning_server_count > ranked_server_urls.len() {
         return Err(VotingError::InvalidInput {

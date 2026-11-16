@@ -9,8 +9,8 @@ use crate::{
     session::{classify_ballot_intents, load_ballot_intents, Decision},
     share::ShareOperationScope,
     share_policy::{
-        plan_share_submissions_with_preferred_servers, round_immediate_share_key,
-        share_submission_random_bytes_required, share_submission_target_count, ImmediateShareKey,
+        is_planned_share_submission_target_count, plan_share_submissions_with_preferred_servers,
+        round_immediate_share_key, share_submission_random_bytes_required, ImmediateShareKey,
         ShareSubmissionPlan, SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER,
         VOTE_COMMITMENT_SHARE_COUNT,
     },
@@ -633,14 +633,13 @@ pub(crate) fn validate_share_delivery_plan(
                     .to_string(),
         });
     }
-    let expected_target = share_submission_target_count(planned_fleet.len());
     let mut assignments = BTreeMap::<String, usize>::new();
     for (share_index, share_plan) in plan.share_plans.iter().enumerate() {
         let targets = canonical_helper_url_list(&share_plan.target_servers)?;
         let target_count = usize::try_from(share_plan.target_count).unwrap_or(usize::MAX);
         if targets.len() != share_plan.target_servers.len()
             || targets.len() != target_count
-            || target_count != expected_target
+            || !is_planned_share_submission_target_count(target_count, planned_fleet.len())
         {
             return Err(VotingError::InvalidInput {
                 message: format!("helper-share plan {share_index} has an invalid target set"),

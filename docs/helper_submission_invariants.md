@@ -184,7 +184,7 @@ derived from the canonical normal-commitment share count. Let:
 
 ```text
 S = VOTE_COMMITMENT_SHARE_COUNT
-C = SHARE_HELPER_TARGET_COUNT_CAP = 10
+C = SHARE_HELPER_TARGET_COUNT_CAP = 5
 N = number of distinct configured helpers
 R = number of ready helpers in the readiness-ranked prefix
 ```
@@ -193,7 +193,7 @@ The normal protocol MUST have `S >= 2`. Single-share mode is a separate mode,
 is valid only when the planned payload count is exactly one, does not change
 `S`, and is exempt from the commitment-wide distribution bound below. A caller
 cannot mark an `S`-share commitment as single-share to bypass that bound.
-`C = 10` is an independent protocol choice: it bounds initial
+`C = 5` is an independent protocol choice: it bounds initial
 fan-out and prevents fleet growth from increasing per-share distribution
 without limit. It is not derived from `S`.
 
@@ -204,25 +204,38 @@ limit rounds down so it never exceeds 75 percent:
 max_initial_shares_per_helper = M = floor(3S / 4)
 ```
 
-The per-share definite-placement target remains half the configured fleet,
-rounded up, until it reaches the protocol cap:
+The readiness target is half the configured fleet, rounded up, capped at 10.
+The per-share definite-placement target is the readiness target capped by the
+protocol cap:
 
 ```text
-target_count = T = min(ceil(N / 2), C)
+readiness_target = W = min(ceil(N / 2), 10)
+target_count     = T = min(W, C)
 ```
 
-For the current `S = 16` and `C = 10`, these formulas produce `M = 12`.
-Consequently, fleets through 20 helpers retain the half-rounded-up target,
-while larger fleets target at most 10 definite acceptances per share.
+For the current `S = 16` and `C = 5`, these formulas produce `M = 12`.
+Consequently, fleets through 10 helpers retain the half-rounded-up target,
+while larger fleets target exactly 5 definite acceptances per share.
 
 For a complete normal commitment, planning creates `S * T` assignments. The
-planning pool MUST contain enough helpers for every assignment without any
-helper exceeding `M`:
+planning pool is sized from `W`, not `T`, and MUST contain enough helpers for
+`S * W` assignments without any helper exceeding `M`:
 
 ```text
-minimum_planning_pool = P_min = ceil(S * T / M)
+minimum_planning_pool = P_min = ceil(S * W / M)
 planning_pool = P = min(N, max(R, P_min))
 ```
+
+Sizing the pool from `W` keeps each share's `T` recipients drawn from the same
+pool the release before `C` dropped to 5 used. A pool sized from `T` would be
+much smaller. For example, with 15 configured helpers and 7 ready, it would be
+7 helpers, and any 3 of them would be guaranteed to receive every share,
+because only 4 helpers sit outside that group and every share goes to 5. The
+`W`-sized pool here is 11, so the 5 recipients can all miss any 3 helpers. This
+removes that guaranteed coverage but is not a collusion bound. The per-helper
+quota `M` still makes no claim about the combined view of colluding helpers.
+Incomplete low-level batches and single-share mode use `W` as their minimum
+pool for the same reason.
 
 The one-helper fleet is the only forced-full-coverage exception: it uses
 `T = P = 1`, and that helper necessarily receives every initially planned
@@ -233,16 +246,16 @@ than silently weakening the target or the per-helper bound.
 
 The current values include:
 
-| Configured helpers `N` | Target `T` | Minimum pool `P_min` | Effective initial maximum |
-| ---: | ---: | ---: | ---: |
-| 1 | 1 | 1 (forced exception) | 16 |
-| 2 | 1 | 2 | 12 |
-| 3 | 2 | 3 | 12 |
-| 5 | 3 | 4 | 12 |
-| 10 | 5 | 7 | 12 |
-| 20 | 10 | 14 | 12 |
-| 30 | 10 | 14 | 12 |
-| 100 | 10 | 14 | 12 |
+| Configured helpers `N` | Readiness `W` | Target `T` | Minimum pool `P_min` | Effective initial maximum |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1 | 1 (forced exception) | 16 |
+| 2 | 1 | 1 | 2 | 12 |
+| 3 | 2 | 2 | 3 | 12 |
+| 5 | 3 | 3 | 4 | 12 |
+| 10 | 5 | 5 | 7 | 12 |
+| 15 | 8 | 5 | 11 | 12 |
+| 20 | 10 | 5 | 14 | 12 |
+| 100 | 10 | 5 | 14 | 12 |
 
 The selector MUST enforce `M` as a hard quota while constructing a complete
 batch, not merely rely on an average produced by balancing. Among helpers
@@ -274,7 +287,7 @@ one would make ambiguous delivery unknowable and could prevent recovery from
 using the only functioning helper.
 
 The assignment limit `M` is a wallet-policy consequence of `S`, and `P_min` is
-calculated from `S`, `T`, and `M`; neither makes `S` independently
+calculated from `S`, `W`, and `M`; neither makes `S` independently
 configurable. `C` is separately chosen protocol policy. Changing `S` remains a
 coordinated protocol change across the circuits, wallet wire validation,
 helper payload validation, chain types, and their fixed-size arrays and tests.
@@ -284,15 +297,22 @@ change the share format.
 Existing durable rows whose stored `target_count` exceeds `C` keep their
 historical value but MUST use `C` as their effective target. This read-time
 clamp avoids a schema migration while preventing a legacy value from restoring
-the old uncapped behavior.
+the old uncapped behavior. Persisted complete plans also validate when their
+target matches `W`, which releases before `C` dropped to 5 used as the
+per-share target, so a vote planned before the upgrade still delivers. Its stored
+target list stays a valid candidate order, but initial delivery and admission
+use the clamped target, so it seeks at most `C` acceptances. New plans always
+use the current `C`.
 
 Regression coverage:
 
-- target count remains half-rounded-up through `N = 20` and is capped by the
-  independent protocol constant `C = 10` above that boundary;
+- target count remains half-rounded-up through `N = 10` and is capped by the
+  independent protocol constant `C = 5` above that boundary;
 - the maximum initial assignment count is derived as `floor(3S / 4)`;
-- the minimum pool is derived as `ceil(S * T / M)` at small, boundary, and
-  large fleet sizes;
+- the minimum pool is derived as `ceil(S * W / M)` at small, boundary, and
+  large fleet sizes, and both complete and incomplete batches widen to it
+  (`complete_batch_pool_follows_the_readiness_target` and
+  `incomplete_batch_pool_follows_the_readiness_target`);
 - every helper in a complete normal batch is assigned at most `M` shares;
 - planning fails rather than exceeding `M` when presented with an infeasible
   capacity;
@@ -300,10 +320,13 @@ Regression coverage:
 - single-share mode rejects zero, incomplete, and complete multi-share batches;
 - incomplete or independently planned low-level batches and legacy pre-v17
   state do not advertise the complete batch guarantee;
-- fallback and recovery remain able to exceed the initial-only quota; and
+- fallback and recovery remain able to exceed the initial-only quota;
 - `legacy_target_above_protocol_cap_is_effectively_clamped` ensures a durable
   target above the protocol cap cannot drive new placements above the
-  canonical target.
+  canonical target; and
+- `plan_stored_under_the_previous_target_cap_still_delivers` ensures a complete
+  plan persisted under the previous cap of 10 still loads and delivers to
+  exactly `C` helpers, while a target neither cap would plan is rejected.
 
 ### Share count and identity
 
@@ -402,8 +425,8 @@ Regression coverage:
    It deliberately stops at ordering *inside* one call: holding a call's own
    shares behind its designated one would break the no-proposal-barrier property
    (`combined_reconciliation_delivers_later_proposals_while_the_first_is_unfinished`)
-   and prevent a full commitment reaching the POST ceiling
-   (`full_commitment_reaches_but_never_exceeds_128_posts`). Both are deliberate,
+   and prevent a full commitment from posting every target concurrently
+   (`full_commitment_posts_every_target_concurrently`). Both are deliberate,
    and every share measured ahead of the designated one belonged to another
    bundle, which is what the gate addresses.
 
@@ -439,7 +462,7 @@ tests are in
 
 ### Placement target
 
-For `N` distinct configured helpers and protocol target cap `C = 10`, every
+For `N` distinct configured helpers and protocol target cap `C = 5`, every
 initial share target is:
 
 ```text
@@ -455,11 +478,16 @@ The concrete values include:
 | 2 | 1 |
 | 3 | 2 |
 | 5 | 3 |
+| 8 | 4 |
+| 9 | 5 |
 | 10 | 5 |
-| 20 | 10 |
-| 21 | 10 |
-| 30 | 10 |
-| 100 | 10 |
+| 15 | 5 |
+| 20 | 5 |
+| 100 | 5 |
+
+The readiness race waits for `W = min(ceil(N / 2), 10)` ready helpers rather
+than `T`, so with 15 configured helpers it waits for 8 even though each share
+goes to 5 (see the initial-distribution policy for why).
 
 An empty helper list is invalid even though the pure target-count function
 returns zero. The high-level entry point does not accept an unvalidated raw
@@ -571,7 +599,7 @@ The public boundary is also covered by
    count. Random order breaks ties, balancing a complete `S`-share commitment
    across the planning pool without allowing an assignment count above
    `M = floor(3S / 4)`.
-4. The minimum planning-pool size is `ceil(S * T / M)`. A readiness-ranked
+4. The minimum planning-pool size is `ceil(S * W / M)`. A readiness-ranked
    prefix can enlarge that pool, but too few ready helpers cannot shrink it.
    When necessary, planning includes configured fallback helpers after the
    ready prefix to provide the required assignment capacity.
@@ -900,7 +928,7 @@ oversized or invalid bodies, and any other status all produce `ready = false`.
 Readiness is advisory and never fails the voting flow by itself.
 
 `HelperClient::preflight_fleet` canonicalizes the caller's list, derives the
-readiness target from the canonical fleet size, and starts every valid probe
+readiness target `W` from the canonical fleet size, and starts every valid probe
 concurrently. Its crate-internal raw preflight primitive receives that derived
 target. It
 collects responses through the two-second soft window. If the target is still
@@ -980,7 +1008,8 @@ Enforcement:
 [`http_transport.rs`](../zcash_voting/src/http_transport.rs), and
 [`share_tracking/initial_delivery.rs`](../zcash_voting/src/share_tracking/initial_delivery.rs).
 
-Regression tests: `preflight_keeps_slow_probes_alive_until_the_target_is_ready`,
+Regression tests: `preflight_fleet_waits_for_the_readiness_target_not_the_share_target`,
+`preflight_keeps_slow_probes_alive_until_the_target_is_ready`,
 `preflight_stops_at_the_soft_window_when_enough_helpers_are_ready`,
 `preflight_stops_slow_helpers_at_the_hard_deadline`,
 `preflight_with_zero_target_does_not_open_connections`,
@@ -1140,10 +1169,12 @@ continue to own sibling-progress and partial-report behavior.
 
 Up to 50 share tasks across all wallets and committed votes in the process may
 hold a delivery permit at once. Admission uses one process-wide budget of 6400
-units, charging each share `max(128, 50 * planned target_count)` units atomically.
-Thus up to 50 shares with targets of two or fewer, 32 shares with targets of four,
-or 12 shares with targets of ten can run at once; mixed fleets share the same
-budget. The charge uses the validated persisted plan and is retained until outcomes are journaled, including across
+units, charging each share `max(128, 50 * min(planned target_count, C))` units
+atomically. Thus up to 50 shares with targets of two or fewer, 32 shares with
+targets of four, or 25 shares with targets of five can run at once. A legacy plan
+whose stored target is higher than `C` is charged as five, since delivery never
+seeks more than `C` acceptances. Mixed fleets share the same budget. The charge
+uses the validated persisted plan and is retained until outcomes are journaled, including across
 fallback waves. Waiting for this budget occurs before share preparation and the
 fan-out deadline, and cancellation releases the complete charge. This bounds the
 aggregate planned fan-out of admitted queue workflows to 128 without changing
@@ -1796,7 +1827,7 @@ roster still depends on those recovery rows; this is covered by
 
 ### Configuration and migration
 
-The effective target is capped to both the protocol target cap `C = 10` and the
+The effective target is capped to both the protocol target cap `C = 5` and the
 current valid configured fleet size. Persisted accepted or ambiguous helpers
 removed from configuration are neither polled nor counted. A durable target
 above `C` remains historical data but cannot drive additional placement above
@@ -2006,8 +2037,10 @@ a 30-second hard deadline, and 128 concurrent POSTs.
 target internally. `ConfirmedVote::submit_prepared_shares` enforces the
 process-wide 128-POST ceiling with a shared semaphore. Complete-plan persistence
 lets the SDK validate commitment-wide quota, current-fleet compatibility, and
-restart reuse before network dispatch. The POST ceiling is exercised by
-`full_commitment_reaches_but_never_exceeds_128_posts`; cancellation and
+restart reuse before network dispatch. The POST ceiling is exercised by the
+four-target case of `helper_fanout_bounds_admitted_workflows`, which reaches
+32 × 4 = 128 POSTs. `full_commitment_posts_every_target_concurrently` covers a
+full five-target commitment sending all 80 POSTs at once. Cancellation and
 budget expiry while queued are covered by
 `post_capacity_cancellation_clears_unsent_reservations` and
 `post_capacity_deadline_clears_unsent_reservations`. Generation-bound admission
@@ -2016,7 +2049,7 @@ is covered by `queued_delivery_rejects_a_deleted_round_before_posting`,
 `queued_delivery_requires_its_attempt_reservation`, and
 `queued_delivery_does_not_validate_against_a_different_wallet`.
 `helper_fanout_bounds_admitted_workflows` covers the 50-share/one-target boundary
-across four commitments, plus the 32-share/four-target and 12-share/ten-target
+across four commitments, plus the 32-share/four-target and 25-share/five-target
 boundaries across two commitments.
 `slow_successful_fanout_keeps_queued_shares_outside_the_deadline` delivers all
 320 placements through 25-second successful POSTs without generating ambiguity.
@@ -2080,7 +2113,7 @@ A change to helper submission or recovery should answer all of the following:
 
 - Does every share still apply the independent protocol target cap `C`?
 - Does the strict three-quarters assignment limit remain derived from `S`, and is
-  minimum planning-pool capacity still calculated from `S`, `T`, and `M`?
+  minimum planning-pool capacity still calculated from `S`, `W`, and `M`?
 - Does every complete normal batch assign each helper no more than
   `floor(3S / 4)` shares, except for the documented one-helper case?
 - Is the complete plan persisted before every POST and reused unchanged after

@@ -47,8 +47,8 @@ use std::collections::BTreeMap;
 /// The synthetic helper fleet, in configuration order.
 ///
 /// Ten, which is not an arbitrary round number. The target count is half the
-/// fleet rounded up and capped at ten, so ten helpers put each share on five
-/// and sit exactly on the protocol's cap — pinning the cap against a live fleet
+/// fleet rounded up and capped at five, so ten helpers put each share on five,
+/// which is exactly the protocol's cap — pinning the cap against a live fleet
 /// rather than only against a unit test. The per-helper initial quota of twelve
 /// of sixteen shares then forces a planning pool of seven, so a scenario with
 /// half the fleet up sits *below* the pool a complete batch needs, which is the
