@@ -10,6 +10,9 @@ static GLOBAL_BATCH_LIMIT_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// Sixteen shares with eight targets exactly fill the 128-unit admission budget.
+///
+/// Current planning targets five helpers per share, so the eight-target plan is
+/// stored the way a release before the lower cap would have planned it.
 #[tokio::test(start_paused = true)]
 async fn full_commitment_reaches_but_never_exceeds_128_posts() {
     let _global_limit_guard = GLOBAL_BATCH_LIMIT_TEST_LOCK.lock().await;
@@ -21,7 +24,20 @@ async fn full_commitment_reaches_but_never_exceeds_128_posts() {
     let plan = vote
         .prepare_share_delivery(&db, planning_params(&fleet))
         .unwrap();
-    assert!(plan.share_plans.iter().all(|share| share.target_count == 8));
+    let eight_target_plans = plan
+        .share_plans
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(share_index, mut share)| {
+            share.target_count = 8;
+            share.target_servers = (0..8)
+                .map(|offset| configured[(share_index + offset) % configured.len()].clone())
+                .collect();
+            share
+        })
+        .collect::<Vec<_>>();
+    replace_stored_share_plans(&db, &eight_target_plans);
     let transport = Arc::new(MockTransport::default());
     for helper in &configured {
         for _ in 0..16 {
@@ -1245,6 +1261,73 @@ async fn restart_reuses_the_plan_and_resumes_definite_delivery_deficits() {
         .all(|share| share.sent_to_urls == configured));
 }
 
+/// A plan stored before the target cap dropped to five still loads and delivers.
+#[tokio::test]
+async fn plan_stored_under_the_previous_target_cap_still_delivers() {
+    let _global_limit_guard = GLOBAL_BATCH_LIMIT_TEST_LOCK.lock().await;
+    let db = db_with_unique_recoverable_vote();
+    set_recovery_share_count(&db, 16);
+    let configured = helpers(16);
+    let fleet = HelperFleetPreflight::from_readiness(&configured, &configured).unwrap();
+    let vote = crate::vote::CommittedVote::recover(&db, ROUND_ID, 0, 1).unwrap();
+    let current = vote
+        .prepare_share_delivery(&db, planning_params(&fleet))
+        .unwrap();
+    assert!(current
+        .share_plans
+        .iter()
+        .all(|share| share.target_count == 5));
+
+    // The previous cap of ten gave half of sixteen helpers, eight, per share.
+    // Rotate the window so no helper holds more than eight of the sixteen.
+    let retarget = |target_count: usize| {
+        current
+            .share_plans
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(share_index, mut plan)| {
+                plan.target_count = target_count as u32;
+                plan.target_servers = (0..target_count)
+                    .map(|offset| configured[(share_index + offset) % configured.len()].clone())
+                    .collect();
+                plan
+            })
+            .collect::<Vec<_>>()
+    };
+
+    replace_stored_share_plans(&db, &retarget(6));
+    assert!(vote
+        .prepare_share_delivery(&db, planning_params(&fleet))
+        .unwrap_err()
+        .to_string()
+        .contains("invalid target set"));
+
+    let legacy = retarget(8);
+    replace_stored_share_plans(&db, &legacy);
+    let reloaded = vote
+        .prepare_share_delivery(&db, planning_params(&fleet))
+        .unwrap();
+    assert_eq!(reloaded.share_plans, legacy);
+
+    let transport = Arc::new(MockTransport::default());
+    queue_successes(&transport, &configured, 16);
+    let report = vote
+        .submit_prepared_shares_unchecked(
+            &db,
+            &client_with(transport.clone()),
+            submission_params(&configured),
+            &never_cancel(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.deliveries.len(), 16);
+    assert!(report
+        .deliveries
+        .iter()
+        .all(|delivery| delivery.submission.accepted_urls.len() >= 5));
+}
+
 #[tokio::test]
 async fn quota_rejects_strict_and_legacy_tampering_but_legacy_metadata_propagates() {
     let _global_limit_guard = GLOBAL_BATCH_LIMIT_TEST_LOCK.lock().await;
@@ -1507,15 +1590,15 @@ async fn share_delivery_posts_overlap() {
     // Shares fan out to `target_count` helpers each, so the POST count is the
     // product, and every target is a distinct helper.
     assert_eq!(share_count, 2, "the commitment plans two shares here");
-    assert_eq!(targets, vec![8, 8], "each share targets eight helpers");
-    assert_eq!(posts, 16, "two shares x eight targets");
-    assert_eq!(distinct.len(), 16, "each POST goes to its own helper");
+    assert_eq!(targets, vec![5, 5], "each share targets five helpers");
+    assert_eq!(posts, 10, "two shares x five targets");
+    assert_eq!(distinct.len(), 10, "each POST goes to its own helper");
 
     // Each share posts to its outstanding targets together, and shares run
     // together too, so the peak is the product. Before this was made
     // concurrent the peak was the share count alone (2): the stream overlapped
     // shares while `dispatch_share_to_canonical_helpers` walked one share's
-    // eight helpers one await at a time.
+    // helpers one await at a time.
     //
     // `SHARE_HELPER_MAX_CONCURRENT_POSTS` is not what bounds this. A sweep at
     // 1, 4, 16 and 32 moved the old figure only at 1, because the serial part
@@ -1527,8 +1610,8 @@ async fn share_delivery_posts_overlap() {
     );
 
     // The cap is the *remaining need*, never the candidate list. Sixteen
-    // helpers were configured and sixteen POSTs were sent — two shares needing
-    // eight acceptances each — so no share reached a helper beyond its target.
+    // helpers were configured and ten POSTs were sent — two shares needing
+    // five acceptances each — so no share reached a helper beyond its target.
     // Over-delivery would be a threshold-security regression, not a slower
     // test, which is why this is asserted next to the concurrency it enables.
     assert_eq!(

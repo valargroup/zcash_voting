@@ -29,7 +29,7 @@ fn the_fleet_is_the_size_the_scenarios_assume() {
 
 #[test]
 fn ten_helpers_put_each_share_on_five_of_them() {
-    // Half the fleet rounded up, capped at ten. This is what makes partial
+    // Half the fleet rounded up, capped at five. This is what makes partial
     // delivery and deficit repair real: with one helper the target is one and
     // the whole placement layer is a degenerate case.
     assert_eq!(share_submission_target_count(FLEET), 5);
@@ -38,9 +38,9 @@ fn ten_helpers_put_each_share_on_five_of_them() {
 
 #[test]
 fn ten_helpers_sit_exactly_on_the_protocol_cap() {
-    // The reason the fleet is ten rather than some other even number: the cap
-    // stops being a value only a unit test has ever reached.
-    assert_eq!(SHARE_HELPER_TARGET_COUNT_CAP, FLEET);
+    // Half of ten is exactly the cap, so the cap stops being a value only a
+    // unit test has ever reached.
+    assert_eq!(SHARE_HELPER_TARGET_COUNT_CAP, FLEET / 2);
     assert_eq!(
         share_submission_target_count(FLEET * 2),
         SHARE_HELPER_TARGET_COUNT_CAP,

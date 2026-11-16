@@ -15,7 +15,9 @@ pub const SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER: usize = VOTE_COMMITMENT_SH
     * SHARE_HELPER_INITIAL_MAX_FRACTION_NUMERATOR
     / SHARE_HELPER_INITIAL_MAX_FRACTION_DENOMINATOR;
 /// Protocol cap on definite helper acceptances targeted for one share.
-pub const SHARE_HELPER_TARGET_COUNT_CAP: usize = 10;
+pub const SHARE_HELPER_TARGET_COUNT_CAP: usize = 5;
+/// Cap used by earlier releases, kept only so their persisted plans still load.
+const LEGACY_SHARE_HELPER_TARGET_COUNT_CAP: usize = 10;
 /// Initial helper readiness window before slower transports keep racing.
 pub const SHARE_HELPER_PREFLIGHT_SOFT_TIMEOUT_MILLISECONDS: u64 = 2_000;
 /// Absolute deadline for the helper readiness race.
@@ -49,7 +51,24 @@ const _: () = assert!(SHARE_HELPER_TARGET_COUNT_CAP > 0);
 /// This is half of the configured helpers, rounded up and capped by the
 /// protocol's helper-distribution policy. It is 0 when there are no helpers.
 pub fn share_submission_target_count(server_count: usize) -> usize {
-    (server_count / 2 + server_count % 2).min(SHARE_HELPER_TARGET_COUNT_CAP)
+    server_count.div_ceil(2).min(SHARE_HELPER_TARGET_COUNT_CAP)
+}
+
+/// Return whether a persisted plan's per-share target is one a release planned.
+///
+/// Accepts the current target and the target from before the cap dropped from
+/// [`LEGACY_SHARE_HELPER_TARGET_COUNT_CAP`] to [`SHARE_HELPER_TARGET_COUNT_CAP`],
+/// so votes planned before an upgrade still deliver. Tracking clamps either
+/// value to the current cap (see `effective_share_submission_target_count`).
+pub(crate) fn is_planned_share_submission_target_count(
+    target_count: usize,
+    server_count: usize,
+) -> bool {
+    target_count == share_submission_target_count(server_count)
+        || target_count
+            == server_count
+                .div_ceil(2)
+                .min(LEGACY_SHARE_HELPER_TARGET_COUNT_CAP)
 }
 
 /// Return the effective target for a durable share and current helper fleet.

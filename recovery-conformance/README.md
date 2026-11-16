@@ -301,7 +301,7 @@ connection setup.
 
 Ten synthetic helpers, because ten is where the arithmetic becomes interesting:
 the target count is 5, the per-helper initial quota is 12 of 16 shares, and a
-complete batch needs a planning pool of 7. Ten also sits exactly on
+complete batch needs a planning pool of 7. Half of ten is also exactly
 `SHARE_HELPER_TARGET_COUNT_CAP`, so the cap is pinned by a live fleet rather
 than only by a unit test. `tests/helper_fleet_plan.rs` asserts all three numbers,
 so a scenario cannot keep passing while quietly testing something else.

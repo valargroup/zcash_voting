@@ -6,7 +6,7 @@ use crate::{
     round::VotingDb,
     share,
     share_policy::{
-        share_submission_target_count, SHARE_DELIVERY_MIN_ATTEMPT_BUDGET_MILLISECONDS,
+        is_planned_share_submission_target_count, SHARE_DELIVERY_MIN_ATTEMPT_BUDGET_MILLISECONDS,
         SHARE_INITIAL_DELIVERY_TIMEOUT_MILLISECONDS,
     },
     types::{ShareDelegationRecord, SharePayload, VotingError},
@@ -551,12 +551,14 @@ pub(crate) async fn submit_committed_share_to_helpers(
             message: "plan target_servers must contain distinct canonical helpers".to_string(),
         });
     }
-    let expected_target = share_submission_target_count(planning_fleet.len());
     let planned_target = usize::try_from(request.plan.target_count).unwrap_or(usize::MAX);
-    if planned_target != expected_target || planned.len() != planned_target {
+    if !is_planned_share_submission_target_count(planned_target, planning_fleet.len())
+        || planned.len() != planned_target
+    {
         return Err(VotingError::InvalidInput {
             message: format!(
-                "plan target_count and target_servers must match the persisted planning fleet target {expected_target}"
+                "plan target_count {planned_target} and target_servers must match a planned target for its {}-helper planning fleet",
+                planning_fleet.len()
             ),
         });
     }

@@ -136,7 +136,9 @@ pub use timing::{
     SHARE_RESUBMIT_CUTOFF_SECONDS,
 };
 
-pub(crate) use server_order::effective_share_submission_target_count;
+pub(crate) use server_order::{
+    effective_share_submission_target_count, is_planned_share_submission_target_count,
+};
 // The tracking cadence: `ShareTrackingDriver` applies it, and the four
 // constants are the defaults of `ShareTimingPolicy` fields, which a host reads
 // from `ShareTimingPolicy::default()` rather than as loose values.

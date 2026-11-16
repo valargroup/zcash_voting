@@ -14,8 +14,9 @@ static DELIVERY_PERMITS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(D
 
 /// Waits for capacity without creating durable reservations. Cancellation is
 /// observed within 50 ms even while all permits remain occupied. The caller
-/// supplies the validated plan's target (bounded by the protocol helper cap)
-/// and holds the full charge until its share's outcomes have been journaled.
+/// supplies the validated plan's target (at most the previous helper cap of 10
+/// for plans stored before it dropped; see
+/// `is_planned_share_submission_target_count`) and holds the full charge until its share's outcomes have been journaled.
 /// Atomic weighted admission keeps queued fan-out outside the delivery deadline
 /// without partially acquired capacity blocking other wallets indefinitely.
 pub(super) async fn acquire(

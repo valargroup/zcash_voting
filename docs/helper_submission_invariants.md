@@ -184,7 +184,7 @@ derived from the canonical normal-commitment share count. Let:
 
 ```text
 S = VOTE_COMMITMENT_SHARE_COUNT
-C = SHARE_HELPER_TARGET_COUNT_CAP = 10
+C = SHARE_HELPER_TARGET_COUNT_CAP = 5
 N = number of distinct configured helpers
 R = number of ready helpers in the readiness-ranked prefix
 ```
@@ -193,7 +193,7 @@ The normal protocol MUST have `S >= 2`. Single-share mode is a separate mode,
 is valid only when the planned payload count is exactly one, does not change
 `S`, and is exempt from the commitment-wide distribution bound below. A caller
 cannot mark an `S`-share commitment as single-share to bypass that bound.
-`C = 10` is an independent protocol choice: it bounds initial
+`C = 5` is an independent protocol choice: it bounds initial
 fan-out and prevents fleet growth from increasing per-share distribution
 without limit. It is not derived from `S`.
 
@@ -211,9 +211,9 @@ rounded up, until it reaches the protocol cap:
 target_count = T = min(ceil(N / 2), C)
 ```
 
-For the current `S = 16` and `C = 10`, these formulas produce `M = 12`.
-Consequently, fleets through 20 helpers retain the half-rounded-up target,
-while larger fleets target at most 10 definite acceptances per share.
+For the current `S = 16` and `C = 5`, these formulas produce `M = 12`.
+Consequently, fleets through 10 helpers retain the half-rounded-up target,
+while larger fleets target exactly 5 definite acceptances per share.
 
 For a complete normal commitment, planning creates `S * T` assignments. The
 planning pool MUST contain enough helpers for every assignment without any
@@ -240,9 +240,9 @@ The current values include:
 | 3 | 2 | 3 | 12 |
 | 5 | 3 | 4 | 12 |
 | 10 | 5 | 7 | 12 |
-| 20 | 10 | 14 | 12 |
-| 30 | 10 | 14 | 12 |
-| 100 | 10 | 14 | 12 |
+| 15 | 5 | 7 | 12 |
+| 20 | 5 | 7 | 12 |
+| 100 | 5 | 7 | 12 |
 
 The selector MUST enforce `M` as a hard quota while constructing a complete
 batch, not merely rely on an average produced by balancing. Among helpers
@@ -284,12 +284,15 @@ change the share format.
 Existing durable rows whose stored `target_count` exceeds `C` keep their
 historical value but MUST use `C` as their effective target. This read-time
 clamp avoids a schema migration while preventing a legacy value from restoring
-the old uncapped behavior.
+the old uncapped behavior. Persisted complete plans also validate when their
+target matches the previous cap of 10, `min(ceil(N / 2), 10)`, so a vote
+planned before `C` dropped to 5 still delivers after an upgrade. New plans
+always use the current `C`.
 
 Regression coverage:
 
-- target count remains half-rounded-up through `N = 20` and is capped by the
-  independent protocol constant `C = 10` above that boundary;
+- target count remains half-rounded-up through `N = 10` and is capped by the
+  independent protocol constant `C = 5` above that boundary;
 - the maximum initial assignment count is derived as `floor(3S / 4)`;
 - the minimum pool is derived as `ceil(S * T / M)` at small, boundary, and
   large fleet sizes;
@@ -300,10 +303,13 @@ Regression coverage:
 - single-share mode rejects zero, incomplete, and complete multi-share batches;
 - incomplete or independently planned low-level batches and legacy pre-v17
   state do not advertise the complete batch guarantee;
-- fallback and recovery remain able to exceed the initial-only quota; and
+- fallback and recovery remain able to exceed the initial-only quota;
 - `legacy_target_above_protocol_cap_is_effectively_clamped` ensures a durable
   target above the protocol cap cannot drive new placements above the
-  canonical target.
+  canonical target; and
+- `plan_stored_under_the_previous_target_cap_still_delivers` ensures a complete
+  plan persisted under the previous cap of 10 still loads and delivers, while
+  a target neither cap would plan is rejected.
 
 ### Share count and identity
 
@@ -439,7 +445,7 @@ tests are in
 
 ### Placement target
 
-For `N` distinct configured helpers and protocol target cap `C = 10`, every
+For `N` distinct configured helpers and protocol target cap `C = 5`, every
 initial share target is:
 
 ```text
@@ -455,11 +461,12 @@ The concrete values include:
 | 2 | 1 |
 | 3 | 2 |
 | 5 | 3 |
+| 8 | 4 |
+| 9 | 5 |
 | 10 | 5 |
-| 20 | 10 |
-| 21 | 10 |
-| 30 | 10 |
-| 100 | 10 |
+| 15 | 5 |
+| 20 | 5 |
+| 100 | 5 |
 
 An empty helper list is invalid even though the pure target-count function
 returns zero. The high-level entry point does not accept an unvalidated raw
@@ -1796,7 +1803,7 @@ roster still depends on those recovery rows; this is covered by
 
 ### Configuration and migration
 
-The effective target is capped to both the protocol target cap `C = 10` and the
+The effective target is capped to both the protocol target cap `C = 5` and the
 current valid configured fleet size. Persisted accepted or ambiguous helpers
 removed from configuration are neither polled nor counted. A durable target
 above `C` remains historical data but cannot drive additional placement above

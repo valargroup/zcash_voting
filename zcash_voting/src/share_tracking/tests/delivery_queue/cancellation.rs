@@ -5,7 +5,7 @@ use tokio::sync::Semaphore;
 #[tokio::test(start_paused = true)]
 async fn mixed_fleet_admission_cancellation_releases_the_full_charge() {
     let small_fleet = Fixture::new(1);
-    let large_fleet = Fixture::with_helpers(2, 20);
+    let large_fleet = Fixture::with_helpers(3, 20);
     let gate = Arc::new(Semaphore::new(0));
     let gated_transport = || {
         ScriptedTransport::new({
@@ -21,19 +21,20 @@ async fn mixed_fleet_admission_cancellation_releases_the_full_charge() {
     let cancelled = AtomicBool::new(false);
     let cancel = || cancelled.load(Ordering::SeqCst);
     let run_large = async {
-        // Sixteen one-target shares charge 2048 units. Only eight ten-target
-        // shares fit alongside them, despite spare physical POST slots.
+        // Sixteen one-target shares charge 2048 units. Only seventeen
+        // five-target shares fit alongside them, despite spare physical POST
+        // slots.
         small_transport.wait_for(16).await;
         large_fleet.deliver(large_transport.clone(), &cancel).await
     };
     let interrupt = async {
-        large_transport.wait_for(80).await;
+        large_transport.wait_for(85).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(small_transport.count(), 16);
-        assert_eq!(large_transport.count(), 80);
-        assert_eq!(share::list(&large_fleet.db, ROUND_ID).unwrap().len(), 8);
+        assert_eq!(large_transport.count(), 85);
+        assert_eq!(share::list(&large_fleet.db, ROUND_ID).unwrap().len(), 17);
         cancelled.store(true, Ordering::SeqCst);
-        gate.add_permits(96);
+        gate.add_permits(101);
     };
     let (small_reports, large_reports, ()) = tokio::join!(
         small_fleet.deliver(small_transport.clone(), &uncancelled),
@@ -41,7 +42,7 @@ async fn mixed_fleet_admission_cancellation_releases_the_full_charge() {
         interrupt,
     );
     assert_complete(small_reports, 1);
-    assert_eq!(large_transport.count(), 80);
+    assert_eq!(large_transport.count(), 85);
     assert_eq!(large_transport.active.load(Ordering::SeqCst), 0);
     let large_reports = large_reports
         .into_iter()
@@ -53,30 +54,30 @@ async fn mixed_fleet_admission_cancellation_releases_the_full_charge() {
             .iter()
             .map(|report| report.deliveries.len())
             .sum::<usize>(),
-        8
+        17
     );
     assert_eq!(
         large_reports
             .iter()
             .map(|report| report.pending_share_indices.len())
             .sum::<usize>(),
-        24
+        31
     );
     assert!(share::list(&large_fleet.db, ROUND_ID)
         .unwrap()
         .iter()
-        .all(|share| share.sent_to_urls.len() == 10
+        .all(|share| share.sent_to_urls.len() == 5
             && share.attempting_urls.is_empty()
             && share.ambiguous_urls.is_empty()));
 
-    // Resumption uses the entire budget again and sends only the 24 unsent shares.
+    // Resumption uses the entire budget again and sends only the 31 unsent shares.
     let resumed = ScriptedTransport::new(|_| ReplyPlan {
         delay: Duration::from_secs(1),
         ..Default::default()
     });
     let reports = large_fleet.deliver(resumed.clone(), &uncancelled).await;
-    assert_eq!(resumed.peak.load(Ordering::SeqCst), 120);
-    assert_eq!(resumed.count(), 240);
+    assert_eq!(resumed.peak.load(Ordering::SeqCst), 125);
+    assert_eq!(resumed.count(), 155);
     for report in reports {
         let report = report.unwrap();
         assert!(!report.cancelled);
@@ -85,7 +86,7 @@ async fn mixed_fleet_admission_cancellation_releases_the_full_charge() {
         assert!(report
             .deliveries
             .iter()
-            .all(|delivery| delivery.submission.accepted_urls.len() == 10
+            .all(|delivery| delivery.submission.accepted_urls.len() == 5
                 && delivery.submission.ambiguous_urls.is_empty()));
     }
 }

@@ -14,6 +14,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   Legacy branch-ID arguments are now ignored instead of checked against the
   compiled upgrade schedule; provider errors still propagate. Changes to
   note, tree, or circuit formats still require explicit support.
+- Lower the per-share helper target cap from 10 to 5. Fleets of 10 or more
+  helpers now send each share to 5 helpers instead of half the fleet, and
+  fleets of 9 or fewer keep half rounded up. Durable plans stored with a
+  higher target are clamped to 5 when read.
 
 ## v5.4.0
 

@@ -1608,7 +1608,7 @@ mod tests {
     #[test]
     fn share_policy_re_exports_are_callable() {
         assert_eq!(policy::share_submission_target_count(3), 2);
-        assert_eq!(policy::SHARE_HELPER_TARGET_COUNT_CAP, 10);
+        assert_eq!(policy::SHARE_HELPER_TARGET_COUNT_CAP, 5);
         assert_eq!(policy::SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, 12);
         assert_eq!(policy::SHARE_HELPER_INITIAL_MAX_FRACTION_NUMERATOR, 3);
         assert_eq!(policy::SHARE_HELPER_INITIAL_MAX_FRACTION_DENOMINATOR, 4);

@@ -15,16 +15,20 @@ fn helper_target_count_is_half_rounded_up_and_capped_by_protocol_policy() {
     assert_eq!(share_submission_target_count(2), 1);
     assert_eq!(share_submission_target_count(3), 2);
     assert_eq!(share_submission_target_count(5), 3);
+    assert_eq!(share_submission_target_count(8), 4);
+    assert_eq!(share_submission_target_count(9), 5);
     assert_eq!(share_submission_target_count(10), 5);
-    assert_eq!(share_submission_target_count(20), 10);
-    assert_eq!(share_submission_target_count(21), 10);
-    assert_eq!(share_submission_target_count(30), 10);
-    assert_eq!(share_submission_target_count(100), 10);
-    assert_eq!(SHARE_HELPER_TARGET_COUNT_CAP, 10);
+    assert_eq!(share_submission_target_count(15), 5);
+    assert_eq!(share_submission_target_count(20), 5);
+    assert_eq!(share_submission_target_count(30), 5);
+    assert_eq!(share_submission_target_count(100), 5);
+    assert_eq!(SHARE_HELPER_TARGET_COUNT_CAP, 5);
     assert_eq!(SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, 12);
-    assert_eq!(effective_share_submission_target_count(0, 33), 10);
-    assert_eq!(effective_share_submission_target_count(99, 30), 10);
-    assert_eq!(effective_share_submission_target_count(99, 10), 10);
+    assert_eq!(effective_share_submission_target_count(0, 33), 5);
+    assert_eq!(effective_share_submission_target_count(8, 15), 5);
+    assert_eq!(effective_share_submission_target_count(99, 30), 5);
+    assert_eq!(effective_share_submission_target_count(99, 10), 5);
+    assert_eq!(effective_share_submission_target_count(99, 3), 3);
 }
 
 #[test]
@@ -64,7 +68,7 @@ fn helper_selection_policy_exposes_shared_limits() {
             share_server_selection_policy(100).max_shares_per_server,
             share_server_selection_policy(100).min_server_count,
         ),
-        (10, 12, 14)
+        (5, 12, 7)
     );
     assert_eq!(
         (
@@ -362,7 +366,8 @@ fn complete_batch_balances_larger_fleet() {
         VOTE_COMMITMENT_SHARE_COUNT * target_count
     );
     assert_eq!(usage.len(), servers.len());
-    assert!(usage.values().all(|count| (4..=5).contains(count)));
+    // Eighty assignments over thirty-three helpers balance to two or three each.
+    assert!(usage.values().all(|count| (2..=3).contains(count)));
 }
 
 #[test]
@@ -441,8 +446,8 @@ fn minimum_planning_pool_enforces_derived_three_quarters_cap() {
 }
 
 #[test]
-fn protocol_target_cap_uses_fourteen_helpers_for_complete_batch_capacity() {
-    for server_count in [20, 21, 30, 100] {
+fn protocol_target_cap_uses_seven_helpers_for_complete_batch_capacity() {
+    for server_count in [10, 15, 21, 100] {
         let servers: Vec<String> = (0..server_count)
             .map(|index| format!("https://helper-{index}.example.com"))
             .collect();
@@ -467,11 +472,11 @@ fn protocol_target_cap_uses_fourteen_helpers_for_complete_batch_capacity() {
         .unwrap();
 
         let usage = planned_server_usage(&plans);
-        assert!(plans.iter().all(|plan| plan.target_count == 10));
-        assert_eq!(usage.values().sum::<usize>(), 160);
-        assert_eq!(usage.len(), 14);
+        assert!(plans.iter().all(|plan| plan.target_count == 5));
+        assert_eq!(usage.values().sum::<usize>(), 80);
+        assert_eq!(usage.len(), 7);
         assert!(usage.values().all(|count| (11..=12).contains(count)));
-        assert!(usage.keys().all(|server| servers[..14].contains(server)));
+        assert!(usage.keys().all(|server| servers[..7].contains(server)));
     }
 }
 
@@ -510,10 +515,13 @@ fn incomplete_batch_is_exempt_from_complete_batch_usage_cap() {
         .map(|index| format!("https://helper-{index}.example.com"))
         .collect();
     let share_count = VOTE_COMMITMENT_SHARE_COUNT - 1;
+    // A ready pool exactly as large as the target puts every share on every
+    // ready helper, which only an incomplete batch may do.
+    let target_count = share_submission_target_count(servers.len());
     let plans = plan_share_submissions_with_preferred_servers(
         share_count,
         &servers,
-        8,
+        target_count,
         1_000,
         2_000,
         None,
@@ -525,7 +533,7 @@ fn incomplete_batch_is_exempt_from_complete_batch_usage_cap() {
     .unwrap();
 
     let usage = planned_server_usage(&plans);
-    assert_eq!(usage.len(), 8);
+    assert_eq!(usage.len(), target_count);
     assert!(usage.values().all(|count| *count == share_count));
     assert!(usage
         .values()
