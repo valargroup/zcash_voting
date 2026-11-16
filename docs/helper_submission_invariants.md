@@ -410,8 +410,8 @@ Regression coverage:
    It deliberately stops at ordering *inside* one call: holding a call's own
    shares behind its designated one would break the no-proposal-barrier property
    (`combined_reconciliation_delivers_later_proposals_while_the_first_is_unfinished`)
-   and prevent a full commitment reaching the POST ceiling
-   (`full_commitment_reaches_but_never_exceeds_128_posts`). Both are deliberate,
+   and prevent a full commitment from posting every target concurrently
+   (`full_commitment_posts_every_target_concurrently`). Both are deliberate,
    and every share measured ahead of the designated one belonged to another
    bundle, which is what the gate addresses.
 
@@ -1149,10 +1149,12 @@ continue to own sibling-progress and partial-report behavior.
 
 Up to 50 share tasks across all wallets and committed votes in the process may
 hold a delivery permit at once. Admission uses one process-wide budget of 6400
-units, charging each share `max(128, 50 * planned target_count)` units atomically.
-Thus up to 50 shares with targets of two or fewer, 32 shares with targets of four,
-or 12 shares with targets of ten can run at once; mixed fleets share the same
-budget. The charge uses the validated persisted plan and is retained until outcomes are journaled, including across
+units, charging each share `max(128, 50 * min(planned target_count, C))` units
+atomically. Thus up to 50 shares with targets of two or fewer, 32 shares with
+targets of four, or 25 shares with targets of five can run at once. A legacy plan
+whose stored target is higher than `C` is charged as five, since delivery never
+seeks more than `C` acceptances. Mixed fleets share the same budget. The charge
+uses the validated persisted plan and is retained until outcomes are journaled, including across
 fallback waves. Waiting for this budget occurs before share preparation and the
 fan-out deadline, and cancellation releases the complete charge. This bounds the
 aggregate planned fan-out of admitted queue workflows to 128 without changing
@@ -2015,8 +2017,10 @@ a 30-second hard deadline, and 128 concurrent POSTs.
 target internally. `ConfirmedVote::submit_prepared_shares` enforces the
 process-wide 128-POST ceiling with a shared semaphore. Complete-plan persistence
 lets the SDK validate commitment-wide quota, current-fleet compatibility, and
-restart reuse before network dispatch. The POST ceiling is exercised by
-`full_commitment_reaches_but_never_exceeds_128_posts`; cancellation and
+restart reuse before network dispatch. The POST ceiling is exercised by the
+four-target case of `helper_fanout_bounds_admitted_workflows`, which reaches
+32 × 4 = 128 POSTs. `full_commitment_posts_every_target_concurrently` covers a
+full five-target commitment sending all 80 POSTs at once. Cancellation and
 budget expiry while queued are covered by
 `post_capacity_cancellation_clears_unsent_reservations` and
 `post_capacity_deadline_clears_unsent_reservations`. Generation-bound admission
@@ -2025,7 +2029,7 @@ is covered by `queued_delivery_rejects_a_deleted_round_before_posting`,
 `queued_delivery_requires_its_attempt_reservation`, and
 `queued_delivery_does_not_validate_against_a_different_wallet`.
 `helper_fanout_bounds_admitted_workflows` covers the 50-share/one-target boundary
-across four commitments, plus the 32-share/four-target and 12-share/ten-target
+across four commitments, plus the 32-share/four-target and 25-share/five-target
 boundaries across two commitments.
 `slow_successful_fanout_keeps_queued_shares_outside_the_deadline` delivers all
 320 placements through 25-second successful POSTs without generating ambiguity.
