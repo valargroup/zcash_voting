@@ -9,12 +9,13 @@ use crate::{
 static GLOBAL_BATCH_LIMIT_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-/// Sixteen shares with eight targets exactly fill the 128-unit admission budget.
+/// A full commitment posts every share's targets at once, within the POST cap.
 ///
-/// Current planning targets five helpers per share, so the eight-target plan is
-/// stored the way a release before the lower cap would have planned it.
+/// Sixteen five-target shares charge 4000 of the 6400 admission units, so the
+/// whole commitment is admitted together. The 128-POST ceiling itself is
+/// reached by `helper_fanout_bounds_admitted_workflows`.
 #[tokio::test(start_paused = true)]
-async fn full_commitment_reaches_but_never_exceeds_128_posts() {
+async fn full_commitment_posts_every_target_concurrently() {
     let _global_limit_guard = GLOBAL_BATCH_LIMIT_TEST_LOCK.lock().await;
     let db = db_with_unique_recoverable_vote();
     set_recovery_share_count(&db, 16);
@@ -24,20 +25,7 @@ async fn full_commitment_reaches_but_never_exceeds_128_posts() {
     let plan = vote
         .prepare_share_delivery(&db, planning_params(&fleet))
         .unwrap();
-    let eight_target_plans = plan
-        .share_plans
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(share_index, mut share)| {
-            share.target_count = 8;
-            share.target_servers = (0..8)
-                .map(|offset| configured[(share_index + offset) % configured.len()].clone())
-                .collect();
-            share
-        })
-        .collect::<Vec<_>>();
-    replace_stored_share_plans(&db, &eight_target_plans);
+    assert!(plan.share_plans.iter().all(|share| share.target_count == 5));
     let transport = Arc::new(MockTransport::default());
     for helper in &configured {
         for _ in 0..16 {
@@ -57,11 +45,11 @@ async fn full_commitment_reaches_but_never_exceeds_128_posts() {
         )
         .await
         .unwrap();
-    assert_eq!(transport.peak_posts_in_flight(), 128);
-    assert_eq!(transport.call_count("/shares"), 128);
+    assert_eq!(transport.peak_posts_in_flight(), 80);
+    assert_eq!(transport.call_count("/shares"), 80);
     assert_eq!(report.deliveries.len(), 16);
     assert!(report.deliveries.iter().all(|delivery| {
-        delivery.submission.accepted_urls.len() == 8
+        delivery.submission.accepted_urls.len() == 5
             && delivery.submission.ambiguous_urls.is_empty()
     }));
     assert!(share::list(&db, ROUND_ID)
@@ -1261,7 +1249,8 @@ async fn restart_reuses_the_plan_and_resumes_definite_delivery_deficits() {
         .all(|share| share.sent_to_urls == configured));
 }
 
-/// A plan stored before the target cap dropped to five still loads and delivers.
+/// A plan stored before the target cap dropped to five still loads and delivers,
+/// but to no more than five helpers per share.
 #[tokio::test]
 async fn plan_stored_under_the_previous_target_cap_still_delivers() {
     let _global_limit_guard = GLOBAL_BATCH_LIMIT_TEST_LOCK.lock().await;
@@ -1322,10 +1311,14 @@ async fn plan_stored_under_the_previous_target_cap_still_delivers() {
         .await
         .unwrap();
     assert_eq!(report.deliveries.len(), 16);
-    assert!(report
-        .deliveries
+    assert!(report.deliveries.iter().all(|delivery| {
+        delivery.submission.target_count == 5 && delivery.submission.accepted_urls.len() == 5
+    }));
+    assert_eq!(transport.call_count("/shares"), 80);
+    assert!(share::list(&db, ROUND_ID)
+        .unwrap()
         .iter()
-        .all(|delivery| delivery.submission.accepted_urls.len() >= 5));
+        .all(|share| share.sent_to_urls.len() == 5));
 }
 
 #[tokio::test]

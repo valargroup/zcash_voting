@@ -286,8 +286,10 @@ historical value but MUST use `C` as their effective target. This read-time
 clamp avoids a schema migration while preventing a legacy value from restoring
 the old uncapped behavior. Persisted complete plans also validate when their
 target matches the previous cap of 10, `min(ceil(N / 2), 10)`, so a vote
-planned before `C` dropped to 5 still delivers after an upgrade. New plans
-always use the current `C`.
+planned before `C` dropped to 5 still delivers after an upgrade. Its stored
+target list stays a valid candidate order, but initial delivery and admission
+use the clamped target, so it seeks at most `C` acceptances. New plans always
+use the current `C`.
 
 Regression coverage:
 
@@ -308,8 +310,8 @@ Regression coverage:
   target above the protocol cap cannot drive new placements above the
   canonical target; and
 - `plan_stored_under_the_previous_target_cap_still_delivers` ensures a complete
-  plan persisted under the previous cap of 10 still loads and delivers, while
-  a target neither cap would plan is rejected.
+  plan persisted under the previous cap of 10 still loads and delivers to
+  exactly `C` helpers, while a target neither cap would plan is rejected.
 
 ### Share count and identity
 

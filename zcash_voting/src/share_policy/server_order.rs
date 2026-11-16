@@ -58,8 +58,9 @@ pub fn share_submission_target_count(server_count: usize) -> usize {
 ///
 /// Accepts the current target and the target from before the cap dropped from
 /// [`LEGACY_SHARE_HELPER_TARGET_COUNT_CAP`] to [`SHARE_HELPER_TARGET_COUNT_CAP`],
-/// so votes planned before an upgrade still deliver. Tracking clamps either
-/// value to the current cap (see `effective_share_submission_target_count`).
+/// so votes planned before an upgrade still deliver. Delivery and tracking
+/// clamp either value to the current cap (see
+/// `effective_share_submission_target_count`).
 pub(crate) fn is_planned_share_submission_target_count(
     target_count: usize,
     server_count: usize,

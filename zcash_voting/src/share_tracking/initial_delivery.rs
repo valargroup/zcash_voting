@@ -6,7 +6,8 @@ use crate::{
     round::VotingDb,
     share,
     share_policy::{
-        is_planned_share_submission_target_count, SHARE_DELIVERY_MIN_ATTEMPT_BUDGET_MILLISECONDS,
+        effective_share_submission_target_count, is_planned_share_submission_target_count,
+        SHARE_DELIVERY_MIN_ATTEMPT_BUDGET_MILLISECONDS,
         SHARE_INITIAL_DELIVERY_TIMEOUT_MILLISECONDS,
     },
     types::{ShareDelegationRecord, SharePayload, VotingError},
@@ -656,7 +657,12 @@ pub(crate) async fn submit_committed_share_to_helpers(
         planned_servers: &candidates[..eligible_planned_count],
         #[cfg(test)]
         fallback_servers: &candidates[eligible_planned_count..],
-        target_count: planned_target,
+        // A plan stored under the previous cap keeps its validated target list
+        // but never drives placement above the current cap.
+        target_count: effective_share_submission_target_count(
+            request.plan.target_count,
+            planning_fleet.len(),
+        ),
         submit_at: request.plan.submit_at,
         now_seconds: request.now_seconds,
     };

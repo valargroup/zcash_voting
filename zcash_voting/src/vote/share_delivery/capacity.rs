@@ -1,6 +1,9 @@
 //! Admission shared by every singleton and multi-proposal initial delivery.
 
-use crate::{share_policy::SHARE_HELPER_MAX_CONCURRENT_POSTS, VotingError};
+use crate::{
+    share_policy::{SHARE_HELPER_MAX_CONCURRENT_POSTS, SHARE_HELPER_TARGET_COUNT_CAP},
+    VotingError,
+};
 use std::{sync::LazyLock, time::Duration};
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -14,16 +17,17 @@ static DELIVERY_PERMITS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(D
 
 /// Waits for capacity without creating durable reservations. Cancellation is
 /// observed within 50 ms even while all permits remain occupied. The caller
-/// supplies the validated plan's target (at most the previous helper cap of 10
-/// for plans stored before it dropped; see
-/// `is_planned_share_submission_target_count`) and holds the full charge until its share's outcomes have been journaled.
+/// supplies the validated plan's target, which is charged at most at the
+/// protocol helper cap because delivery never fans out past it, and holds the
+/// full charge until its share's outcomes have been journaled.
 /// Atomic weighted admission keeps queued fan-out outside the delivery deadline
 /// without partially acquired capacity blocking other wallets indefinitely.
 pub(super) async fn acquire(
     planned_target: u32,
     cancel: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<Option<SemaphorePermit<'static>>, VotingError> {
-    let charge = (planned_target * MAX_CONCURRENT_SHARE_DELIVERIES as u32)
+    let charge = (planned_target.min(SHARE_HELPER_TARGET_COUNT_CAP as u32)
+        * MAX_CONCURRENT_SHARE_DELIVERIES as u32)
         .max(SHARE_HELPER_MAX_CONCURRENT_POSTS as u32);
     let admission = DELIVERY_PERMITS.acquire_many(charge);
     tokio::pin!(admission);
