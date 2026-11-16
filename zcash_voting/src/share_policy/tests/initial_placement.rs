@@ -24,6 +24,14 @@ fn helper_target_count_is_half_rounded_up_and_capped_by_protocol_policy() {
     assert_eq!(share_submission_target_count(100), 5);
     assert_eq!(SHARE_HELPER_TARGET_COUNT_CAP, 5);
     assert_eq!(SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, 12);
+    // The readiness target keeps the previous cap of 10 so the pool stays wide.
+    assert_eq!(share_helper_readiness_target_count(0), 0);
+    assert_eq!(share_helper_readiness_target_count(1), 1);
+    assert_eq!(share_helper_readiness_target_count(9), 5);
+    assert_eq!(share_helper_readiness_target_count(10), 5);
+    assert_eq!(share_helper_readiness_target_count(15), 8);
+    assert_eq!(share_helper_readiness_target_count(20), 10);
+    assert_eq!(share_helper_readiness_target_count(100), 10);
     assert_eq!(effective_share_submission_target_count(0, 33), 5);
     assert_eq!(effective_share_submission_target_count(8, 15), 5);
     assert_eq!(effective_share_submission_target_count(99, 30), 5);
@@ -68,7 +76,15 @@ fn helper_selection_policy_exposes_shared_limits() {
             share_server_selection_policy(100).max_shares_per_server,
             share_server_selection_policy(100).min_server_count,
         ),
-        (5, 12, 7)
+        (5, 12, 14)
+    );
+    assert_eq!(
+        (
+            share_server_selection_policy(15).target_count,
+            share_server_selection_policy(15).max_shares_per_server,
+            share_server_selection_policy(15).min_server_count,
+        ),
+        (5, 12, 11)
     );
     assert_eq!(
         (
@@ -446,8 +462,16 @@ fn minimum_planning_pool_enforces_derived_three_quarters_cap() {
 }
 
 #[test]
-fn protocol_target_cap_uses_seven_helpers_for_complete_batch_capacity() {
-    for server_count in [10, 15, 21, 100] {
+fn complete_batch_pool_follows_the_readiness_target() {
+    // The pool is sized by the readiness target (half the fleet, capped at 10),
+    // not by the five recipients per share, so a lower per-share fan-out does
+    // not concentrate a commitment on fewer helpers.
+    for (server_count, pool, per_helper) in [
+        (10, 7, 11..=12),
+        (15, 11, 7..=8),
+        (21, 14, 5..=6),
+        (100, 14, 5..=6),
+    ] {
         let servers: Vec<String> = (0..server_count)
             .map(|index| format!("https://helper-{index}.example.com"))
             .collect();
@@ -474,9 +498,9 @@ fn protocol_target_cap_uses_seven_helpers_for_complete_batch_capacity() {
         let usage = planned_server_usage(&plans);
         assert!(plans.iter().all(|plan| plan.target_count == 5));
         assert_eq!(usage.values().sum::<usize>(), 80);
-        assert_eq!(usage.len(), 7);
-        assert!(usage.values().all(|count| (11..=12).contains(count)));
-        assert!(usage.keys().all(|server| servers[..7].contains(server)));
+        assert_eq!(usage.len(), pool, "{server_count} helpers");
+        assert!(usage.values().all(|count| per_helper.contains(count)));
+        assert!(usage.keys().all(|server| servers[..pool].contains(server)));
     }
 }
 
@@ -511,13 +535,19 @@ fn infeasible_initial_assignment_capacity_is_rejected() {
 
 #[test]
 fn incomplete_batch_is_exempt_from_complete_batch_usage_cap() {
-    let servers: Vec<String> = (0..15)
+    // Ten helpers make the readiness target equal the per-share target, so
+    // the incomplete-batch pool is exactly the target.
+    let servers: Vec<String> = (0..10)
         .map(|index| format!("https://helper-{index}.example.com"))
         .collect();
     let share_count = VOTE_COMMITMENT_SHARE_COUNT - 1;
     // A ready pool exactly as large as the target puts every share on every
     // ready helper, which only an incomplete batch may do.
     let target_count = share_submission_target_count(servers.len());
+    assert_eq!(
+        target_count,
+        share_helper_readiness_target_count(servers.len())
+    );
     let plans = plan_share_submissions_with_preferred_servers(
         share_count,
         &servers,
@@ -538,6 +568,34 @@ fn incomplete_batch_is_exempt_from_complete_batch_usage_cap() {
     assert!(usage
         .values()
         .all(|count| *count > SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER));
+}
+
+#[test]
+fn incomplete_batch_pool_follows_the_readiness_target() {
+    let servers: Vec<String> = (0..15)
+        .map(|index| format!("https://helper-{index}.example.com"))
+        .collect();
+    let share_count = VOTE_COMMITMENT_SHARE_COUNT - 1;
+    // Five ready helpers would cover the per-share target, but the pool still
+    // widens to the readiness target of eight.
+    let plans = plan_share_submissions_with_preferred_servers(
+        share_count,
+        &servers,
+        5,
+        1_000,
+        2_000,
+        None,
+        false,
+        None,
+        &[],
+        &vec![0; share_count * share_server_order_random_bytes_required(servers.len())],
+    )
+    .unwrap();
+
+    let usage = planned_server_usage(&plans);
+    assert!(plans.iter().all(|plan| plan.target_servers.len() == 5));
+    assert_eq!(usage.len(), 8);
+    assert!(usage.keys().all(|server| servers[..8].contains(server)));
 }
 
 #[test]

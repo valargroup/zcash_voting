@@ -16,8 +16,13 @@ pub const SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER: usize = VOTE_COMMITMENT_SH
     / SHARE_HELPER_INITIAL_MAX_FRACTION_DENOMINATOR;
 /// Protocol cap on definite helper acceptances targeted for one share.
 pub const SHARE_HELPER_TARGET_COUNT_CAP: usize = 5;
-/// Cap used by earlier releases, kept only so their persisted plans still load.
-const LEGACY_SHARE_HELPER_TARGET_COUNT_CAP: usize = 10;
+/// Cap on the readiness target, which also sizes the complete-batch planning pool.
+///
+/// It is larger than [`SHARE_HELPER_TARGET_COUNT_CAP`] so each share picks its
+/// recipients from a wider pool, and no small group of helpers is guaranteed
+/// to receive every share. Releases before the per-share cap dropped to 5 used
+/// this cap as the per-share target too, so their persisted plans carry it.
+const SHARE_HELPER_READINESS_TARGET_COUNT_CAP: usize = 10;
 /// Initial helper readiness window before slower transports keep racing.
 pub const SHARE_HELPER_PREFLIGHT_SOFT_TIMEOUT_MILLISECONDS: u64 = 2_000;
 /// Absolute deadline for the helper readiness race.
@@ -45,31 +50,41 @@ const _: () = assert!(VOTE_COMMITMENT_SHARE_COUNT >= 2);
 const _: () = assert!(SHARE_HELPER_INITIAL_MAX_FRACTION_DENOMINATOR > 0);
 const _: () = assert!(SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER > 0);
 const _: () = assert!(SHARE_HELPER_TARGET_COUNT_CAP > 0);
+const _: () = assert!(SHARE_HELPER_READINESS_TARGET_COUNT_CAP >= SHARE_HELPER_TARGET_COUNT_CAP);
+
+/// Return how many ready helpers a readiness race waits for.
+///
+/// This is half of the configured helpers, rounded up and capped at 10. It also
+/// sets the minimum planning pool for a complete commitment (see
+/// [`share_server_selection_policy`]), which is why it stays above the
+/// per-share target. It is 0 when there are no helpers.
+pub fn share_helper_readiness_target_count(server_count: usize) -> usize {
+    server_count
+        .div_ceil(2)
+        .min(SHARE_HELPER_READINESS_TARGET_COUNT_CAP)
+}
 
 /// Return how many helpers should receive each initial share.
 ///
-/// This is half of the configured helpers, rounded up and capped by the
-/// protocol's helper-distribution policy. It is 0 when there are no helpers.
+/// This is the readiness target capped by [`SHARE_HELPER_TARGET_COUNT_CAP`].
+/// It is 0 when there are no helpers.
 pub fn share_submission_target_count(server_count: usize) -> usize {
-    server_count.div_ceil(2).min(SHARE_HELPER_TARGET_COUNT_CAP)
+    share_helper_readiness_target_count(server_count).min(SHARE_HELPER_TARGET_COUNT_CAP)
 }
 
 /// Return whether a persisted plan's per-share target is one a release planned.
 ///
-/// Accepts the current target and the target from before the cap dropped from
-/// [`LEGACY_SHARE_HELPER_TARGET_COUNT_CAP`] to [`SHARE_HELPER_TARGET_COUNT_CAP`],
-/// so votes planned before an upgrade still deliver. Delivery and tracking
-/// clamp either value to the current cap (see
+/// Accepts the current target and the readiness target, which releases before
+/// the per-share cap dropped to [`SHARE_HELPER_TARGET_COUNT_CAP`] used as the
+/// per-share target, so votes planned before an upgrade still deliver.
+/// Delivery and tracking clamp either value to the current cap (see
 /// `effective_share_submission_target_count`).
 pub(crate) fn is_planned_share_submission_target_count(
     target_count: usize,
     server_count: usize,
 ) -> bool {
     target_count == share_submission_target_count(server_count)
-        || target_count
-            == server_count
-                .div_ceil(2)
-                .min(LEGACY_SHARE_HELPER_TARGET_COUNT_CAP)
+        || target_count == share_helper_readiness_target_count(server_count)
 }
 
 /// Return the effective target for a durable share and current helper fleet.
@@ -87,17 +102,21 @@ pub(crate) fn effective_share_submission_target_count(
         .min(server_count)
 }
 
-fn minimum_complete_batch_planning_server_count(target_count: usize) -> usize {
-    if target_count == 0 {
+fn minimum_complete_batch_planning_server_count(readiness_target_count: usize) -> usize {
+    if readiness_target_count == 0 {
         return 0;
     }
     VOTE_COMMITMENT_SHARE_COUNT
-        .checked_mul(target_count)
+        .checked_mul(readiness_target_count)
         .expect("share-count-derived assignment total fits usize")
         .div_ceil(SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER)
 }
 
 /// Return the shared helper probe and initial-delivery policy.
+///
+/// `min_server_count` is derived from the readiness target rather than the
+/// per-share target, so a commitment spreads across the same pool it did
+/// before the per-share cap dropped to 5.
 pub fn share_server_selection_policy(server_count: usize) -> ShareServerSelectionPolicy {
     let target_count = share_submission_target_count(server_count);
     let (max_shares_per_server, min_server_count) = if server_count == 0 {
@@ -107,7 +126,9 @@ pub fn share_server_selection_policy(server_count: usize) -> ShareServerSelectio
     } else {
         (
             SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER,
-            minimum_complete_batch_planning_server_count(target_count),
+            minimum_complete_batch_planning_server_count(share_helper_readiness_target_count(
+                server_count,
+            )),
         )
     };
 

@@ -33,7 +33,7 @@ use crate::{
         url::canonicalize_helper_base_url,
     },
     share_policy::{
-        share_submission_target_count, SHARE_HELPER_POST_TIMEOUT_MILLISECONDS,
+        share_helper_readiness_target_count, SHARE_HELPER_POST_TIMEOUT_MILLISECONDS,
         SHARE_HELPER_PREFLIGHT_HARD_TIMEOUT_MILLISECONDS,
         SHARE_HELPER_PREFLIGHT_SOFT_TIMEOUT_MILLISECONDS,
     },
@@ -437,7 +437,7 @@ impl HelperClient {
             });
         }
         let target_count =
-            u32::try_from(share_submission_target_count(canonical.len())).unwrap_or(u32::MAX);
+            u32::try_from(share_helper_readiness_target_count(canonical.len())).unwrap_or(u32::MAX);
         let readiness = self.preflight(&canonical, target_count).await;
         let ready = readiness
             .into_iter()
@@ -1371,6 +1371,7 @@ fn join_helper_url(base_url: &str, segments: &[&str]) -> Result<String, VotingEr
 mod tests {
     mod ingress_timeout;
     mod observability;
+    mod readiness_target;
     use std::{
         collections::{HashMap, VecDeque},
         sync::Mutex,

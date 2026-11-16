@@ -17,7 +17,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - Lower the per-share helper target cap from 10 to 5. Fleets of 10 or more
   helpers now send each share to 5 helpers instead of half the fleet, and
   fleets of 9 or fewer keep half rounded up. Durable plans stored with a
-  higher target are clamped to 5 when read.
+  higher target are clamped to 5 when read. The readiness race and the
+  planning pool still use half the fleet capped at 10, so each share's 5
+  helpers come from the same pool as before. `share_helper_readiness_target_count`
+  exposes that readiness target.
 
 ## v5.4.0
 

@@ -204,11 +204,13 @@ limit rounds down so it never exceeds 75 percent:
 max_initial_shares_per_helper = M = floor(3S / 4)
 ```
 
-The per-share definite-placement target remains half the configured fleet,
-rounded up, until it reaches the protocol cap:
+The readiness target is half the configured fleet, rounded up, capped at 10.
+The per-share definite-placement target is the readiness target capped by the
+protocol cap:
 
 ```text
-target_count = T = min(ceil(N / 2), C)
+readiness_target = W = min(ceil(N / 2), 10)
+target_count     = T = min(W, C)
 ```
 
 For the current `S = 16` and `C = 5`, these formulas produce `M = 12`.
@@ -216,13 +218,24 @@ Consequently, fleets through 10 helpers retain the half-rounded-up target,
 while larger fleets target exactly 5 definite acceptances per share.
 
 For a complete normal commitment, planning creates `S * T` assignments. The
-planning pool MUST contain enough helpers for every assignment without any
-helper exceeding `M`:
+planning pool is sized from `W`, not `T`, and MUST contain enough helpers for
+`S * W` assignments without any helper exceeding `M`:
 
 ```text
-minimum_planning_pool = P_min = ceil(S * T / M)
+minimum_planning_pool = P_min = ceil(S * W / M)
 planning_pool = P = min(N, max(R, P_min))
 ```
+
+Sizing the pool from `W` keeps each share's `T` recipients drawn from the same
+pool the release before `C` dropped to 5 used. A pool sized from `T` would be
+much smaller. For example, with 15 configured helpers and 7 ready, it would be
+7 helpers, and any 3 of them would be guaranteed to receive every share,
+because only 4 helpers sit outside that group and every share goes to 5. The
+`W`-sized pool here is 11, so the 5 recipients can all miss any 3 helpers. This
+removes that guaranteed coverage but is not a collusion bound. The per-helper
+quota `M` still makes no claim about the combined view of colluding helpers.
+Incomplete low-level batches and single-share mode use `W` as their minimum
+pool for the same reason.
 
 The one-helper fleet is the only forced-full-coverage exception: it uses
 `T = P = 1`, and that helper necessarily receives every initially planned
@@ -233,16 +246,16 @@ than silently weakening the target or the per-helper bound.
 
 The current values include:
 
-| Configured helpers `N` | Target `T` | Minimum pool `P_min` | Effective initial maximum |
-| ---: | ---: | ---: | ---: |
-| 1 | 1 | 1 (forced exception) | 16 |
-| 2 | 1 | 2 | 12 |
-| 3 | 2 | 3 | 12 |
-| 5 | 3 | 4 | 12 |
-| 10 | 5 | 7 | 12 |
-| 15 | 5 | 7 | 12 |
-| 20 | 5 | 7 | 12 |
-| 100 | 5 | 7 | 12 |
+| Configured helpers `N` | Readiness `W` | Target `T` | Minimum pool `P_min` | Effective initial maximum |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1 | 1 (forced exception) | 16 |
+| 2 | 1 | 1 | 2 | 12 |
+| 3 | 2 | 2 | 3 | 12 |
+| 5 | 3 | 3 | 4 | 12 |
+| 10 | 5 | 5 | 7 | 12 |
+| 15 | 8 | 5 | 11 | 12 |
+| 20 | 10 | 5 | 14 | 12 |
+| 100 | 10 | 5 | 14 | 12 |
 
 The selector MUST enforce `M` as a hard quota while constructing a complete
 batch, not merely rely on an average produced by balancing. Among helpers
@@ -274,7 +287,7 @@ one would make ambiguous delivery unknowable and could prevent recovery from
 using the only functioning helper.
 
 The assignment limit `M` is a wallet-policy consequence of `S`, and `P_min` is
-calculated from `S`, `T`, and `M`; neither makes `S` independently
+calculated from `S`, `W`, and `M`; neither makes `S` independently
 configurable. `C` is separately chosen protocol policy. Changing `S` remains a
 coordinated protocol change across the circuits, wallet wire validation,
 helper payload validation, chain types, and their fixed-size arrays and tests.
@@ -285,8 +298,8 @@ Existing durable rows whose stored `target_count` exceeds `C` keep their
 historical value but MUST use `C` as their effective target. This read-time
 clamp avoids a schema migration while preventing a legacy value from restoring
 the old uncapped behavior. Persisted complete plans also validate when their
-target matches the previous cap of 10, `min(ceil(N / 2), 10)`, so a vote
-planned before `C` dropped to 5 still delivers after an upgrade. Its stored
+target matches `W`, which releases before `C` dropped to 5 used as the
+per-share target, so a vote planned before the upgrade still delivers. Its stored
 target list stays a valid candidate order, but initial delivery and admission
 use the clamped target, so it seeks at most `C` acceptances. New plans always
 use the current `C`.
@@ -296,8 +309,10 @@ Regression coverage:
 - target count remains half-rounded-up through `N = 10` and is capped by the
   independent protocol constant `C = 5` above that boundary;
 - the maximum initial assignment count is derived as `floor(3S / 4)`;
-- the minimum pool is derived as `ceil(S * T / M)` at small, boundary, and
-  large fleet sizes;
+- the minimum pool is derived as `ceil(S * W / M)` at small, boundary, and
+  large fleet sizes, and both complete and incomplete batches widen to it
+  (`complete_batch_pool_follows_the_readiness_target` and
+  `incomplete_batch_pool_follows_the_readiness_target`);
 - every helper in a complete normal batch is assigned at most `M` shares;
 - planning fails rather than exceeding `M` when presented with an infeasible
   capacity;
@@ -470,6 +485,10 @@ The concrete values include:
 | 20 | 5 |
 | 100 | 5 |
 
+The readiness race waits for `W = min(ceil(N / 2), 10)` ready helpers rather
+than `T`, so with 15 configured helpers it waits for 8 even though each share
+goes to 5 (see the initial-distribution policy for why).
+
 An empty helper list is invalid even though the pure target-count function
 returns zero. The high-level entry point does not accept an unvalidated raw
 list: `HelperClient::preflight_fleet` canonicalizes the complete fleet, rejects
@@ -580,7 +599,7 @@ The public boundary is also covered by
    count. Random order breaks ties, balancing a complete `S`-share commitment
    across the planning pool without allowing an assignment count above
    `M = floor(3S / 4)`.
-4. The minimum planning-pool size is `ceil(S * T / M)`. A readiness-ranked
+4. The minimum planning-pool size is `ceil(S * W / M)`. A readiness-ranked
    prefix can enlarge that pool, but too few ready helpers cannot shrink it.
    When necessary, planning includes configured fallback helpers after the
    ready prefix to provide the required assignment capacity.
@@ -909,7 +928,7 @@ oversized or invalid bodies, and any other status all produce `ready = false`.
 Readiness is advisory and never fails the voting flow by itself.
 
 `HelperClient::preflight_fleet` canonicalizes the caller's list, derives the
-readiness target from the canonical fleet size, and starts every valid probe
+readiness target `W` from the canonical fleet size, and starts every valid probe
 concurrently. Its crate-internal raw preflight primitive receives that derived
 target. It
 collects responses through the two-second soft window. If the target is still
@@ -989,7 +1008,8 @@ Enforcement:
 [`http_transport.rs`](../zcash_voting/src/http_transport.rs), and
 [`share_tracking/initial_delivery.rs`](../zcash_voting/src/share_tracking/initial_delivery.rs).
 
-Regression tests: `preflight_keeps_slow_probes_alive_until_the_target_is_ready`,
+Regression tests: `preflight_fleet_waits_for_the_readiness_target_not_the_share_target`,
+`preflight_keeps_slow_probes_alive_until_the_target_is_ready`,
 `preflight_stops_at_the_soft_window_when_enough_helpers_are_ready`,
 `preflight_stops_slow_helpers_at_the_hard_deadline`,
 `preflight_with_zero_target_does_not_open_connections`,
@@ -2093,7 +2113,7 @@ A change to helper submission or recovery should answer all of the following:
 
 - Does every share still apply the independent protocol target cap `C`?
 - Does the strict three-quarters assignment limit remain derived from `S`, and is
-  minimum planning-pool capacity still calculated from `S`, `T`, and `M`?
+  minimum planning-pool capacity still calculated from `S`, `W`, and `M`?
 - Does every complete normal batch assign each helper no more than
   `floor(3S / 4)` shares, except for the documented one-helper case?
 - Is the complete plan persisted before every POST and reused unchanged after

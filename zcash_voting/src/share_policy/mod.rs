@@ -44,7 +44,8 @@ pub struct ShareSubmissionRandomBytesRequired {
 ///
 /// Clients own transport and recovery. They should start all readiness probes
 /// together, inspect responses after the soft timeout, and continue until at
-/// least `target_count` helpers are ready or the hard timeout expires. For a
+/// least [`share_helper_readiness_target_count`] helpers are ready or the hard
+/// timeout expires. Each share then targets `target_count` helpers. For a
 /// complete commitment, `max_shares_per_server` is a hard initial-assignment
 /// quota when at least `min_server_count` helpers are available. These limits
 /// are derived from [`VOTE_COMMITMENT_SHARE_COUNT`]. Retries may exceed them
@@ -113,8 +114,8 @@ pub use server_order::{
     resubmission_server_order, resubmission_server_order_from_configured_order,
     resubmission_server_order_from_groups, resubmission_server_order_random_bytes_required,
     select_share_submission_targets, select_share_submission_targets_from_order,
-    share_server_order_random_bytes_required, share_server_selection_policy,
-    share_submission_target_count, shuffled_share_server_order,
+    share_helper_readiness_target_count, share_server_order_random_bytes_required,
+    share_server_selection_policy, share_submission_target_count, shuffled_share_server_order,
     SHARE_DELIVERY_MIN_ATTEMPT_BUDGET_MILLISECONDS, SHARE_HELPER_INITIAL_MAX_FRACTION_DENOMINATOR,
     SHARE_HELPER_INITIAL_MAX_FRACTION_NUMERATOR, SHARE_HELPER_MAX_CONCURRENT_POSTS,
     SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, SHARE_HELPER_POST_TIMEOUT_MILLISECONDS,
