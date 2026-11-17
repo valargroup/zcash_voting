@@ -64,7 +64,47 @@ fn missing_proofs_are_fetched_in_bounded_chunks() {
 }
 
 #[test]
-fn a_failed_chunk_keeps_earlier_chunks_and_a_retry_fetches_only_the_rest() {
+fn a_content_failure_still_sends_every_chunk_and_keeps_valid_proofs() {
+    // A routing or decode failure depends on the wallet's nullifiers, so
+    // stopping at it would let the server learn which chunk failed from how
+    // many queries it received.
+    let db = VotingDb::open_in_memory().unwrap();
+    db.set_wallet_id(WALLET);
+    let imt = SpacedLeafImtProvider::new();
+    let mut fetches = 0;
+
+    let error = db
+        .precompute_pir_proof_cache_inner(
+            WALLET,
+            &[],
+            &extra_nullifiers(),
+            Network::Testnet,
+            imt.root(),
+            |requested| {
+                fetches += 1;
+                if fetches == 1 {
+                    return Err(VotingError::PirUnavailable {
+                        endpoint: None,
+                        http_status: None,
+                        retryable: false,
+                        message: "Tier 0 routing failed".to_string(),
+                    });
+                }
+                proofs_for(&imt, requested)
+            },
+        )
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("Tier 0 routing failed"),
+        "{error}"
+    );
+    assert_eq!(fetches, 3, "every chunk was still sent");
+    assert_eq!(cached_proof_count(&db), 6, "the later chunks were saved");
+}
+
+#[test]
+fn a_transport_failure_stops_early_and_keeps_earlier_chunks() {
     let db = VotingDb::open_in_memory().unwrap();
     db.set_wallet_id(WALLET);
     let imt = SpacedLeafImtProvider::new();
