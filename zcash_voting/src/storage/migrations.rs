@@ -2,7 +2,7 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use crate::VotingError;
 
-const CURRENT_VERSION: u32 = 24;
+const CURRENT_VERSION: u32 = 25;
 
 /// Schema version that `001_init.sql` produces, and the oldest version that can
 /// be upgraded in place.
@@ -152,6 +152,14 @@ END;",
         23,
         include_str!("migrations/007_combined_cast_rejections.sql"),
     ),
+    // Existing proofs keep a NULL fingerprint: the key that made them is not
+    // recoverable, and naming the running build's key instead would label a
+    // proof from an older circuit as current.
+    (
+        24,
+        "ALTER TABLE proofs ADD COLUMN circuit_key_fingerprint BLOB \
+         CHECK(circuit_key_fingerprint IS NULL OR length(circuit_key_fingerprint) = 32);",
+    ),
 ];
 
 const RESET_SQL: &str = "DROP TABLE IF EXISTS combined_cast_rejections;
@@ -292,12 +300,15 @@ fn reconcile_combined_preview(conn: &Connection) -> Result<bool, VotingError> {
     // The preview predates the combined-cast rejection ledger, which the
     // version-23 ladder entry below creates. It is therefore not part of what
     // identifies a preview schema, and leaving it in the expected fingerprint
-    // would refuse every preview database instead of upgrading it.
+    // would refuse every preview database instead of upgrading it. The same
+    // holds for the proof key fingerprint, which the version-24 ladder entry
+    // adds.
     expected
         .execute_batch(
             "DROP TRIGGER IF EXISTS combined_cast_rejections_monotonic_streak;
              DROP TRIGGER IF EXISTS combined_cast_rejections_generation_restart;
-             DROP TABLE IF EXISTS combined_cast_rejections;",
+             DROP TABLE IF EXISTS combined_cast_rejections;
+             ALTER TABLE proofs DROP COLUMN circuit_key_fingerprint;",
         )
         .map_err(migration_error)?;
     let actual = preview_schema_fingerprint(conn)?;

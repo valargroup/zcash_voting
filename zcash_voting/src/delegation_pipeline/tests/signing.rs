@@ -32,6 +32,7 @@ fn signed_bundle(sig: [u8; 64], sighash: [u8; 32], rk: [u8; 32]) -> SignedDelega
             spend_auth_sig: sig,
             sighash,
             tx1_effects: Vec::new(),
+            proof_key_fingerprint: None,
         },
         pczt_bytes: Vec::new(),
         eligible_weight_zatoshi: 13_000_000,

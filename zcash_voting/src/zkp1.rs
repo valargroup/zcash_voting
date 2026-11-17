@@ -502,11 +502,15 @@ pub(crate) fn observe_build_and_prove_delegation(
             progress.on_progress(crate::delegate::DelegationProgress::ProofProgress(0.1));
 
             // Fill the downstream cache on a large-stack thread when warm-up was missed.
-            let (params, pk, _vk) = observations.measure("zkp1.proving_keys", || {
+            let (params, pk, vk) = observations.measure("zkp1.proving_keys", || {
                 delegation_cached_keys().map_err(|error| VotingError::ProofFailed {
                     message: error.to_string(),
                 })
             })?;
+            let key_fingerprint =
+                crate::delegation_key_fingerprint::DelegationKeyFingerprint::of_process_delegation_key(
+                    vk,
+                );
 
             progress.on_progress(crate::delegate::DelegationProgress::ProofProgress(0.5));
 
@@ -559,6 +563,7 @@ pub(crate) fn observe_build_and_prove_delegation(
                     .collect(),
                 van_comm: bundle.instance.van_comm.to_repr().to_vec(),
                 rk: rk_bytes.to_vec(),
+                key_fingerprint,
             })
         })
     })();

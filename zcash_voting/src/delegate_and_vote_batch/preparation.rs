@@ -100,13 +100,16 @@ impl DelegationAuthorization {
 
     /// Restores the exact public authorization without treating an on-wire
     /// generation as fresh preparation.
+    ///
+    /// Returns the submission rather than its request body, because the
+    /// fingerprint of the proof's circuit key travels beside the body.
     pub(crate) fn recover_submission(
         conn: &rusqlite::Connection,
         wallet: &str,
         round: &str,
         bundle: u32,
         digest: &[u8; 32],
-    ) -> Result<crate::wire::DelegationSubmissionWire, VotingError> {
+    ) -> Result<crate::delegate::DelegationSubmission, VotingError> {
         let (signature, expected): (Vec<u8>, Vec<u8>) = conn.query_row(
             "SELECT spend_auth_signature, delegation_generation_digest FROM delegate_cast_recovery WHERE round_id=?1 AND wallet_id=?2 AND bundle_index=?3 AND batch_digest=?4",
             rusqlite::params![round, wallet, bundle, digest.as_slice()], |row| Ok((row.get(0)?, row.get(1)?)),
@@ -131,9 +134,7 @@ impl DelegationAuthorization {
         let signature = signature
             .try_into()
             .map_err(|_| invalid("stored combined signature must contain 64 bytes"))?;
-        crate::wire::DelegationSubmissionWire::try_from(&crate::delegate::submission_with_conn(
-            conn, wallet, round, bundle, signature,
-        )?)
+        crate::delegate::submission_with_conn(conn, wallet, round, bundle, signature)
     }
     pub(crate) fn capture(
         conn: &rusqlite::Connection,

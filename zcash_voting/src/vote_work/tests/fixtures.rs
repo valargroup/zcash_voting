@@ -214,6 +214,7 @@ impl DelegationDriver for CancelAfterSigningDriver {
             &self.wallet_id,
             bundle_index,
             &[0x61; 96],
+            None,
         )?;
         progress.on_progress(crate::delegate::DelegationProgress::ProofComplete);
         self.apply_interrupt();
@@ -242,6 +243,7 @@ impl DelegationDriver for CancelAfterSigningDriver {
                 spend_auth_sig: [0x68; 64],
                 sighash: [0x69; 32],
                 tx1_effects: Vec::new(),
+                proof_key_fingerprint: None,
             },
             pczt_bytes: Vec::new(),
             eligible_weight_zatoshi: crate::governance::BALLOT_DIVISOR,

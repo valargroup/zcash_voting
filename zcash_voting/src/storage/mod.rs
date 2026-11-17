@@ -440,7 +440,7 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
         let conn = db.conn();
         queries::insert_round(&conn, W, Network::Testnet, &test_params(), None).unwrap();
         queries::insert_bundle(&conn, "test-round-1", W, 0, &[]).unwrap();
-        queries::store_proof(&conn, "test-round-1", W, 0, &vec![0xAB; 256]).unwrap();
+        queries::store_proof(&conn, "test-round-1", W, 0, &vec![0xAB; 256], None).unwrap();
 
         let state = queries::get_round_state(&conn, "test-round-1", W).unwrap();
         assert!(!state.proof_generated, "proof alone should not be enough");

@@ -119,7 +119,14 @@ impl DelegationDriver for Driver {
         _: &dyn types::DelegationProgressReporter,
     ) -> Result<DelegationProofStatus, VotingError> {
         self.prepared.fetch_add(1, Ordering::SeqCst);
-        storage::queries::store_proof(&self.db.conn(), ROUND_ID, "wallet", bundle, &[0x61; 96])?;
+        storage::queries::store_proof(
+            &self.db.conn(),
+            ROUND_ID,
+            "wallet",
+            bundle,
+            &[0x61; 96],
+            None,
+        )?;
         Ok(DelegationProofStatus::Reused)
     }
     fn prove_and_sign_blocking(

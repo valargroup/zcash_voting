@@ -811,7 +811,7 @@ mod tests {
             DelegationPhase::PcztBuilt
         );
 
-        crate::storage::queries::store_proof(&db.conn(), ROUND_ID, WALLET_ID, 0, &[0xAB; 96])
+        crate::storage::queries::store_proof(&db.conn(), ROUND_ID, WALLET_ID, 0, &[0xAB; 96], None)
             .unwrap();
         assert_eq!(
             db.delegation_phase(ROUND_ID, 0).unwrap(),
@@ -859,7 +859,7 @@ mod tests {
         // `Proved | Submitted | Confirmed` re-proved a bundle it had already
         // proved — and re-entered PIR to do it.
         let db = db_with_bundle();
-        crate::storage::queries::store_proof(&db.conn(), ROUND_ID, WALLET_ID, 0, &[0xAC; 96])
+        crate::storage::queries::store_proof(&db.conn(), ROUND_ID, WALLET_ID, 0, &[0xAC; 96], None)
             .unwrap();
         assert_eq!(
             db.delegation_phase(ROUND_ID, 0).unwrap(),

@@ -49,6 +49,9 @@ fn proof_for_setup(setup: &GovernancePczt, marker: u8) -> DelegationProofResult 
         gov_nullifiers: setup.gov_nullifiers.clone(),
         van_comm: setup.van.clone(),
         rk: setup.rk.clone(),
+        key_fingerprint: crate::delegation_key_fingerprint::DelegationKeyFingerprint::from_bytes(
+            [marker; 32],
+        ),
     }
 }
 

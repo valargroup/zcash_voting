@@ -16,6 +16,9 @@ fn a_late_bundle_proof_preserves_vote_ready_round_phase() {
         gov_nullifiers: vec![vec![0x20; 32]; BUNDLE_NOTE_SLOTS],
         van_comm: vec![0x50; 32],
         rk: vec![0x10; 32],
+        key_fingerprint: crate::delegation_key_fingerprint::DelegationKeyFingerprint::from_bytes(
+            [0x60; 32],
+        ),
     };
     {
         let conn = db.conn();

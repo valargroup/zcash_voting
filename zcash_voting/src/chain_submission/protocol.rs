@@ -7,6 +7,7 @@ use url::{Host, Url};
 
 use crate::{
     confirmation::TxEvent,
+    delegation_key_fingerprint::{DelegationKeyFingerprint, DELEGATION_KEY_FINGERPRINT_HEADER},
     types::Network,
     wire::{DelegationSubmissionWire, VoteCommitmentWire},
 };
@@ -189,16 +190,23 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         self.submit_delegation_with_dispatch(
             endpoint_index,
             submission,
+            None,
             ChainPostDispatch::default(),
             &crate::ObservationScope::disabled(),
         )
         .await
     }
 
+    /// Posts a standalone delegation.
+    ///
+    /// `proof_key_fingerprint` names the circuit key that made the proof in
+    /// `submission`; when present it is sent in the
+    /// [`DELEGATION_KEY_FINGERPRINT_HEADER`] header beside the unchanged body.
     pub(super) async fn submit_delegation_with_dispatch(
         &self,
         endpoint_index: usize,
         submission: &DelegationSubmissionWire,
+        proof_key_fingerprint: Option<DelegationKeyFingerprint>,
         dispatch: ChainPostDispatch,
         observations: &crate::ObservationScope,
     ) -> PostAttemptOutcome {
@@ -212,9 +220,12 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         };
         self.post(
             endpoint_index,
-            DELEGATION_ENDPOINT,
-            body,
-            None,
+            ChainPost {
+                endpoint: DELEGATION_ENDPOINT,
+                body,
+                expected_batch_digest: None,
+                delegation_key_fingerprint: proof_key_fingerprint,
+            },
             dispatch,
             observations,
         )
@@ -253,9 +264,12 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         };
         self.post(
             endpoint_index,
-            VOTE_ENDPOINT,
-            body,
-            None,
+            ChainPost {
+                endpoint: VOTE_ENDPOINT,
+                body,
+                expected_batch_digest: None,
+                delegation_key_fingerprint: None,
+            },
             dispatch,
             observations,
         )
@@ -280,20 +294,29 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         };
         self.post(
             endpoint_index,
-            VOTE_BATCH_ENDPOINT,
-            body,
-            Some(expected_batch_digest),
+            ChainPost {
+                endpoint: VOTE_BATCH_ENDPOINT,
+                body,
+                expected_batch_digest: Some(expected_batch_digest),
+                delegation_key_fingerprint: None,
+            },
             dispatch,
             observations,
         )
         .await
     }
 
+    /// Posts a delegation together with its first vote batch.
+    ///
+    /// `proof_key_fingerprint` names the circuit key that made the delegation
+    /// proof in `submission`; when present it is sent in the
+    /// [`DELEGATION_KEY_FINGERPRINT_HEADER`] header beside the unchanged body.
     pub(super) async fn submit_delegate_and_vote_batch_with_dispatch(
         &self,
         endpoint_index: usize,
         submission: &crate::wire::DelegateAndVoteBatchWire,
         expected_batch_digest: [u8; 32],
+        proof_key_fingerprint: Option<DelegationKeyFingerprint>,
         dispatch: ChainPostDispatch,
         observations: &crate::ObservationScope,
     ) -> PostAttemptOutcome {
@@ -307,9 +330,12 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         };
         self.post(
             endpoint_index,
-            "delegate-and-cast-vote-batch",
-            body,
-            Some(expected_batch_digest),
+            ChainPost {
+                endpoint: "delegate-and-cast-vote-batch",
+                body,
+                expected_batch_digest: Some(expected_batch_digest),
+                delegation_key_fingerprint: proof_key_fingerprint,
+            },
             dispatch,
             observations,
         )
@@ -319,12 +345,16 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
     async fn post(
         &self,
         endpoint_index: usize,
-        endpoint: &str,
-        body: Vec<u8>,
-        expected_batch_digest: Option<[u8; 32]>,
+        post: ChainPost<'_>,
         dispatch: ChainPostDispatch,
         observations: &crate::ObservationScope,
     ) -> PostAttemptOutcome {
+        let ChainPost {
+            endpoint,
+            body,
+            expected_batch_digest,
+            delegation_key_fingerprint,
+        } = post;
         if body.len() > MAX_CHAIN_HTTP_REQUEST_BYTES {
             return PostAttemptOutcome::LocalFailure(invalid_protocol(format!(
                 "vote-chain request exceeds {MAX_CHAIN_HTTP_REQUEST_BYTES} byte limit"
@@ -344,6 +374,9 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
 
         if let Some(token) = &attempt_token {
             request.add_header(ingress_timeout::REQUEST_HEADER, token.clone());
+        }
+        if let Some(fingerprint) = delegation_key_fingerprint {
+            request.add_header(DELEGATION_KEY_FINGERPRINT_HEADER, fingerprint.to_hex());
         }
 
         let stage = observations.stage("chain::post_attempt");
@@ -513,6 +546,21 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         operation.finish(outcome, result.as_ref().err().map(|_| "LookupFailure"));
         result
     }
+}
+
+/// One mutation request as [`ChainProtocolClient::post`] sends it: where it goes,
+/// what it carries, and what its answer must echo.
+struct ChainPost<'request> {
+    /// Route name under the versioned vote-chain API prefix.
+    endpoint: &'request str,
+    /// Serialized JSON request body.
+    body: Vec<u8>,
+    /// Digest an atomic-batch answer must echo before it counts as evidence.
+    expected_batch_digest: Option<[u8; 32]>,
+    /// Circuit key that made the delegation proof in `body`, sent as a
+    /// request header. `None` for vote routes and for a proof whose key was
+    /// not recorded.
+    delegation_key_fingerprint: Option<DelegationKeyFingerprint>,
 }
 
 fn chain_request(url: String, has_json_body: bool, timeout: Duration) -> ChainHttpRequest {
@@ -944,6 +992,7 @@ fn invalid_protocol(message: impl AsRef<str>) -> ChainSubmissionDiagnostic {
 #[cfg(test)]
 mod tests {
     mod batch_request;
+    mod delegation_key_header;
     mod ingress_timeout;
     mod rejection_diagnostics;
 

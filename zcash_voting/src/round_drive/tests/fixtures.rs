@@ -195,6 +195,7 @@ pub(super) fn signed_delegation() -> crate::delegate::SignedDelegationBundle {
             spend_auth_sig: [0x68; 64],
             sighash: [0x69; 32],
             tx1_effects: Vec::new(),
+            proof_key_fingerprint: None,
         },
         pczt_bytes: Vec::new(),
         eligible_weight_zatoshi: crate::governance::BALLOT_DIVISOR,
@@ -258,6 +259,7 @@ impl crate::DelegationDriver for SigningDriver {
             WALLET_ID,
             bundle_index,
             &[0x61; 96],
+            None,
         )?;
         progress.on_progress(crate::delegate::DelegationProgress::ProofComplete);
         Ok(crate::delegate::DelegationProofStatus::Reused)
@@ -284,6 +286,7 @@ impl crate::DelegationDriver for SigningDriver {
                 spend_auth_sig: [0x68; 64],
                 sighash: [0x69; 32],
                 tx1_effects: Vec::new(),
+                proof_key_fingerprint: None,
             },
             pczt_bytes: Vec::new(),
             eligible_weight_zatoshi: crate::governance::BALLOT_DIVISOR,

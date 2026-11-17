@@ -52,6 +52,11 @@ CREATE TABLE cached_tree_state (
     FOREIGN KEY (round_id, wallet_id) REFERENCES rounds(round_id, wallet_id) ON DELETE CASCADE
 );
 
+-- `circuit_key_fingerprint` names the delegation circuit key that made
+-- `proof`. It is NULL for a proof saved before the fingerprint was recorded;
+-- such a proof is sent without one rather than labelled with the key of a
+-- later build. The note sits outside the table because SQLite stores comments
+-- inside a CREATE statement, and an upgraded database would not have them.
 CREATE TABLE proofs (
     round_id      TEXT NOT NULL,
     wallet_id     TEXT NOT NULL DEFAULT '',
@@ -60,6 +65,7 @@ CREATE TABLE proofs (
     proof         BLOB,
     success       INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
+    circuit_key_fingerprint BLOB CHECK(circuit_key_fingerprint IS NULL OR length(circuit_key_fingerprint) = 32),
     PRIMARY KEY (round_id, wallet_id, bundle_index),
     FOREIGN KEY (round_id, wallet_id, bundle_index) REFERENCES bundles(round_id, wallet_id, bundle_index) ON DELETE CASCADE
 );

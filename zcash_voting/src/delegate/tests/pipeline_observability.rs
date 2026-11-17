@@ -108,6 +108,7 @@ fn pipeline_cached_proof_reports_reused_at_both_boundaries() {
             &db.wallet_id(),
             0,
             &[0xA1; 96],
+            None,
         )
         .unwrap();
     }

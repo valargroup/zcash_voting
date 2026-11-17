@@ -35,6 +35,7 @@ pub mod config;
 pub(crate) mod confirmation;
 pub mod delegate;
 pub mod delegation_capability;
+pub mod delegation_key_fingerprint;
 pub mod delegation_pipeline;
 mod delegation_proof_coordination;
 pub mod error;

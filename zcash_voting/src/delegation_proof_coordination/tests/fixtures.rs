@@ -131,7 +131,7 @@ fn seed_wallet(db: &VotingDb, wallet_id: &str, proof_byte: u8) {
         &crate::tx1::placeholder_tx1_effects(),
     )
     .unwrap();
-    queries::store_proof(&conn, ROUND_ID, wallet_id, 0, &[proof_byte; 96]).unwrap();
+    queries::store_proof(&conn, ROUND_ID, wallet_id, 0, &[proof_byte; 96], None).unwrap();
     let gov_nullifiers = vec![vec![proof_byte.wrapping_add(5); 32]; crate::BUNDLE_NOTE_SLOTS];
     queries::store_proof_result_fields_with_van_comm(
         &conn,

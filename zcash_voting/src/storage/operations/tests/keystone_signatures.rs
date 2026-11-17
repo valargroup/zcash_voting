@@ -94,7 +94,7 @@ fn keystone_signature_validated_before_replacement_cannot_poison_retention() {
         .unwrap();
     // Signature validation needs a stored proof, but this regression does not
     // exercise Halo2 proving. All transaction and signature inputs are real.
-    queries::store_proof(&reader.conn(), ROUND_ID, W, 0, &[0x61; 96]).unwrap();
+    queries::store_proof(&reader.conn(), ROUND_ID, W, 0, &[0x61; 96], None).unwrap();
     let request = reader
         .get_delegation_signing_request(ROUND_ID, 0, &keys)
         .unwrap();
