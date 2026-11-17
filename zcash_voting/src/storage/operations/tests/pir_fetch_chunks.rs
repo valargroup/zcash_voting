@@ -5,9 +5,9 @@ use voting_circuits::delegation::{ImtProvider, SpacedLeafImtProvider};
 
 const WALLET: &str = "chunked-pir-wallet";
 
-/// Ten distinct raw nullifiers, more than two full fetch chunks.
+/// Twelve distinct raw nullifiers: two full fetch chunks and a partial one.
 fn extra_nullifiers() -> Vec<Vec<u8>> {
-    (7u64..17)
+    (7u64..19)
         .map(|value| pallas::Base::from(value).to_repr().to_vec())
         .collect()
 }
@@ -58,9 +58,9 @@ fn missing_proofs_are_fetched_in_bounded_chunks() {
         )
         .unwrap();
 
-    assert_eq!(chunk_sizes, vec![4, 4, 2]);
-    assert_eq!(result.fetched_count, 10);
-    assert_eq!(cached_proof_count(&db), 10);
+    assert_eq!(chunk_sizes, vec![5, 5, 2]);
+    assert_eq!(result.fetched_count, 12);
+    assert_eq!(cached_proof_count(&db), 12);
 }
 
 #[test]
@@ -113,6 +113,6 @@ fn a_failed_chunk_still_sends_every_chunk_and_saves_nothing() {
             },
         )
         .unwrap();
-        assert_eq!(retried, 10, "the retry sends the full set again");
+        assert_eq!(retried, 12, "the retry sends the full set again");
     }
 }

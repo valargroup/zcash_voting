@@ -21,7 +21,8 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   planning pool still use half the fleet capped at 10, so each share's 5
   helpers come from the same pool as before. `share_helper_readiness_target_count`
   exposes that readiness target.
-- Fetch PIR proofs four at a time, one fetch at a time per process. Wallets
+- Fetch PIR proofs five at a time (one bundle's note slots), one fetch at a
+  time per process. Wallets
   with many notes or slow uplinks no longer upload every 1.6 MB tier-1 query
   at once. Every chunk is still sent after a failure and nothing is saved
   unless all succeed, so the number of queries a server sees never depends on

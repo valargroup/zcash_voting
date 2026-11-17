@@ -3344,10 +3344,11 @@ fn check_text_conflict(
 
 /// Most PIR queries one fetch sends at once.
 ///
+/// One bundle's note slots, so an uncached bundle goes out in a single fetch.
 /// Each tier-1 query uploads about 1.6 MB, and every query in flight shares
-/// the wallet's uplink. Four is about 6.4 MB, which a 1 Mbps link (a slow Tor
-/// circuit) can upload inside one request's 60-second budget.
-const PIR_FETCH_CHUNK: usize = 4;
+/// the wallet's uplink. Five is about 8 MB, which a link of about 1.1 Mbps can
+/// upload inside one request's 60-second budget.
+const PIR_FETCH_CHUNK: usize = BUNDLE_NOTE_SLOTS;
 
 /// Admits one PIR fetch at a time in this process.
 ///
