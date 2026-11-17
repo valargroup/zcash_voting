@@ -1551,8 +1551,10 @@ impl VotingDb {
     /// the refetch. Cache rows created more than four weeks ago are pruned
     /// before this background warmup; prove-time precompute does not prune.
     ///
-    /// Every fetched proof is validated against the served root before
-    /// anything is persisted; a single bad proof fails the whole call.
+    /// Every fetched proof is validated against the served root before it is
+    /// persisted, and a single bad proof fails the call. Proofs are saved a
+    /// chunk at a time, so a call that fails keeps the chunks it already
+    /// stored and a retry fetches only what is still missing.
     pub fn precompute_pir_proof_cache(
         &self,
         notes: &[NoteInfo],
@@ -1582,6 +1584,10 @@ impl VotingDb {
 
     /// Cache-check, fetch, validate, and persist against `served_root`, with
     /// the network fetch abstracted so tests can supply proofs directly.
+    ///
+    /// Missing proofs are fetched [`PIR_FETCH_CHUNK`] at a time under
+    /// [`PIR_FETCH_GATE`], and each chunk is validated and persisted before the
+    /// next is fetched.
     fn precompute_pir_proof_cache_inner(
         &self,
         wallet_id: &str,
@@ -1589,7 +1595,7 @@ impl VotingDb {
         extra_nullifiers: &[Vec<u8>],
         network: Network,
         served_root: pallas::Base,
-        fetch: impl FnOnce(&[pallas::Base]) -> Result<Vec<pir_client::ImtProofData>, VotingError>,
+        mut fetch: impl FnMut(&[pallas::Base]) -> Result<Vec<pir_client::ImtProofData>, VotingError>,
     ) -> Result<PirCachePrecomputeResult, VotingError> {
         let targets = pir_cache_nullifier_targets(notes, extra_nullifiers)?;
         let served_root_bytes = served_root.to_repr().to_vec();
@@ -1643,28 +1649,33 @@ impl VotingDb {
             });
         }
 
-        let missing_nullifiers: Vec<_> = missing.iter().map(|(_, nf)| *nf).collect();
-        let fetched_proofs = fetch(&missing_nullifiers)?;
-        if fetched_proofs.len() != missing_nullifiers.len() {
-            return Err(VotingError::Internal {
-                message: format!(
-                    "PIR returned {} proofs for {} nullifiers",
-                    fetched_proofs.len(),
-                    missing_nullifiers.len()
-                ),
-            });
-        }
-        for (proof, nf) in fetched_proofs
-            .iter()
-            .zip(missing_nullifiers.iter().copied())
-        {
-            crate::zkp1::validate_pir_proof(proof, nf, served_root)?;
-        }
+        let mut fetched_count = 0u32;
+        for chunk in missing.chunks(PIR_FETCH_CHUNK) {
+            let chunk_nullifiers: Vec<_> = chunk.iter().map(|(_, nf)| *nf).collect();
+            let fetched_proofs = {
+                let _gate = PIR_FETCH_GATE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                fetch(&chunk_nullifiers)?
+            };
+            if fetched_proofs.len() != chunk_nullifiers.len() {
+                return Err(VotingError::Internal {
+                    message: format!(
+                        "PIR returned {} proofs for {} nullifiers",
+                        fetched_proofs.len(),
+                        chunk_nullifiers.len()
+                    ),
+                });
+            }
+            for (proof, nf) in fetched_proofs.iter().zip(chunk_nullifiers.iter().copied()) {
+                crate::zkp1::validate_pir_proof(proof, nf, served_root)?;
+            }
 
-        let conn = self.conn();
-        let fetched_count = fetched_proofs.len() as u32;
-        for ((nf_bytes, _), proof) in missing.iter().zip(fetched_proofs.iter()) {
-            queries::store_pir_cache_proof(&conn, wallet_id, network, nf_bytes, proof)?;
+            let conn = self.conn();
+            for ((nf_bytes, _), proof) in chunk.iter().zip(fetched_proofs.iter()) {
+                queries::store_pir_cache_proof(&conn, wallet_id, network, nf_bytes, proof)?;
+            }
+            fetched_count += fetched_proofs.len() as u32;
         }
 
         Ok(PirCachePrecomputeResult {
@@ -3317,9 +3328,29 @@ fn check_text_conflict(
     Ok(())
 }
 
+/// Most PIR queries one fetch sends at once.
+///
+/// Each tier-1 query uploads about 1.6 MB, and every query in flight shares
+/// the wallet's uplink. Four is about 6.4 MB, which a 1 Mbps link (a slow Tor
+/// circuit) can upload inside one request's 60-second budget. It is also the
+/// unit of saved progress: a failed fetch loses only the chunk in flight.
+const PIR_FETCH_CHUNK: usize = 4;
+
+/// Admits one PIR fetch at a time in this process.
+///
+/// Bundles prepare concurrently and each opens its own PIR session, so without
+/// this the [`PIR_FETCH_CHUNK`] bound would multiply by the number of bundles
+/// in flight. It is held only around the network fetch, never together with
+/// the database lock.
+static PIR_FETCH_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 #[path = "operations/tests/pir_wallet_scope.rs"]
 mod pir_wallet_scope_tests;
+
+#[cfg(test)]
+#[path = "operations/tests/pir_fetch_chunks.rs"]
+mod pir_fetch_chunks_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4335,8 +4366,10 @@ mod tests {
             err.to_string().contains("PIR parallel fetch failed"),
             "expected PIR fetch failure from corrupt mock ciphertext, got: {err}"
         );
-        assert_eq!(transport.count_hits("/tier1/query"), BUNDLE_NOTE_SLOTS);
-        assert_eq!(transport.query_post_count(), BUNDLE_NOTE_SLOTS);
+        // The corrupt first chunk stops the run, so only its queries go out.
+        let first_chunk = PIR_FETCH_CHUNK.min(BUNDLE_NOTE_SLOTS);
+        assert_eq!(transport.count_hits("/tier1/query"), first_chunk);
+        assert_eq!(transport.query_post_count(), first_chunk);
         transport.assert_no_legacy_tier2_traffic();
     }
 

@@ -21,6 +21,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   planning pool still use half the fleet capped at 10, so each share's 5
   helpers come from the same pool as before. `share_helper_readiness_target_count`
   exposes that readiness target.
+- Fetch PIR proofs four at a time, one fetch at a time per process, and save
+  each chunk as soon as it verifies. Wallets with many notes or slow uplinks
+  no longer upload every 1.6 MB tier-1 query at once, and a failed fetch keeps
+  the proofs already saved so a retry only fetches what is missing.
+- Let the first PIR attempt use the whole 60-second budget instead of 15
+  seconds. Connection setup is still bounded at 5 seconds, and a retry still
+  runs after an early failure such as a severed upload.
 
 ## v5.4.0
 
