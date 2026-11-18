@@ -197,7 +197,15 @@ jobs:
           consumers = pathlib.Path(os.environ["CONSUMER_DIR"])
           dependencies = {
               "gemini": f'zcash_voting = {{ git = "file://{root}", rev = "{revision}", default-features = false, features = ["lrz"] }}',
-              "vizor": f'zcash_voting = {{ git = "file://{root}", rev = "{revision}" }}',
+              # The rc9.6 facade's pre-release ranges also accept the Common 5
+              # wallet crates, so a fresh 5.3 resolution needs the pins from
+              # the 5.4 guide's "Staying on 5.3" section.
+              "vizor": (
+                  f'zcash_voting = {{ git = "file://{root}", rev = "{revision}" }}\n'
+                  'zakura-client-backend = "=0.1.0-rc9.6"\n'
+                  'zakura-client-sqlite = "=0.1.0-rc9.6"\n'
+                  'zakura-pczt = "=0.1.0-rc9"'
+              ),
           }
           for name, dependency in dependencies.items():
               consumer = consumers / name

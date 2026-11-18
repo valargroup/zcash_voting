@@ -6,6 +6,17 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Changed
+
+- Fetch PIR proofs five at a time (one bundle's note slots), one fetch at a
+  time per process. Wallets with many notes or slow uplinks no longer upload
+  every 1.6 MB tier-1 query at once. Every chunk is still sent after a failure
+  and nothing is saved unless all succeed, so the number of queries a server
+  sees never depends on which proofs failed.
+- Let the first PIR attempt use the whole 60-second budget instead of 15
+  seconds. Connection setup is still bounded at 5 seconds, and a retry still
+  runs after an early failure such as a severed upload.
+
 ## v5.3.0
 
 Version 5.3.0 moves the wallet facade from `zakura-wallet-lib 0.1.0-rc9.2` to
