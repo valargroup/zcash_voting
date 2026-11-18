@@ -6,34 +6,17 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-<<<<<<< HEAD
-=======
 ### Changed
 
-- Keep voting with the existing Ironwood V3 format independent of later
-  consensus branch IDs. Eligibility uses NU6.3 activation at the stored
-  snapshot height, and TX1 retains its fixed V6 / NU6.3 signing profile.
-  Legacy branch-ID arguments are now ignored instead of checked against the
-  compiled upgrade schedule; provider errors still propagate. Changes to
-  note, tree, or circuit formats still require explicit support.
-- Lower the per-share helper target cap from 10 to 5. Fleets of 10 or more
-  helpers now send each share to 5 helpers instead of half the fleet, and
-  fleets of 9 or fewer keep half rounded up. Durable plans stored with a
-  higher target are clamped to 5 when read. The readiness race and the
-  planning pool still use half the fleet capped at 10, so each share's 5
-  helpers come from the same pool as before. `share_helper_readiness_target_count`
-  exposes that readiness target.
 - Fetch PIR proofs five at a time (one bundle's note slots), one fetch at a
-  time per process. Wallets
-  with many notes or slow uplinks no longer upload every 1.6 MB tier-1 query
-  at once. Every chunk is still sent after a failure and nothing is saved
-  unless all succeed, so the number of queries a server sees never depends on
-  which proofs failed.
+  time per process. Wallets with many notes or slow uplinks no longer upload
+  every 1.6 MB tier-1 query at once. Every chunk is still sent after a failure
+  and nothing is saved unless all succeed, so the number of queries a server
+  sees never depends on which proofs failed.
 - Let the first PIR attempt use the whole 60-second budget instead of 15
   seconds. Connection setup is still bounded at 5 seconds, and a retry still
   runs after an early failure such as a severed upload.
 
->>>>>>> d44b726 (Bound concurrent PIR uploads and give the first attempt the full budget (#398))
 ## v5.4.0
 
 Version 5.4.0 moves the default backend from Zakura Common 4.0.0 to Common
