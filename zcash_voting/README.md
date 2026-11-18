@@ -326,9 +326,8 @@ that should stay consistent across SDKs:
 
 - last-moment helper-share window, deadline, and mode decisions from round
   timing
-- delayed helper-share `submit_at` scheduling, capped at seven days (100 hours
-  for rounds that end by the NU7.1 poll's close) while still ending before the
-  round's last-moment window
+- delayed helper-share `submit_at` scheduling, capped at seven days while still
+  ending before the round's last-moment window
 - progressive helper timing: inspect ready responses after two seconds, keep
   waiting for the half-fleet readiness target (capped at 10 helpers), and stop
   at 30 seconds. Each share then goes to at most 5 helpers, drawn from a pool

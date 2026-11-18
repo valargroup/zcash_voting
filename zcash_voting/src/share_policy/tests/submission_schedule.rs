@@ -10,7 +10,7 @@ fn scheduled_submit_at_from_random_unit_samples_before_deadline() {
 
 #[test]
 fn delayed_share_window_caps_long_round_at_seven_days() {
-    let now = 1_800_000_000;
+    let now = 1_000_000;
     let vote_end = now + 30 * 24 * 60 * 60;
 
     assert_eq!(
@@ -27,23 +27,6 @@ fn delayed_share_window_caps_long_round_at_seven_days() {
         )
         .unwrap(),
         now + 84 * 60 * 60
-    );
-}
-
-#[test]
-fn delayed_share_window_keeps_100_hour_cap_for_rounds_ending_by_nu7_1_close() {
-    // The NU7.1 poll opened at 1_794_849_002 and ends at 1_796_093_940.
-    let now = 1_794_849_002;
-    let nu7_1_vote_end = 1_796_093_940;
-    let buffer = Some(LAST_MOMENT_BUFFER_MAX_SECONDS);
-
-    assert_eq!(
-        delayed_share_window_seconds(now, nu7_1_vote_end, buffer, false),
-        Some(100 * 60 * 60)
-    );
-    assert_eq!(
-        delayed_share_window_seconds(now, nu7_1_vote_end + 1, buffer, false),
-        Some(SHARE_SUBMIT_AT_MAX_DELAY_SECONDS)
     );
 }
 
@@ -89,7 +72,7 @@ fn delayed_share_window_handles_clock_skew_without_underflow() {
 
 #[test]
 fn capped_submit_at_samples_remain_randomized_within_window() {
-    let now = 1_800_000_000;
+    let now = 1_000_000;
     let vote_end = now + 30 * 24 * 60 * 60;
     let samples = [0, 1u64 << 62, 1u64 << 63, 3u64 << 62, u64::MAX];
     let window_end = now + SHARE_SUBMIT_AT_MAX_DELAY_SECONDS;

@@ -3,16 +3,7 @@ use crate::types::VotingError;
 /// Random bytes needed to sample an initial delayed share submission time.
 pub const SHARE_SUBMIT_AT_RANDOM_BYTES: usize = 8;
 /// Maximum randomized delay before an initial helper share submission.
-///
-/// Rounds that end by the NU7.1 poll's close keep a 100 hour cap instead.
 pub const SHARE_SUBMIT_AT_MAX_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
-/// Delay cap for rounds that end at or before `PREVIOUS_CAP_LAST_VOTE_END`.
-const PREVIOUS_SHARE_SUBMIT_AT_MAX_DELAY_SECONDS: u64 = 100 * 60 * 60;
-/// Vote end of the NU7.1 poll, 2026-12-01 02:59 UTC.
-///
-/// Rounds ending by then keep the earlier cap, so a wallet that updates while
-/// one is open reveals shares on the same schedule as wallets that have not.
-const PREVIOUS_CAP_LAST_VOTE_END: u64 = 1_796_093_940;
 
 /// Return the random bytes needed to sample a delayed share submission time.
 ///
@@ -44,9 +35,8 @@ pub fn share_submit_at_random_bytes_required(
 
 /// Plan the delayed helper submission time from a caller-provided random unit.
 ///
-/// The sampled delay is capped at seven days (100 hours for rounds that end by
-/// the NU7.1 poll's close) and still ends before the round's last-moment
-/// window.
+/// The sampled delay is capped at seven days and still ends before the round's
+/// last-moment window.
 ///
 /// This is useful for deterministic tests and FFI callers that already expose a
 /// random sample in the `[0, 1)` range. Production submission paths should use
@@ -79,9 +69,8 @@ pub fn scheduled_share_submit_at_from_random_unit(
 
 /// Plan the delayed helper submission time using caller-provided entropy.
 ///
-/// The sampled delay is capped at seven days (100 hours for rounds that end by
-/// the NU7.1 poll's close) and still ends before the round's last-moment
-/// window.
+/// The sampled delay is capped at seven days and still ends before the round's
+/// last-moment window.
 ///
 /// `submit_at_random_bytes` must contain at least
 /// `share_submit_at_random_bytes_required(...)` bytes from a cryptographically
@@ -120,8 +109,7 @@ pub fn scheduled_share_submit_at_from_entropy(
 /// Return the nonempty randomized delay window for an initial helper share.
 ///
 /// The window ends no later than the round's last-moment boundary and is capped
-/// at `SHARE_SUBMIT_AT_MAX_DELAY_SECONDS` from `now_seconds`, or at 100 hours
-/// for rounds that end by `PREVIOUS_CAP_LAST_VOTE_END`.
+/// at seven days from `now_seconds`.
 pub(super) fn delayed_share_window_seconds(
     now_seconds: u64,
     vote_end_time_seconds: u64,
@@ -142,10 +130,5 @@ pub(super) fn delayed_share_window_seconds(
         return None;
     }
 
-    let cap = if vote_end_time_seconds <= PREVIOUS_CAP_LAST_VOTE_END {
-        PREVIOUS_SHARE_SUBMIT_AT_MAX_DELAY_SECONDS
-    } else {
-        SHARE_SUBMIT_AT_MAX_DELAY_SECONDS
-    };
-    Some((deadline - now_seconds).min(cap))
+    Some((deadline - now_seconds).min(SHARE_SUBMIT_AT_MAX_DELAY_SECONDS))
 }

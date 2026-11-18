@@ -54,10 +54,7 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   runs after an early failure such as a severed upload.
 - Raise the cap on each randomized initial helper-share delay from 100 hours
   to seven days, so a vote's shares reveal across more of a long round.
-  `SHARE_SUBMIT_AT_MAX_DELAY_SECONDS` is now seven days. Rounds that end by
-  2026-12-01 02:59 UTC, the NU7.1 poll's close, keep the 100 hour cap, so a
-  wallet that updates while that poll is open keeps revealing on the schedule
-  other wallets use.
+  `SHARE_SUBMIT_AT_MAX_DELAY_SECONDS` is now seven days.
 
 ## v5.4.0
 
