@@ -60,25 +60,18 @@ where
 const MAX_PIR_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 /// Total wall-clock budget for one PIR request, across both attempts.
 ///
-/// A PIR fetch that succeeds does so in a few seconds; one against a dead
-/// endpoint does not slow down, it stalls and never returns. Measured against a
-/// staging endpoint, successful fetches completed in 6-8 seconds while failures
-/// ran the full deadline. A single long deadline therefore spends a minute
-/// discovering what a few seconds already showed.
+/// A wall clock cannot tell a stalled endpoint from a slow link, and each
+/// attempt restarts the upload from zero. Cutting the first attempt short
+/// therefore turns a link that merely needs longer (Tor, a congested mobile
+/// uplink, a distant endpoint, a tier-1 query of about 1.6 MB) from slow into
+/// broken. So the first attempt may use the whole budget, and only connection
+/// setup is bounded tightly, where a dead endpoint reveals itself. A second
+/// attempt runs in whatever remains after an early failure, such as a connect
+/// timeout or a severed upload.
 ///
-/// The fix is not a shorter deadline, though. A wall clock cannot tell a
-/// stalled endpoint from a slow one, and cutting every request short to fail
-/// fast turns a link that merely needs longer — a congested mobile network, a
-/// distant endpoint, a multi-megabyte tier under [`MAX_PIR_RESPONSE_BYTES`] —
-/// from slow into broken, because each attempt restarts the transfer from
-/// zero. So the budget is split along two axes instead: a tight bound on
-/// connection setup, where a dead endpoint reveals itself, and a generous
-/// bound on the request as a whole, where a slow link needs room.
-///
-/// Two attempts share this one budget, so the worst case is unchanged from the
-/// single 60-second deadline this replaces and no caller waits longer than
-/// before. That ceiling matters because [`crate::pir::PirFleet`] failover
-/// multiplies it by the endpoint count.
+/// Both attempts share this one budget, so no caller waits longer than this
+/// single deadline. That ceiling matters because [`crate::pir::PirFleet`]
+/// failover multiplies it by the endpoint count.
 const PIR_REQUEST_BUDGET: Duration = Duration::from_secs(60);
 /// Connection-setup bound for the first PIR attempt.
 ///
@@ -87,12 +80,6 @@ const PIR_REQUEST_BUDGET: Duration = Duration::from_secs(60);
 /// duration says nothing about how much work remains, so bounding it tightly
 /// costs a slow-but-working link nothing.
 const PIR_FIRST_ATTEMPT_CONNECT: Duration = Duration::from_secs(5);
-/// Whole-request bound for the first PIR attempt.
-///
-/// Comfortably above the measured 6-8 second success path, so a healthy fetch
-/// never reaches a second attempt, while a stalled one is abandoned with most
-/// of the budget still unspent.
-const PIR_FIRST_ATTEMPT_OVERALL: Duration = Duration::from_secs(15);
 /// Connection-setup bound for the final PIR attempt.
 ///
 /// Looser than the first: having already failed once, the cost of waiting a
@@ -101,7 +88,7 @@ const PIR_FINAL_ATTEMPT_CONNECT: Duration = Duration::from_secs(10);
 /// Floor on what must remain of [`PIR_REQUEST_BUDGET`] to attempt again.
 ///
 /// Guards against issuing a request with a deadline too short to be worth the
-/// round trip, if a first attempt somehow consumed nearly the whole budget.
+/// round trip, after a first attempt that failed late in the budget.
 const PIR_MIN_RETRY_BUDGET: Duration = Duration::from_secs(1);
 // Tree pages are JSON encoded and can be larger than the compact state
 // responses. Bound every tree response before buffering or parsing it, and
@@ -1015,7 +1002,7 @@ impl<R: RouteHttp> HyperTransport<R> {
                     url,
                     headers: &[],
                     body: body.clone(),
-                    timeout: PIR_FIRST_ATTEMPT_OVERALL,
+                    timeout: PIR_REQUEST_BUDGET,
                     connect_timeout: Some(PIR_FIRST_ATTEMPT_CONNECT),
                     max_response_bytes: MAX_PIR_RESPONSE_BYTES,
                 },

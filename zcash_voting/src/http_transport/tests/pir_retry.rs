@@ -1,10 +1,9 @@
-//! One PIR request splits a single budget across two bounded attempts.
+//! One PIR request shares a single budget across at most two attempts.
 //!
-//! A PIR fetch that works completes in a few seconds; one against a dead
-//! endpoint stalls until a deadline expires. A wall clock cannot tell that
-//! apart from a link that is merely slow, so the budget is bounded on two axes
-//! instead: connection setup tightly, where a dead endpoint reveals itself, and
-//! the request as a whole generously, where a slow transfer needs room.
+//! A wall clock cannot tell a dead endpoint apart from a link that is merely
+//! slow, so connection setup is bounded tightly, where a dead endpoint reveals
+//! itself, while the first attempt may otherwise use the whole budget. A retry
+//! runs only in what an early failure leaves.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +11,7 @@ use std::time::Duration;
 use super::super::{
     connect_deadline, HyperTransport, RouteError, RouteFuture, RouteHttp, RouteRequest,
     RouteResponse, DIRECT_CONNECT_DEADLINE_LEAD, PIR_FINAL_ATTEMPT_CONNECT,
-    PIR_FIRST_ATTEMPT_CONNECT, PIR_FIRST_ATTEMPT_OVERALL, PIR_REQUEST_BUDGET,
+    PIR_FIRST_ATTEMPT_CONNECT, PIR_REQUEST_BUDGET,
 };
 
 /// What every attempt observed, and the scripted outcome it was answered with.
@@ -181,17 +180,18 @@ fn transport(outcomes: Vec<Outcome>) -> (Arc<RecordingRoute>, HyperTransport<Rec
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_stalled_attempt_is_retried_with_the_remaining_budget() {
+async fn a_slow_attempt_gets_the_whole_budget_and_is_not_restarted() {
+    // A 1.6 MB tier-1 query over Tor can take most of a minute. Cutting it
+    // short would only restart the upload from zero with less time left.
     let (route, transport) = transport(vec![Outcome::Stall, Outcome::Status(200)]);
 
     let result = pir_client::Transport::get(&transport, "http://pir.invalid/root").await;
 
-    assert!(result.is_ok(), "the second attempt answered");
+    assert!(result.is_err(), "the attempt ran out the budget");
     assert_eq!(
         route.deadlines(),
-        vec![PIR_FIRST_ATTEMPT_OVERALL, Duration::from_secs(45)],
-        "the first attempt is bounded tightly; the second gets everything left \
-         of the budget, so a link that is slow rather than dead still finishes"
+        vec![PIR_REQUEST_BUDGET],
+        "the first attempt may use the whole budget, leaving nothing to retry"
     );
 }
 
@@ -217,7 +217,7 @@ async fn the_connect_budget_reaches_the_executor() {
     // The budget is only useful if the executor that owns connection setup can
     // see it. The SDK cannot enforce it from outside: it never observes the
     // connection being established.
-    let (route, transport) = transport(vec![Outcome::Stall, Outcome::Status(200)]);
+    let (route, transport) = transport(vec![Outcome::ConnectTimedOut, Outcome::Status(200)]);
 
     let _ = pir_client::Transport::get(&transport, "http://pir.invalid/root").await;
 
@@ -320,18 +320,19 @@ async fn a_non_success_status_is_not_retried() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_budget_is_finite_and_no_longer_than_one_long_deadline() {
-    let (route, transport) = transport(vec![Outcome::Stall]);
+async fn a_retry_after_a_connect_timeout_shares_the_budget() {
+    let (route, transport) = transport(vec![Outcome::ConnectTimedOut, Outcome::Stall]);
 
     let result = pir_client::Transport::get(&transport, "http://pir.invalid/root").await;
 
-    assert!(result.is_err(), "every attempt stalled");
-    assert_eq!(route.deadlines().len(), 2, "the schedule is finite");
-    let total: Duration = route.deadlines().iter().sum();
+    assert!(result.is_err(), "the retry stalled");
+    let deadlines = route.deadlines();
+    assert_eq!(deadlines.len(), 2, "the schedule is finite");
     assert_eq!(
-        total, PIR_REQUEST_BUDGET,
-        "both attempts share one budget, so no caller waits longer than the \
-         single deadline this replaced"
+        deadlines[1],
+        PIR_REQUEST_BUDGET - (PIR_FIRST_ATTEMPT_CONNECT + Duration::from_secs(2)),
+        "the retry gets only what the first attempt left, so no caller waits \
+         longer than one budget"
     );
 }
 
@@ -341,7 +342,7 @@ async fn a_retried_post_carries_the_identical_body() {
     // reason about: the server learns nothing from a repeat, because which
     // item is fetched is exactly what PIR hides. A mutated body would be a
     // different query and would break that argument.
-    let (route, transport) = transport(vec![Outcome::Stall, Outcome::Status(200)]);
+    let (route, transport) = transport(vec![Outcome::SendFailedMidBody, Outcome::Status(200)]);
     let query = vec![0x5A; 4096];
 
     let result =
