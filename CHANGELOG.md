@@ -6,69 +6,17 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
-<<<<<<< HEAD
-=======
 ### Changed
 
-- Keep voting with the existing Ironwood V3 format independent of later
-  consensus branch IDs. Eligibility uses NU6.3 activation at the stored
-  snapshot height, and TX1 retains its fixed V6 / NU6.3 signing profile.
-  Legacy branch-ID arguments are now ignored instead of checked against the
-  compiled upgrade schedule; provider errors still propagate. Changes to
-  note, tree, or circuit formats still require explicit support.
-- Lower the per-share helper target cap from 10 to 5. Fleets of 10 or more
-  helpers now send each share to 5 helpers instead of half the fleet, and
-  fleets of 9 or fewer keep half rounded up. Durable plans stored with a
-  higher target are clamped to 5 when read. The readiness race and the
-  planning pool still use half the fleet capped at 10, so each share's 5
-  helpers come from the same pool as before. `share_helper_readiness_target_count`
-  exposes that readiness target.
 - Fetch PIR proofs five at a time (one bundle's note slots), one fetch at a
-  time per process. Wallets
-  with many notes or slow uplinks no longer upload every 1.6 MB tier-1 query
-  at once. Every chunk is still sent after a failure and nothing is saved
-  unless all succeed, so the number of queries a server sees never depends on
-  which proofs failed.
+  time per process. Wallets with many notes or slow uplinks no longer upload
+  every 1.6 MB tier-1 query at once. Every chunk is still sent after a failure
+  and nothing is saved unless all succeed, so the number of queries a server
+  sees never depends on which proofs failed.
 - Let the first PIR attempt use the whole 60-second budget instead of 15
   seconds. Connection setup is still bounded at 5 seconds, and a retry still
   runs after an early failure such as a severed upload.
 
-## v5.4.0
-
-Version 5.4.0 moves the default backend from Zakura Common 4.0.0 to Common
-5.4.0 and the wallet facade to `zakura-wallet-lib 0.1.0-rc9.8`. Public notes,
-addresses, witnesses, and keys on the default backend now belong to Common 5,
-so this is an opt-in upgrade despite its minor version number. The voting
-lifecycle, wire formats, vote-tree encoding, voting-sidecar schema,
-verification keys, and Rust 1.97 minimum are unchanged. The `lrz` backend keeps
-the same upstream releases. See [Migrating from 5.3 to 5.4](docs/migrating-to-5.4.md).
-
-- Zakura clients: move direct Common, wallet, circuit, and PIR dependencies to
-  the Common 5.4 matrix in the migration guide in the same change. The wallet
-  crates' rc9.7 SQLite migrations only add indexes, but rc9.7 changes some
-  wallet APIs.
-- The default backend now pins `zakura-client-backend` and
-  `zakura-client-sqlite` to `0.1.0-rc9.8` and `zakura-pczt` to `0.1.0-rc9.1`
-  directly. The facade's pre-release
-  requirements also accept later wallet pre-releases, which may move to
-  another Common family.
-- A fresh resolution of 5.2.0 or 5.3.0 without a lockfile now selects the
-  Common 5.4 wallet crates beside those releases' Common 4 crates, and does not
-  build. Keep your lockfile, or pin the wallet crates as described in
-  [Staying on 5.3](docs/migrating-to-5.4.md#staying-on-53).
-
-### Changed
-
-- Use Zakura Common 5.4.0, `voting-circuits 0.15.0`, and
-  `voting-crypto-deps 0.5.0`.
-- Use `pir-client 0.10.0`, `pir-types 0.9.0`, and `imt-tree 0.8.0`.
-- Use `zakura-wallet-lib 0.1.0-rc9.8`, and pin `zakura-client-backend` and
-  `zakura-client-sqlite` `0.1.0-rc9.8` and `zakura-pczt` `0.1.0-rc9.1` on the
-  default backend.
-- Release `vote-commitment-tree 0.9.0` and `vote-commitment-tree-client 0.11.0`
-  on the Common 5.4 family.
-
->>>>>>> d44b726 (Bound concurrent PIR uploads and give the first attempt the full budget (#398))
 ## v5.3.0
 
 Version 5.3.0 moves the wallet facade from `zakura-wallet-lib 0.1.0-rc9.2` to
