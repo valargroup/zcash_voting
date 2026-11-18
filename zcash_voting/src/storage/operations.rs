@@ -1601,6 +1601,9 @@ impl VotingDb {
 
     /// Cache-check, fetch, validate, and persist against `served_root`, with
     /// the network fetch abstracted so tests can supply proofs directly.
+    ///
+    /// Missing proofs are fetched [`PIR_FETCH_CHUNK`] at a time under
+    /// [`PIR_FETCH_GATE`].
     fn precompute_pir_proof_cache_inner(
         &self,
         wallet_id: &str,
@@ -1608,7 +1611,7 @@ impl VotingDb {
         extra_nullifiers: &[Vec<u8>],
         network: Network,
         served_root: pallas::Base,
-        fetch: impl FnOnce(&[pallas::Base]) -> Result<Vec<pir_client::ImtProofData>, VotingError>,
+        mut fetch: impl FnMut(&[pallas::Base]) -> Result<Vec<pir_client::ImtProofData>, VotingError>,
     ) -> Result<PirCachePrecomputeResult, VotingError> {
         let targets = pir_cache_nullifier_targets(notes, extra_nullifiers)?;
         let served_root_bytes = served_root.to_repr().to_vec();
@@ -1662,22 +1665,44 @@ impl VotingDb {
             });
         }
 
-        let missing_nullifiers: Vec<_> = missing.iter().map(|(_, nf)| *nf).collect();
-        let fetched_proofs = fetch(&missing_nullifiers)?;
-        if fetched_proofs.len() != missing_nullifiers.len() {
-            return Err(VotingError::Internal {
-                message: format!(
-                    "PIR returned {} proofs for {} nullifiers",
-                    fetched_proofs.len(),
-                    missing_nullifiers.len()
-                ),
-            });
+        // Every chunk is sent even after a failure, and nothing is saved unless
+        // all of them succeed. Which queries fail can depend on the wallet's
+        // nullifiers, so stopping early or keeping partial progress would let
+        // the server read that from how many queries it sees now or on a
+        // retry. `pir-client` keeps the same rule inside one call.
+        let mut first_error = None;
+        let mut fetched_proofs = Vec::with_capacity(missing.len());
+        for chunk in missing.chunks(PIR_FETCH_CHUNK) {
+            let chunk_nullifiers: Vec<_> = chunk.iter().map(|(_, nf)| *nf).collect();
+            let fetched = {
+                let _gate = PIR_FETCH_GATE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                fetch(&chunk_nullifiers)
+            };
+            match fetched {
+                Ok(proofs) if proofs.len() == chunk_nullifiers.len() => {
+                    fetched_proofs.extend(proofs);
+                }
+                Ok(proofs) => {
+                    first_error.get_or_insert(VotingError::Internal {
+                        message: format!(
+                            "PIR returned {} proofs for {} nullifiers",
+                            proofs.len(),
+                            chunk_nullifiers.len()
+                        ),
+                    });
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        for (proof, nf) in fetched_proofs
-            .iter()
-            .zip(missing_nullifiers.iter().copied())
-        {
-            crate::zkp1::validate_pir_proof(proof, nf, served_root)?;
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        for (proof, (_, nf)) in fetched_proofs.iter().zip(missing.iter()) {
+            crate::zkp1::validate_pir_proof(proof, *nf, served_root)?;
         }
 
         let conn = self.conn();
@@ -3336,9 +3361,29 @@ fn check_text_conflict(
     Ok(())
 }
 
+/// Most PIR queries one fetch sends at once.
+///
+/// One bundle's note slots, so an uncached bundle goes out in a single fetch.
+/// Each tier-1 query uploads about 1.6 MB, and every query in flight shares
+/// the wallet's uplink. Five is about 8 MB, which a link of about 1.1 Mbps can
+/// upload inside one request's 60-second budget.
+const PIR_FETCH_CHUNK: usize = BUNDLE_NOTE_SLOTS;
+
+/// Admits one PIR fetch at a time in this process.
+///
+/// Bundles prepare concurrently and each opens its own PIR session, so without
+/// this the [`PIR_FETCH_CHUNK`] bound would multiply by the number of bundles
+/// in flight. It is held only around the network fetch, never together with
+/// the database lock.
+static PIR_FETCH_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 #[path = "operations/tests/pir_wallet_scope.rs"]
 mod pir_wallet_scope_tests;
+
+#[cfg(test)]
+#[path = "operations/tests/pir_fetch_chunks.rs"]
+mod pir_fetch_chunks_tests;
 
 #[cfg(test)]
 mod tests {
