@@ -1612,7 +1612,7 @@ mod tests {
         assert_eq!(policy::SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, 12);
         assert_eq!(policy::SHARE_HELPER_INITIAL_MAX_FRACTION_NUMERATOR, 3);
         assert_eq!(policy::SHARE_HELPER_INITIAL_MAX_FRACTION_DENOMINATOR, 4);
-        assert_eq!(policy::SHARE_SUBMIT_AT_MAX_DELAY_SECONDS, 100 * 60 * 60);
+        assert_eq!(policy::SHARE_SUBMIT_AT_MAX_DELAY_SECONDS, 7 * 24 * 60 * 60);
         assert_eq!(
             policy::scheduled_share_submit_at_from_random_unit(10, 100, Some(10), false, 0.0)
                 .unwrap(),

@@ -54,7 +54,7 @@ fn last_moment_predicate_uses_deadline_boundary() {
 
 #[test]
 fn retry_uses_capped_submit_at_without_adding_another_window() {
-    let now = 1_000_000;
+    let now = 1_800_000_000;
     let vote_end = now + 30 * 24 * 60 * 60;
     let submit_at = scheduled_share_submit_at_from_random_unit(
         now,
@@ -67,7 +67,7 @@ fn retry_uses_capped_submit_at_without_adding_another_window() {
     let share = share(submit_at, now);
     let policy = ShareTimingPolicy::default();
 
-    assert_eq!(share_recovery_base_time(&share), now + 50 * 60 * 60);
+    assert_eq!(share_recovery_base_time(&share), now + 84 * 60 * 60);
     assert!(!should_resubmit_share(
         &share,
         submit_at + SHARE_MAX_OVERDUE_THRESHOLD_SECONDS - 1,
