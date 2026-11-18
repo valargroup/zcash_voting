@@ -713,12 +713,13 @@ already means no request byte left.
 ### PIR request budget
 
 A PIR request spends one finite budget of 60 seconds against one endpoint,
-split across at most two attempts: the first bounded at 5 seconds of connection
-setup and 15 seconds overall, the second at 10 seconds of connection setup and
-whatever remains of the budget. The two attempts share the budget rather than
-each getting their own, so the total is no longer than the single deadline this
-replaced. That ceiling is the per-endpoint one; `PirFleet` failover multiplies
-it by the endpoint count.
+across at most two attempts. The first is bounded at 5 seconds of connection
+setup and may otherwise use the whole budget. A second attempt runs only after
+an early failure, bounded at 10 seconds of connection setup and whatever
+remains of the budget. The two attempts share the budget rather than each
+getting their own, so the total is never longer than one budget. That ceiling
+is the per-endpoint one; `PirFleet` failover multiplies it by the endpoint
+count.
 
 The split exists because a wall clock cannot distinguish an endpoint that never
 answers from a link that is merely slow. Bounding connection setup separately
@@ -728,10 +729,11 @@ request as a whole must stay generous or a large tier over a slow link becomes
 unreachable rather than late — every attempt restarts the transfer from zero,
 so a schedule that is uniformly too short never converges.
 
-Only running out of time is retried, whether the whole-request backstop or the
-connect deadline. Every other failure is a definite answer about this endpoint
-— a refused connection, a protocol error, a non-success status — and is
-returned rather than repeated.
+A retry follows only a failure that is not an answer from the endpoint: the
+connect deadline expiring, or a transfer severed after dispatch. A first
+attempt that runs out the whole budget leaves nothing to retry with. Every
+other failure is a definite answer about this endpoint — a refused connection,
+a protocol error, a non-success status — and is returned rather than repeated.
 
 Repeating is permitted for PIR where it is not for helper or chain POSTs. A PIR
 query is an idempotent read, so a second attempt cannot double an effect, and
@@ -745,16 +747,17 @@ is unchanged — PIR acts on it, it is not weakened for PIR.
 The budget applies per endpoint and reaches the executor on every attempt, so a
 host executor that enforces it gets the same fast-fail as the built-in route. A
 host executor that does not is bounded by the whole-request deadline alone,
-which still ends each attempt and still permits the retry; it forfeits only the
-early abandon, never correctness.
+so a connect that hangs on such a route uses the whole budget and is not
+retried; it forfeits the early abandon and the retry, never correctness.
 
-Tests cover: a stalled attempt retried under the remaining budget; a stalled
-connect retried, which a whole-request deadline alone cannot see; the connect
-budget reaching the executor on each attempt; a late refusal retried from an
-executor that enforces the budget and *not* retried from one that ignores it;
-an immediate refusal and a non-success status each ending the request on one
-attempt; the budget finite and no longer than the deadline it replaced; a
-retried POST carrying the identical body; and a connect budget only ever
+Tests cover: a slow attempt given the whole budget and not restarted; a
+stalled connect retried, which a whole-request deadline alone cannot see; a
+retry after a connect timeout bounded by what the first attempt left; the
+connect budget reaching the executor on each attempt; a late refusal retried
+from an executor that enforces the budget and *not* retried from one that
+ignores it; a severed upload retried and still stopping at two attempts; an
+immediate refusal and a non-success status each ending the request on one
+attempt; a retried POST carrying the identical body; and a connect budget only ever
 tightening the deadline (`http_transport/tests/pir_retry.rs`). That only a
 deadline-wrapped `DirectRoute` declares enforcement is covered by
 `only_a_deadline_wrapped_direct_route_claims_to_enforce_the_connect_budget`;
