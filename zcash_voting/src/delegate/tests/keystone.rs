@@ -28,7 +28,15 @@ fn assert_request_survives_restart(ledger_output_review: bool) {
     let setup = prepared.setup(&db, &NoopProgressReporter).unwrap();
     // The actual proof coordination and generation are covered by the prover
     // suite. Here a durable proof row exercises post-proof request retrieval.
-    queries::store_proof(&db.conn(), &prepared.round_id, "keystone", 0, &[0xAB; 96]).unwrap();
+    queries::store_proof(
+        &db.conn(),
+        &prepared.round_id,
+        "keystone",
+        0,
+        &[0xAB; 96],
+        None,
+    )
+    .unwrap();
     let before = prepared
         .keystone_request(&db, &NoopProgressReporter)
         .unwrap();
@@ -236,6 +244,7 @@ fn observed_keystone_requests_preserve_durable_reuse_and_missing_pczt_errors() {
                 &db.wallet_id(),
                 0,
                 &[0xAB; 96],
+                None,
             )
             .unwrap();
         }

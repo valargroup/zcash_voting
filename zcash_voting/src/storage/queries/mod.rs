@@ -5,6 +5,7 @@ use pasta_curves::pallas;
 use rusqlite::{named_params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
+use crate::delegation_key_fingerprint::DelegationKeyFingerprint;
 use crate::note_bundling::{BundlePlannerVersion, BundlePolicy};
 use crate::storage::{KeystoneSignatureRecord, RoundPhase, RoundState, RoundSummary, VoteRecord};
 use crate::types::{Network, NoteInfo, VotingError, VotingRoundParams, WitnessData};
@@ -2612,6 +2613,9 @@ pub struct DelegationDbFields {
     pub alpha: Vec<u8>,
     pub vote_round_id: String,
     pub tx1_effects: Vec<u8>,
+    /// Circuit key that made `proof`, or `None` for a proof saved before the
+    /// fingerprint was recorded.
+    pub proof_key_fingerprint: Option<DelegationKeyFingerprint>,
 }
 
 /// Load all fields needed to reconstruct the chain-ready delegation TX payload.
@@ -2631,6 +2635,7 @@ pub fn load_delegation_submission_data(
         alpha,
         vote_round_id,
         tx1_effects,
+        stored_key_fingerprint,
     ): (
         Vec<u8>,
         Vec<u8>,
@@ -2641,10 +2646,12 @@ pub fn load_delegation_submission_data(
         Vec<u8>,
         String,
         Vec<u8>,
+        Option<Vec<u8>>,
     ) = conn
         .query_row(
             "SELECT p.proof, b.rk, b.nf_signed, b.cmx_new, b.gov_comm, \
-             b.gov_nullifiers_blob, b.alpha, b.round_id, b.tx1_effects \
+             b.gov_nullifiers_blob, b.alpha, b.round_id, b.tx1_effects, \
+             p.circuit_key_fingerprint \
              FROM bundles b JOIN proofs p ON b.round_id = p.round_id AND b.bundle_index = p.bundle_index AND b.wallet_id = p.wallet_id \
              WHERE b.round_id = :round_id AND b.wallet_id = :wallet_id AND b.bundle_index = :bundle_index AND p.success = 1",
             named_params! { ":round_id": round_id, ":wallet_id": wallet_id, ":bundle_index": bundle_index as i64 },
@@ -2659,6 +2666,7 @@ pub fn load_delegation_submission_data(
                     row.get(6)?,
                     row.get(7)?,
                     row.get(8)?,
+                    row.get(9)?,
                 ))
             },
         )
@@ -2683,6 +2691,18 @@ pub fn load_delegation_submission_data(
         .map(|c| c.to_vec())
         .collect();
     crate::tx1::validate_tx1_effects(&tx1_effects)?;
+    let proof_key_fingerprint = stored_key_fingerprint
+        .map(|stored| {
+            <[u8; 32]>::try_from(stored.as_slice())
+                .map(DelegationKeyFingerprint::from_bytes)
+                .map_err(|_| VotingError::Internal {
+                    message: format!(
+                        "corrupt proof key fingerprint: length {} is not 32",
+                        stored.len()
+                    ),
+                })
+        })
+        .transpose()?;
 
     Ok(DelegationDbFields {
         proof: proof_bytes,
@@ -2694,6 +2714,7 @@ pub fn load_delegation_submission_data(
         alpha,
         vote_round_id,
         tx1_effects,
+        proof_key_fingerprint,
     })
 }
 
@@ -3147,19 +3168,28 @@ pub fn list_pir_cache_roots(
 
 // --- Proofs ---
 
+/// Saves one bundle's delegation proof, replacing any proof already saved.
+///
+/// `key_fingerprint` names the circuit key that made `proof_bytes`. It is
+/// stored with the proof and replaced with it, so a re-proved bundle never
+/// keeps the fingerprint of the proof it replaced; `None` records a proof
+/// whose key is unknown and clears any earlier fingerprint.
 pub fn store_proof(
     conn: &Connection,
     round_id: &str,
     wallet_id: &str,
     bundle_index: u32,
     proof_bytes: &[u8],
+    key_fingerprint: Option<&DelegationKeyFingerprint>,
 ) -> Result<(), VotingError> {
     conn.execute(
-        "INSERT INTO proofs (round_id, wallet_id, bundle_index, proof, success, created_at)
-         VALUES (:round_id, :wallet_id, :bundle_index, :proof, 1, strftime('%s','now'))
-         ON CONFLICT(round_id, wallet_id, bundle_index) DO UPDATE SET proof = :proof, success = 1",
+        "INSERT INTO proofs (round_id, wallet_id, bundle_index, proof, success, created_at, circuit_key_fingerprint)
+         VALUES (:round_id, :wallet_id, :bundle_index, :proof, 1, strftime('%s','now'), :key_fingerprint)
+         ON CONFLICT(round_id, wallet_id, bundle_index) DO UPDATE SET proof = :proof, success = 1,
+             circuit_key_fingerprint = :key_fingerprint",
         named_params! {
             ":proof": proof_bytes,
+            ":key_fingerprint": key_fingerprint.map(|fingerprint| fingerprint.as_bytes().as_slice()),
             ":round_id": round_id,
             ":wallet_id": wallet_id,
             ":bundle_index": bundle_index as i64,

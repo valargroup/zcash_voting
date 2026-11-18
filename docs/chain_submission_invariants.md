@@ -643,6 +643,16 @@ definite rejection with no earlier ambiguity may retain the compatibility
 `Recovering` behavior. A hash in an error response is never confirmation
 evidence.
 
+Module code 50 is the vote chain's answer to a delegation whose
+[key fingerprint](#delegation-key-fingerprint-header) differs from the key its
+verifier uses. It is refused before broadcast, so it carries an empty
+transaction hash, and it is one of the other deterministic rejections above:
+it gets no classification, state, or retry rule of its own, and it is
+recognized by its number alone
+(`a_key_mismatch_answer_is_a_definite_rejection_read_from_its_numeric_code`).
+The server log, which tells the user to update the app, reaches the host only
+as the escaped, bounded diagnostic message every rejection carries.
+
 Within each lifecycle invocation, POST attempts, body sizes, request
 durations, and backoffs are bounded by configuration with safe finite maxima.
 Redirects are not followed. Attempt limits may exceed endpoint count; endpoints
@@ -663,6 +673,12 @@ from an executor that declares `hook_precedes_connection_setup` (the SDK's
 `DirectRoute`, whose Hyper client fuses connection setup with the first write
 and reports connect failures distinctly). An executor must fail closed when
 its route is unavailable and must never fall back to a direct connection.
+
+The SDK owns protocol headers, and an executor forwards every header the
+request carries without adding, renaming, or dropping one. That includes the
+[delegation key fingerprint header](#delegation-key-fingerprint-header): an
+executor that drops it turns a clear "update the app" answer back into an
+unexplained invalid proof.
 
 A caller may bound connection setup more tightly than the request as a whole,
 through the request's `connect_timeout`. Such a budget only ever tightens the
@@ -1392,6 +1408,21 @@ reuse across restart and concurrent creation. Existing setup replacement and
 clearing update the PCZT together with its signing fields. Migration adds
 storage only; it does not repair legacy proofs, signatures, or setup.
 
+## Version 24 to version 25
+
+Version 25 adds nullable `proofs.circuit_key_fingerprint`, the
+[fingerprint](#delegation-key-fingerprint-header) of the delegation circuit key
+that made the saved proof. Existing rows are preserved and keep a NULL
+fingerprint: the key that made them cannot be recovered, and they are sent
+without one. The column accepts only NULL or exactly 32 bytes. It is not added
+to the semantic generation digest and is not submission authority.
+
+Fresh and migrated schemas match. A version-22 combined-vote preview is still
+recognized, because the column is added by the ladder and is not part of what
+identifies a preview
+(`v24_adds_the_proof_key_fingerprint_and_leaves_saved_proofs_without_one`,
+`v22_combined_preview_preserves_recovery_and_tracking_with_or_without_pczt`).
+
 ## Removed legacy APIs
 
 The public API does not expose:
@@ -1424,6 +1455,11 @@ Tests cover:
 - usable success hash produces `Tracking`;
 - batch acceptance and rejection retain a usable hash only when the response
   carries the matching canonical batch digest;
+- both delegation routes send the fingerprint saved with the proof as a request
+  header and leave the body, signature, and generation digest unchanged; a
+  proof saved without one sends none, and vote routes never send one;
+- a key-fingerprint mismatch answer is a definite rejection recognized by its
+  numeric code, and on the combined route only with the batch digest;
 - inconclusive hash polling has a bounded promotion to candidate-preserving
   `Recovering`;
 - polling, diagnostics, and restart do not reset the durable tracking window;
@@ -2033,6 +2069,15 @@ recovery confirms a combined generation from the same final-VAN-plus-vote-leaves
 layout as an ordinary batch without inventing a hash
 (`exact_recovery_confirms_a_combined_batch_from_the_tree`).
 
+A key-fingerprint mismatch (module code 50) on the first combined POST is such
+a definite rejection, with nothing special about it. Like every combined
+answer it counts only when it echoes the batch digest; without the digest it is
+possibly dispatched
+(`a_combined_key_mismatch_answer_is_definite_only_with_the_batch_digest`). The
+retired bundle keeps its saved proof and the fingerprint saved with it, so a
+recast sends the same fingerprint and is refused the same way; the rejection
+ledger bounds that as it bounds any rejection caused by the delegation half.
+
 ### Route answers preserve dispatch ambiguity
 
 HTTP 404/405 and HTTP 200 HTML responses can indicate an unsupported mutation
@@ -2136,3 +2181,86 @@ Conformance: `only_a_complete_matching_ingress_timeout_is_non_dispatch_evidence`
 `cancellation_during_ingress_timeout_backoff_does_not_retry`. The vote-sdk
 `TestRESTListenerStalledUploadReturnsBoundTimeout` exercises the real outer
 listener and `TestIngressTimeoutNeverBroadcasts` covers all four mutation routes.
+
+### Delegation key fingerprint header
+
+A delegation proof verifies only under the verifying key of the circuit build
+that made it. A wallet built against another circuit therefore produces proofs
+the vote chain can never accept, and the request body says nothing about which
+key was used. Every request that carries a delegation proof names that key.
+
+The fingerprint is the 32-byte BLAKE2b hash, with no key and no
+personalization, of the debug rendering of the delegation verifying key's
+pinned form: the definition the circuit crate uses to detect an unintended key
+change. It is public: it identifies a circuit build, not a wallet, a round, a
+note, or a proof. The key the vote chain currently verifies with has the
+fingerprint
+`e1773ecd2eb8531cc54c1df5b935a978788ef4eea4949cb45a00edf550ecee81`, on both
+wallet backends.
+
+The fingerprint describes the key that made the saved proof, never the key of
+whichever build re-sends it:
+
+- it is computed when the proof is generated and returned with the proof;
+- it is saved in the same transaction as the proof, and a proof that replaces
+  an earlier one replaces its fingerprint too, including replacing it with
+  none;
+- a proof saved before the SDK recorded fingerprints has none, and is sent
+  without one. The SDK never substitutes the running build's key, because the
+  proof an upgraded app still holds may come from an older circuit, which is
+  the case the fingerprint exists to expose.
+
+It is sent as the `X-Vote-Delegation-Key-V1` request header, 64 lowercase
+hexadecimal characters, on exactly two routes: `delegate-vote` and
+`delegate-and-cast-vote-batch`. Vote routes never carry it. It is request
+metadata only: it is not a field of the JSON body (the combined route refuses a
+body with unknown fields), it is not covered by the SpendAuth signature or the
+combined authorization digest, and it is not part of the semantic generation
+digest, so recording it never changes a generation's identity. An imported
+capability delegation is never posted by the voter and so sends nothing.
+
+The vote chain answers as follows. This is an extension of the trusted Vote API
+contract, checked by the REST handler and invisible to consensus: validators
+accept and reject exactly the same transactions with or without it.
+
+| Header | Answer |
+| --- | --- |
+| absent | the request proceeds as before |
+| not 64 lowercase hex characters, or repeated | HTTP 400, nothing broadcast |
+| differs from the chain's key | HTTP 422, module code 50, empty transaction hash, a log telling the user to update the app, and on the combined route the batch digest; nothing broadcast |
+| equals the chain's key | the request proceeds as before |
+
+A chain build with no verifying key (a mock verifier) compares nothing. The
+client gives code 50 no special handling; see
+[Reservation and transport classification](#reservation-and-transport-classification)
+and [Definite rejection](#definite-rejection). A wallet whose saved proof came
+from another circuit cannot make that proof acceptable by retrying; resolving
+that case is part of the open item in
+[Scope and authority](#scope-and-authority) on a rejected generation that
+cannot succeed unchanged, and this header only makes the cause visible.
+
+An app that broadcasts a delegation itself, such as a custody funds controller
+posting through the Vote API, reads
+`DelegationSubmission::proof_key_fingerprint` and sends the same header with
+the same value, or no header when it is `None`.
+
+Conformance:
+
+- `this_build_proves_with_the_delegation_key_the_vote_chain_verifies_with`
+  (release-only, both backends) pins the fingerprint above; the vote-sdk tests
+  `test_delegation_key_fingerprint_matches_pinned_value` and
+  `TestDelegationKeyFingerprintMatchesPinnedValue` pin the same value for the
+  chain's verifier, so neither side can drift alone.
+- `a_standalone_delegation_sends_the_fingerprint_saved_with_its_proof` and
+  `a_combined_batch_sends_the_fingerprint_saved_with_its_delegation_proof`
+  drive the real client from a saved proof to the request that leaves it.
+- `a_proof_saved_without_a_fingerprint_is_sent_without_one_on_both_routes` and
+  `a_replaced_proof_never_keeps_the_fingerprint_of_the_proof_it_replaced`.
+- `a_delegation_post_names_its_proof_key_in_a_header_and_leaves_the_body_unchanged`,
+  `a_combined_post_names_the_delegation_proof_key_in_the_same_header`,
+  `a_proof_whose_key_was_not_recorded_sends_no_key_header`, and
+  `vote_routes_never_carry_a_delegation_key_header`.
+- `delegation_submission_wire_json_shape` keeps the fingerprint out of the body.
+- `v24_adds_the_proof_key_fingerprint_and_leaves_saved_proofs_without_one`.
+- The vote-sdk `TestDelegationKey*` API tests cover the four answers above on
+  both routes.

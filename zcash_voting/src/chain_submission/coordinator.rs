@@ -589,6 +589,7 @@ where
                     .submit_delegation_with_dispatch(
                         endpoint_index,
                         submission,
+                        derived.delegation_key_fingerprint(),
                         dispatch,
                         observations,
                     )
@@ -616,6 +617,7 @@ where
                             .target()
                             .batch_digest()
                             .expect("combined identity"),
+                        derived.delegation_key_fingerprint(),
                         dispatch,
                         observations,
                     )

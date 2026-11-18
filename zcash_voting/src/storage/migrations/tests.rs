@@ -68,8 +68,32 @@ fn without_combined_cast_rejections(schema: &str) -> String {
     schema[..start].trim_end().to_string() + "\n"
 }
 
+/// Strips the proof key fingerprint added at version 25. No database at
+/// version 24 or earlier can carry it.
+fn v24_schema() -> String {
+    let schema = include_str!("001_init.sql");
+    let stripped = schema.replace(
+        "    circuit_key_fingerprint BLOB CHECK(circuit_key_fingerprint IS NULL OR length(circuit_key_fingerprint) = 32),\n",
+        "",
+    );
+    assert_ne!(
+        stripped, schema,
+        "v24_schema must actually drop the column added at version 25"
+    );
+    stripped
+}
+
+/// Appends the NULL fingerprint that the version-25 upgrade gives every proof
+/// row saved before it.
+fn with_null_key_fingerprint(mut proof_rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    for row in &mut proof_rows {
+        row.push("Null".to_string());
+    }
+    proof_rows
+}
+
 fn v23_schema() -> String {
-    without_combined_cast_rejections(include_str!("001_init.sql"))
+    without_combined_cast_rejections(&v24_schema())
 }
 
 fn v22_schema() -> String {
@@ -233,7 +257,7 @@ fn v21_adds_pczt_storage_without_rewriting_delegation_state() {
                 bundle.push("Null".to_string());
             }
         }
-        let proofs = dump_table(&conn, "proofs");
+        let proofs = with_null_key_fingerprint(dump_table(&conn, "proofs"));
         let signatures = dump_table(&conn, "keystone_signatures");
         conn.pragma_update(None, "user_version", 21).unwrap();
         migrate(&mut conn).unwrap();
@@ -886,7 +910,14 @@ fn insert_v17_delegation_with_complete_setup(
         ],
     )
     .unwrap();
-    queries::store_proof(conn, round_id, wallet_id, bundle_index, &[0x10; 96]).unwrap();
+    // Written directly: these fixtures run on schemas older than the proof
+    // key fingerprint column that `queries::store_proof` now fills.
+    conn.execute(
+        "INSERT INTO proofs (round_id, wallet_id, bundle_index, proof, success, created_at)
+         VALUES (?1, ?2, ?3, ?4, 1, 0)",
+        rusqlite::params![round_id, wallet_id, bundle_index, vec![0x10_u8; 96]],
+    )
+    .unwrap();
     conn.execute(
         "UPDATE bundles
                 SET delegation_tx_hash='dtx', van_leaf_position=?1
@@ -1771,7 +1802,14 @@ fn v22_upgrades_combined_storage_to_the_fresh_schema() {
         "keystone_signatures",
         "chain_submissions",
     ];
-    let before = preserved_tables.map(|table| dump_table(&upgraded, table));
+    let before = preserved_tables.map(|table| {
+        let rows = dump_table(&upgraded, table);
+        if table == "proofs" {
+            with_null_key_fingerprint(rows)
+        } else {
+            rows
+        }
+    });
     upgraded.pragma_update(None, "user_version", 22).unwrap();
     migrate(&mut upgraded).unwrap();
     migrate(&mut upgraded).unwrap();
@@ -2280,4 +2318,57 @@ fn schema_objects(conn: &Connection) -> Vec<(String, String, String)> {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     objects
+}
+
+/// A wallet that proved before the fingerprint existed keeps its proof, and
+/// the proof is marked as made by an unknown key rather than by this build's.
+#[test]
+fn v24_adds_the_proof_key_fingerprint_and_leaves_saved_proofs_without_one() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(&v24_schema()).unwrap();
+    queries::insert_round(
+        &conn,
+        "wallet",
+        crate::Network::Testnet,
+        &test_params(),
+        None,
+    )
+    .unwrap();
+    insert_v17_delegation_with_complete_setup(&conn, ROUND, "wallet", 0, None);
+    let proofs = with_null_key_fingerprint(dump_table(&conn, "proofs"));
+    assert_eq!(proofs.len(), 1);
+    conn.pragma_update(None, "user_version", 24).unwrap();
+
+    migrate(&mut conn).unwrap();
+    migrate(&mut conn).unwrap();
+
+    assert_eq!(dump_table(&conn, "proofs"), proofs);
+    assert_eq!(
+        queries::load_delegation_submission_data(&conn, ROUND, "wallet", 0)
+            .unwrap()
+            .proof_key_fingerprint,
+        None
+    );
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .unwrap(),
+        CURRENT_VERSION
+    );
+    let mut fresh = Connection::open_in_memory().unwrap();
+    migrate(&mut fresh).unwrap();
+    assert_eq!(schema_objects(&conn), schema_objects(&fresh));
+
+    // The upgraded column accepts a fingerprint and refuses any other length.
+    let fingerprint =
+        crate::delegation_key_fingerprint::DelegationKeyFingerprint::from_bytes([0xE1; 32]);
+    queries::store_proof(&conn, ROUND, "wallet", 0, &[0x10; 96], Some(&fingerprint)).unwrap();
+    assert_eq!(
+        queries::load_delegation_submission_data(&conn, ROUND, "wallet", 0)
+            .unwrap()
+            .proof_key_fingerprint,
+        Some(fingerprint)
+    );
+    assert!(conn
+        .execute("UPDATE proofs SET circuit_key_fingerprint = X'0102'", [])
+        .is_err());
 }

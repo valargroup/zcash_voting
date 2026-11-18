@@ -2117,6 +2117,9 @@ mod tests {
             spend_auth_sig: [0x06; 64],
             sighash: [0x07; 32],
             tx1_effects: crate::tx1::placeholder_tx1_effects(),
+            proof_key_fingerprint: Some(
+                crate::delegation_key_fingerprint::DelegationKeyFingerprint::from_bytes([0x08; 32]),
+            ),
         };
 
         let json = submission.to_wire_json().unwrap();
@@ -2132,6 +2135,10 @@ mod tests {
             decode_b64(value.get("vote_round_id").unwrap().as_str().unwrap()),
             vec![0x0a, 0x0b]
         );
+        // The proof's key fingerprint travels in a request header, never in
+        // the body: the vote chain refuses a combined body with extra fields.
+        assert_eq!(value.as_object().unwrap().len(), 9);
+        assert!(!json.contains(&"08".repeat(32)));
     }
 
     #[test]
@@ -2414,6 +2421,7 @@ mod tests {
                 spend_auth_sig: [6; 64],
                 sighash: [7; 32],
                 tx1_effects: crate::tx1::placeholder_tx1_effects(),
+                proof_key_fingerprint: None,
             },
             pczt_bytes: vec![1, 2, 3],
             eligible_weight_zatoshi: 20,

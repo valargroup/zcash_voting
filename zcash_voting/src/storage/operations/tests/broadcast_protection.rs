@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn unbroadcast_delegation_setup_is_discardable() {
     let db = db_with_delegation_setup(1);
-    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8]).unwrap();
+    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8], None).unwrap();
 
     assert_eq!(
         db.delegation_broadcast_evidence(ROUND_ID, None).unwrap(),
@@ -43,7 +43,7 @@ fn unbroadcast_delegation_setup_is_discardable() {
 #[test]
 fn delegation_setup_discard_is_atomic() {
     let db = db_with_delegation_setup(1);
-    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8]).unwrap();
+    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8], None).unwrap();
     db.conn()
         .execute_batch(
             "CREATE TEMP TRIGGER reject_delegation_proof_delete

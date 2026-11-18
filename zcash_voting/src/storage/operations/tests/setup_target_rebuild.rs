@@ -30,7 +30,7 @@ fn setup_rebuilds_a_bundle_the_current_hotkey_cannot_use() {
         db.validate_delegation_proof_target(&identity, &first)
             .expect("fresh setup must validate against the key that built it");
     }
-    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8]).unwrap();
+    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8], None).unwrap();
 
     // The wallet comes back with a different hotkey for the same round.
     // Without the rebuild this is where the round dies: the write-once
@@ -351,7 +351,7 @@ fn a_write_over_a_cleared_binding_is_refused_once_the_bundle_is_broadcast() {
 #[test]
 fn a_rebuild_refused_at_the_write_keeps_the_old_setup_and_its_proof() {
     let db = db_with_delegation_setup(1);
-    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8]).unwrap();
+    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8], None).unwrap();
     // What another process dispatches while the replacement is being built.
     insert_chain_submission(&db, 0);
 
@@ -383,7 +383,7 @@ fn a_rebuild_refused_at_the_write_keeps_the_old_setup_and_its_proof() {
 #[test]
 fn a_rebuild_that_is_not_refused_replaces_the_setup_and_its_proof() {
     let db = db_with_delegation_setup(1);
-    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8]).unwrap();
+    queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0x01; 8], None).unwrap();
 
     replace_setup(&db, &[0x99; 32]).expect("an unbroadcast bundle rebuilds");
 

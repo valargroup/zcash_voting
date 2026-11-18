@@ -2023,7 +2023,7 @@ pub(crate) fn observe_recover_atomic_vote_batch(
                     &digest,
                 )?;
             crate::wire::DelegateAndVoteBatchWire {
-                delegation,
+                delegation: crate::wire::DelegationSubmissionWire::try_from(&delegation)?,
                 batch: wire_batch,
             }
             .to_json()?

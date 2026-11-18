@@ -1619,7 +1619,7 @@ mod session_reset_tests {
         db.ensure_bundles(ROUND_ID, &[note(0), note(1)]).unwrap();
         seed_unsigned_setup_fields(&db, ROUND_ID, 0);
         seed_unsigned_setup_fields(&db, ROUND_ID, 1);
-        queries::store_proof(&db.conn(), ROUND_ID, WALLET_ID, 0, &[0xAB; 96]).unwrap();
+        queries::store_proof(&db.conn(), ROUND_ID, WALLET_ID, 0, &[0xAB; 96], None).unwrap();
 
         reset_voting_session_state(&db, ROUND_ID).unwrap();
 

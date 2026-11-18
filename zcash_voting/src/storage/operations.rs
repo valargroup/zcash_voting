@@ -89,6 +89,7 @@ fn persist_delegation_proof_result(
         wallet_id,
         bundle_index,
         &delegation_proof.proof,
+        Some(&delegation_proof.key_fingerprint),
     )?;
     queries::store_proof_result_fields_with_van_comm(
         &tx,
@@ -6082,7 +6083,7 @@ mod tests {
             &cmx_new,
         )
         .unwrap();
-        queries::store_proof(&conn, ROUND_ID, W, 0, &[0xAC; 96]).unwrap();
+        queries::store_proof(&conn, ROUND_ID, W, 0, &[0xAC; 96], None).unwrap();
 
         let submission = queries::load_delegation_submission_data(&conn, ROUND_ID, W, 0).unwrap();
         assert_eq!(submission.tx1_effects, tx1_effects);
@@ -6132,7 +6133,7 @@ mod tests {
         .unwrap();
 
         let tx = conn.transaction().unwrap();
-        queries::store_proof(&tx, ROUND_ID, W, 0, &[0xAB; 96]).unwrap();
+        queries::store_proof(&tx, ROUND_ID, W, 0, &[0xAB; 96], None).unwrap();
         let err = queries::store_proof_result_fields_with_van_comm(
             &tx,
             ROUND_ID,
@@ -7173,7 +7174,7 @@ mod tests {
             &crate::types::NoopProgressReporter,
         )
         .unwrap();
-        queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0xAC; 96]).unwrap();
+        queries::store_proof(&db.conn(), ROUND_ID, W, 0, &[0xAC; 96], None).unwrap();
 
         let request = crate::delegate::signing_request(&db, ROUND_ID, 0, &keys).unwrap();
         assert_eq!(request.account_index, account_index);
@@ -7253,7 +7254,7 @@ mod tests {
                 &[0x88; 32],
             )
             .unwrap();
-            queries::store_proof(&conn, ROUND_ID, W, 0, &[0xAC; 96]).unwrap();
+            queries::store_proof(&conn, ROUND_ID, W, 0, &[0xAC; 96], None).unwrap();
         }
 
         let err = db

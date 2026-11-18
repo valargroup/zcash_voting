@@ -746,8 +746,15 @@ mod tests {
                 ],
             )
             .unwrap();
-            queries::store_proof(&conn, &params.vote_round_id, WALLET, index as u32, &[0xAC])
-                .unwrap();
+            queries::store_proof(
+                &conn,
+                &params.vote_round_id,
+                WALLET,
+                index as u32,
+                &[0xAC],
+                None,
+            )
+            .unwrap();
         }
     }
 
@@ -944,7 +951,7 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
         for index in 0..2 {
             let data =
                 queries::load_zkp2_inputs(&conn, &params.vote_round_id, WALLET, index).unwrap();

@@ -4,6 +4,7 @@ use rusqlite::named_params;
 use sha2::{Digest, Sha256};
 
 use crate::{
+    delegation_key_fingerprint::DelegationKeyFingerprint,
     governance::BUNDLE_NOTE_SLOTS,
     storage::queries,
     types::{EncryptedShare, Network, VotingError},
@@ -120,6 +121,10 @@ impl ImportedDelegationGeneration {
 pub(super) struct DerivedChainSubmission {
     bound: BoundGeneration,
     request: ChainSubmissionRequest,
+    /// Circuit key that made the delegation proof inside `request`, when the
+    /// request carries one and its key was recorded. Sent as a request header,
+    /// so it is neither part of the body nor of the generation digest.
+    delegation_key_fingerprint: Option<DelegationKeyFingerprint>,
 }
 
 impl DerivedChainSubmission {
@@ -138,7 +143,18 @@ impl DerivedChainSubmission {
                 ordered_proposal_ids,
             },
             request,
+            delegation_key_fingerprint: None,
         }
+    }
+
+    /// Records the circuit key that made the request's delegation proof.
+    #[cfg(test)]
+    pub(super) fn with_delegation_key_fingerprint(
+        mut self,
+        fingerprint: DelegationKeyFingerprint,
+    ) -> Self {
+        self.delegation_key_fingerprint = Some(fingerprint);
+        self
     }
 
     /// Returns the identity-bound semantic generation.
@@ -154,6 +170,12 @@ impl DerivedChainSubmission {
     /// Returns the closed wire request reconstructed from durable inputs.
     pub(super) fn request(&self) -> &ChainSubmissionRequest {
         &self.request
+    }
+
+    /// Returns the circuit key that made the request's delegation proof, or
+    /// `None` for a request without one or a proof whose key was not recorded.
+    pub(super) fn delegation_key_fingerprint(&self) -> Option<DelegationKeyFingerprint> {
+        self.delegation_key_fingerprint
     }
 
     pub(super) fn imported_candidate(&self) -> Option<CandidateTransactionHash> {
@@ -756,6 +778,7 @@ pub(super) fn derive_imported_delegation(
     Ok(DerivedChainSubmission {
         bound: imported.into_bound(),
         request: ChainSubmissionRequest::ImportedDelegation(candidate_transaction_hash),
+        delegation_key_fingerprint: None,
     })
 }
 
@@ -830,6 +853,7 @@ pub(super) fn derive_delegation(
     Ok(DerivedChainSubmission {
         bound,
         request: ChainSubmissionRequest::Delegation(request),
+        delegation_key_fingerprint: submission.proof_key_fingerprint,
     })
 }
 
@@ -978,6 +1002,7 @@ pub(super) fn derive_vote(
     Ok(DerivedChainSubmission {
         bound,
         request: ChainSubmissionRequest::Vote(request),
+        delegation_key_fingerprint: None,
     })
 }
 
@@ -1026,6 +1051,7 @@ pub(super) fn derive_vote_batch(
         requests.push(crate::vote::wire_submission_from_recovery(recovery)?);
     }
     let batch = VoteCommitmentBatchWire { votes: requests };
+    let mut delegation_key_fingerprint = None;
     let request = if identity.target().is_combined() {
         let delegation =
             crate::delegate_and_vote_batch::DelegationAuthorization::recover_submission(
@@ -1038,7 +1064,11 @@ pub(super) fn derive_vote_batch(
                     .batch_digest()
                     .expect("validated batch identity"),
             )?;
-        let composite = crate::wire::DelegateAndVoteBatchWire { delegation, batch };
+        delegation_key_fingerprint = delegation.proof_key_fingerprint;
+        let composite = crate::wire::DelegateAndVoteBatchWire {
+            delegation: DelegationSubmissionWire::try_from(&delegation)?,
+            batch,
+        };
         if Some(composite.authorization_digest()?) != identity.target().batch_digest() {
             return Err(VotingError::InvalidInput {
                 message: "combined authorization digest mismatch".to_string(),
@@ -1048,7 +1078,11 @@ pub(super) fn derive_vote_batch(
     } else {
         ChainSubmissionRequest::VoteBatch(batch)
     };
-    Ok(DerivedChainSubmission { bound, request })
+    Ok(DerivedChainSubmission {
+        bound,
+        request,
+        delegation_key_fingerprint,
+    })
 }
 
 /// Binds a complete persisted atomic vote batch without building requests.
@@ -1315,7 +1349,7 @@ mod tests {
                 &[0x10; 32],
             )
             .unwrap();
-            queries::store_proof(&conn, ROUND_ID, "wallet-1", 0, &[0x1b; 96]).unwrap();
+            queries::store_proof(&conn, ROUND_ID, "wallet-1", 0, &[0x1b; 96], None).unwrap();
         }
         let identity = ChainSubmissionIdentity::new(
             "wallet-1",

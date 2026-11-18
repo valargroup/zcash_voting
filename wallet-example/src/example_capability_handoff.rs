@@ -11,6 +11,10 @@
 //!    selected software or external-signer helper in
 //!    [`crate::example_delegation`]. Its chain adapter turns each resulting
 //!    submission into the exact signed transaction bytes it will broadcast.
+//!    When it posts a submission through the Vote API it also sends the
+//!    submission's `proof_key_fingerprint` in the
+//!    `zcash_voting::delegation_key_fingerprint::DELEGATION_KEY_FINGERPRINT_HEADER`
+//!    request header, so the chain can report an outdated circuit by name.
 //! 3. The funds controller calls [`controller_export_capability`] with those
 //!    bytes. It durably stores `canonical_json()` and `digest()`, then delivers
 //!    the exact JSON. Broadcasting the signed delegation transactions may

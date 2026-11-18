@@ -998,6 +998,15 @@ pub struct DelegationSubmission {
     pub sighash: [u8; 32],
     /// Versioned effecting data needed to reconstruct the Ironwood TX1 sighash.
     pub tx1_effects: Vec<u8>,
+    /// Which delegation circuit key made `proof`, or `None` for a proof saved
+    /// before the SDK recorded it.
+    ///
+    /// It is not part of the request body. The SDK sends it in the
+    /// [`DELEGATION_KEY_FINGERPRINT_HEADER`](crate::delegation_key_fingerprint::DELEGATION_KEY_FINGERPRINT_HEADER)
+    /// request header, and an app that broadcasts this delegation itself must
+    /// do the same so the vote chain can name an outdated circuit instead of
+    /// reporting an invalid proof.
+    pub proof_key_fingerprint: Option<crate::delegation_key_fingerprint::DelegationKeyFingerprint>,
 }
 
 /// Signed delegation bundle plus bundle-level metadata for wallet submission.
@@ -2314,6 +2323,7 @@ fn submission_with_sighash_constraint(
         spend_auth_sig: spend_auth_signature,
         sighash,
         tx1_effects: data.tx1_effects,
+        proof_key_fingerprint: data.proof_key_fingerprint,
     })
 }
 

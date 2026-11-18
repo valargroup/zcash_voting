@@ -6,6 +6,28 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ## Unreleased
 
+### Added
+
+- Delegation requests now tell the vote chain which circuit key made their
+  proof. The SDK records a fingerprint of the delegation verifying key when it
+  proves, saves it beside the proof, and sends it in the
+  `X-Vote-Delegation-Key-V1` request header on `delegate-vote` and
+  `delegate-and-cast-vote-batch`. A vote chain that supports the header answers
+  a wallet built against another circuit with a distinct rejection (module
+  code 50, "update the app") instead of an unexplained invalid proof. Request
+  bodies, signatures, and generation digests are unchanged, and older vote
+  chains ignore the header.
+  - `DelegationProofResult::key_fingerprint` and
+    `DelegationSubmission::proof_key_fingerprint` are new public fields; code
+    that builds either struct with a literal must set them.
+  - An app that broadcasts a delegation itself should send the header from
+    `DelegationSubmission::proof_key_fingerprint`, using
+    `delegation_key_fingerprint::DELEGATION_KEY_FINGERPRINT_HEADER`. A custom
+    `ChainTransport` must keep forwarding every header on the request.
+  - The voting database moves to schema version 25, which adds one nullable
+    column. Existing rounds and proofs are preserved; a proof saved by an
+    earlier version is sent without a fingerprint.
+
 ### Changed
 
 - Keep voting with the existing Ironwood V3 format independent of later

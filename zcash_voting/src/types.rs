@@ -1038,6 +1038,12 @@ pub struct DelegationProofResult {
     pub van_comm: Vec<u8>,
     /// Randomized verification key (32 bytes, compressed).
     pub rk: Vec<u8>,
+    /// Which delegation circuit key made `proof`.
+    ///
+    /// Saved beside the proof and sent with every request that carries it, so
+    /// the vote chain can tell a wallet built against another circuit from one
+    /// that proved the wrong statement.
+    pub key_fingerprint: crate::delegation_key_fingerprint::DelegationKeyFingerprint,
 }
 
 /// Result of pre-fetching PIR-backed IMT non-membership proofs for ZKP #1.
