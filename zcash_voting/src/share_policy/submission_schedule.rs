@@ -3,7 +3,7 @@ use crate::types::VotingError;
 /// Random bytes needed to sample an initial delayed share submission time.
 pub const SHARE_SUBMIT_AT_RANDOM_BYTES: usize = 8;
 /// Maximum randomized delay before an initial helper share submission.
-pub const SHARE_SUBMIT_AT_MAX_DELAY_SECONDS: u64 = 100 * 60 * 60;
+pub const SHARE_SUBMIT_AT_MAX_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Return the random bytes needed to sample a delayed share submission time.
 ///
@@ -35,7 +35,7 @@ pub fn share_submit_at_random_bytes_required(
 
 /// Plan the delayed helper submission time from a caller-provided random unit.
 ///
-/// The sampled delay is capped at 100 hours and still ends before the round's
+/// The sampled delay is capped at seven days and still ends before the round's
 /// last-moment window.
 ///
 /// This is useful for deterministic tests and FFI callers that already expose a
@@ -69,7 +69,7 @@ pub fn scheduled_share_submit_at_from_random_unit(
 
 /// Plan the delayed helper submission time using caller-provided entropy.
 ///
-/// The sampled delay is capped at 100 hours and still ends before the round's
+/// The sampled delay is capped at seven days and still ends before the round's
 /// last-moment window.
 ///
 /// `submit_at_random_bytes` must contain at least
@@ -109,7 +109,7 @@ pub fn scheduled_share_submit_at_from_entropy(
 /// Return the nonempty randomized delay window for an initial helper share.
 ///
 /// The window ends no later than the round's last-moment boundary and is capped
-/// at 100 hours from `now_seconds`.
+/// at seven days from `now_seconds`.
 pub(super) fn delayed_share_window_seconds(
     now_seconds: u64,
     vote_end_time_seconds: u64,

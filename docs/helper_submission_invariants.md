@@ -652,7 +652,7 @@ zero-length timing has no last-moment window.
 Outside that window, a delayed `submit_at` is sampled uniformly from:
 
 ```text
-[now, min(last_moment_boundary, now + 100 hours))
+[now, min(last_moment_boundary, now + 7 days))
 ```
 
 The upper bound is exclusive. A delayed sample requires eight CSPRNG bytes.
@@ -675,7 +675,7 @@ Enforcement: `last_moment_buffer_seconds`,
 Regression tests: `last_moment_buffer_uses_two_fifths_of_round_duration`,
 `last_moment_buffer_caps_at_six_hours`,
 `scheduled_submit_at_from_random_unit_samples_before_deadline`,
-`delayed_share_window_caps_long_round_at_100_hours`,
+`delayed_share_window_caps_long_round_at_seven_days`,
 `delayed_share_window_is_immediate_inside_last_moment_buffer`, and
 `scheduled_submit_at_entropy_requirement_matches_delay_window` in
 [`share_policy/tests/timing.rs`](../zcash_voting/src/share_policy/tests/timing.rs)

@@ -9,7 +9,7 @@ fn scheduled_submit_at_from_random_unit_samples_before_deadline() {
 }
 
 #[test]
-fn delayed_share_window_caps_long_round_at_100_hours() {
+fn delayed_share_window_caps_long_round_at_seven_days() {
     let now = 1_000_000;
     let vote_end = now + 30 * 24 * 60 * 60;
 
@@ -26,7 +26,7 @@ fn delayed_share_window_caps_long_round_at_100_hours() {
             0.5,
         )
         .unwrap(),
-        now + 50 * 60 * 60
+        now + 84 * 60 * 60
     );
 }
 

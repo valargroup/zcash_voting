@@ -67,7 +67,7 @@ fn retry_uses_capped_submit_at_without_adding_another_window() {
     let share = share(submit_at, now);
     let policy = ShareTimingPolicy::default();
 
-    assert_eq!(share_recovery_base_time(&share), now + 50 * 60 * 60);
+    assert_eq!(share_recovery_base_time(&share), now + 84 * 60 * 60);
     assert!(!should_resubmit_share(
         &share,
         submit_at + SHARE_MAX_OVERDUE_THRESHOLD_SECONDS - 1,

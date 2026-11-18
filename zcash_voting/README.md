@@ -326,7 +326,7 @@ that should stay consistent across SDKs:
 
 - last-moment helper-share window, deadline, and mode decisions from round
   timing
-- delayed helper-share `submit_at` scheduling, capped at 100 hours while still
+- delayed helper-share `submit_at` scheduling, capped at seven days while still
   ending before the round's last-moment window
 - progressive helper timing: inspect ready responses after two seconds, keep
   waiting for the half-fleet readiness target (capped at 10 helpers), and stop
