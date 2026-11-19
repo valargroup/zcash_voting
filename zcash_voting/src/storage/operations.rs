@@ -185,20 +185,10 @@ pub(crate) fn validate_hotkey_address_for_bundle(
         stored_network,
         params.snapshot_height,
     )?;
-    let (g_d_x, pk_d_x) =
-        crate::action::derive_hotkey_x_coords_from_raw_address(hotkey_raw_address)?;
-    let vote_round_id =
-        hex::decode(&params.vote_round_id).map_err(|error| VotingError::Internal {
-            message: format!(
-                "invalid stored vote_round_id hex '{}': {error}",
-                params.vote_round_id
-            ),
-        })?;
-    let expected_van = crate::governance::construct_van(
-        &g_d_x,
-        &pk_d_x,
+    let expected_van = expected_target_van(
+        params,
+        hotkey_raw_address,
         binding.total_note_value,
-        &vote_round_id,
         &binding.van_comm_rand,
     )?;
     if expected_van != binding.gov_comm || expected_cmx != stored_cmx {
@@ -214,6 +204,32 @@ pub(crate) fn validate_hotkey_address_for_bundle(
     }
 
     Ok(())
+}
+
+/// Rebuilds the target-bound VAN commitment that a delegation of
+/// `total_note_value` makes for `hotkey_raw_address` in this round.
+fn expected_target_van(
+    params: &VotingRoundParams,
+    hotkey_raw_address: &[u8; 43],
+    total_note_value: u64,
+    van_comm_rand: &[u8],
+) -> Result<Vec<u8>, VotingError> {
+    let (g_d_x, pk_d_x) =
+        crate::action::derive_hotkey_x_coords_from_raw_address(hotkey_raw_address)?;
+    let vote_round_id =
+        hex::decode(&params.vote_round_id).map_err(|error| VotingError::Internal {
+            message: format!(
+                "invalid stored vote_round_id hex '{}': {error}",
+                params.vote_round_id
+            ),
+        })?;
+    crate::governance::construct_van(
+        &g_d_x,
+        &pk_d_x,
+        total_note_value,
+        &vote_round_id,
+        van_comm_rand,
+    )
 }
 
 fn validate_network_matches_round(
@@ -1814,6 +1830,9 @@ impl VotingDb {
     /// Validates that a voting hotkey target reproduces a persisted bundle's
     /// governance output and target-bound VAN commitment, so a vote is not
     /// prepared for a hotkey that cannot spend the bundle's delegation.
+    ///
+    /// A bundle imported from a delegation capability holds only its VAN
+    /// opening, so only its VAN is checked. That is the note a vote spends.
     pub(crate) fn validate_bundle_hotkey_target(
         &self,
         round_id: &str,
@@ -1830,6 +1849,26 @@ impl VotingDb {
         );
         let (params, stored_network) =
             queries::load_round_params_with_network(&conn, round_id, &wallet_id)?;
+        if let Some(imported) =
+            queries::load_imported_bundle_van(&conn, round_id, &wallet_id, bundle_index)?
+        {
+            let expected_van = expected_target_van(
+                &params,
+                target.raw_orchard_address(),
+                imported.total_note_value,
+                &imported.van_comm_rand,
+            )?;
+            if expected_van != imported.gov_comm {
+                return Err(VotingError::InvalidInput {
+                    message: format!(
+                        "round {round_id} bundle {bundle_index}: the imported delegation's VAN \
+                         does not reproduce from the bound voting hotkey. Its vote needs the \
+                         hotkey the capability was made for."
+                    ),
+                });
+            }
+            return Ok(());
+        }
         validate_hotkey_address_for_bundle(
             &conn,
             &params,

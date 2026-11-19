@@ -1214,6 +1214,41 @@ mod tests {
             .is_empty());
     }
 
+    #[test]
+    fn vote_hotkey_check_accepts_imported_bundles_and_rejects_other_hotkeys() {
+        let (_, params, voter_hotkey, capability) = exported_fixture();
+        let customer = test_db(":memory:");
+        import_capability(
+            &customer,
+            &capability,
+            import_context(&voter_hotkey, &params),
+        )
+        .unwrap();
+
+        for bundle_index in 0..2 {
+            customer
+                .validate_bundle_hotkey_target(
+                    &params.vote_round_id,
+                    bundle_index,
+                    &voter_hotkey.delegation_target(),
+                )
+                .expect("an imported bundle's VAN reproduces from its voting hotkey");
+        }
+        let error = customer
+            .validate_bundle_hotkey_target(
+                &params.vote_round_id,
+                0,
+                &hotkey(0x22).delegation_target(),
+            )
+            .expect_err("another hotkey cannot spend the imported VAN");
+        assert!(
+            error
+                .to_string()
+                .contains("does not reproduce from the bound voting hotkey"),
+            "{error}"
+        );
+    }
+
     fn assert_imported_capability_rejects_bundle_trim(keep_count: u32) {
         let (_, params, hotkey, capability) = exported_fixture();
         let customer = test_db(":memory:");
