@@ -1915,6 +1915,48 @@ pub(crate) fn load_delegation_target_binding_inputs(
     })
 }
 
+/// The VAN opening a delegation capability import stores for a bundle. The
+/// import keeps none of the governance output's construction inputs.
+pub(crate) struct ImportedBundleVan {
+    pub(crate) van_comm_rand: Vec<u8>,
+    pub(crate) gov_comm: Vec<u8>,
+    pub(crate) total_note_value: u64,
+}
+
+/// Loads a bundle's [`ImportedBundleVan`], or `None` when the bundle was
+/// prepared locally. Imported bundles omit local note positions, which local
+/// bundle insertion always stores.
+pub(crate) fn load_imported_bundle_van(
+    conn: &Connection,
+    round_id: &str,
+    wallet_id: &str,
+    bundle_index: u32,
+) -> Result<Option<ImportedBundleVan>, VotingError> {
+    conn.query_row(
+        "SELECT van_comm_rand, gov_comm, total_note_value FROM bundles \
+         WHERE round_id = :round_id AND wallet_id = :wallet_id \
+           AND bundle_index = :bundle_index AND note_positions_blob IS NULL",
+        named_params! {
+            ":round_id": round_id,
+            ":wallet_id": wallet_id,
+            ":bundle_index": bundle_index as i64,
+        },
+        |row| {
+            Ok(ImportedBundleVan {
+                van_comm_rand: row.get(0)?,
+                gov_comm: row.get(1)?,
+                total_note_value: row.get::<_, i64>(2)? as u64,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| VotingError::Internal {
+        message: format!(
+            "failed to load imported VAN for round={round_id}, bundle={bundle_index}: {error}"
+        ),
+    })
+}
+
 /// Load dummy nullifiers for padded note slots. Returns 0-3 entries of 32 bytes each.
 /// Deserializes the flat blob back into individual 32-byte nullifiers.
 pub fn load_dummy_nullifiers(
