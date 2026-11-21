@@ -2413,16 +2413,15 @@ fn redact_orchard_like_bundle_for_signer(
     });
 }
 
+const DISPLAY_MEMO_MAX_BYTES: usize = 512;
+const DISPLAY_MEMO_PREFIX: &str = "I am authorizing this hotkey managed by my wallet to vote on ";
+const DISPLAY_MEMO_ROUND_SUFFIX: &str = ".\nAmount:";
+
 /// Returns the human-readable Keystone memo for a delegation PCZT.
 ///
 /// `total_weight_zatoshi` is displayed with exact 8-decimal ZEC precision. The
 /// returned string is capped at 512 bytes to fit signer display constraints.
 pub fn display_memo(round_name: &str, total_weight_zatoshi: u64) -> String {
-    const DISPLAY_MEMO_MAX_BYTES: usize = 512;
-    const DISPLAY_MEMO_PREFIX: &str =
-        "I am authorizing this hotkey managed by my wallet to vote on ";
-    const DISPLAY_MEMO_ROUND_SUFFIX: &str = ".\nAmount:";
-
     let zec_whole = total_weight_zatoshi / 100_000_000;
     let zec_frac = total_weight_zatoshi % 100_000_000;
     let amount_suffix = format!(" {}.{:08} ZEC.", zec_whole, zec_frac);

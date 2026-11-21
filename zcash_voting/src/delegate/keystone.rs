@@ -24,41 +24,110 @@ pub(super) fn request(
         }
     }
     let request = load_request(prepared, voting_db)?;
-    if prepared.delegation_keys.ledger_output_review
-        && !ledger_can_review(
-            &request.pczt_bytes,
-            request.action_index as usize,
-            &prepared.delegation_keys,
-            &request.display_memo,
-        )?
-    {
-        // Only regenerate the known default signing profile. A malformed or
-        // unfamiliar saved request needs inspection before replacing anything.
-        let weight = crate::round::raw_bundle_weight(&prepared.bundle_note_infos)?;
-        if prepared.delegation_keys.van_blinding_key.is_none()
-            || request.display_memo != display_memo(&prepared.delegation_keys.round_name, weight)
-        {
-            return Err(VotingError::InvalidInput {
-                message: "cannot identify the saved delegation signing profile".into(),
-            });
-        }
-        verify_saved_account(&request, &prepared.delegation_keys)?;
-        let repaired = voting_db.build_or_repair_governance_pczt(
-            &prepared.round_id,
-            prepared.bundle_index,
-            &prepared.bundle_note_infos,
-            &prepared.delegation_keys,
-            Some(&request.pczt_sighash),
-        )?;
-        let current = load_request(prepared, voting_db)?;
-        if current.pczt_sighash != repaired.pczt_sighash {
-            return Err(VotingError::Busy {
-                message: "delegation changed during Ledger recovery".into(),
-            });
-        }
-        return Ok(current);
+    if !prepared.delegation_keys.ledger_output_review {
+        return Ok(request);
     }
-    Ok(request)
+    ledger_request(prepared, voting_db, request, None)
+}
+
+/// The specific saved generation checked before building a candidate.
+#[derive(Clone, Copy)]
+pub(crate) struct LedgerRepair<'a> {
+    pub(crate) previous_hash: &'a [u8],
+    pub(crate) notes: &'a [NoteInfo],
+    pub(crate) after_device_rejection: bool,
+}
+
+pub(crate) fn after_ledger_rejection(
+    prepared: &PreparedDelegationBundle,
+    voting_db: &VotingDb,
+    rejected_hash: &[u8; 32],
+) -> Result<KeystoneSigningRequest, VotingError> {
+    if !prepared.delegation_keys.ledger_output_review {
+        return Err(VotingError::InvalidInput {
+            message: "Ledger output review is required".into(),
+        });
+    }
+    let db = voting_db.scoped(&voting_db.wallet_id())?;
+    let request = load_request(prepared, &db)?;
+    if request.pczt_sighash.as_slice() != rejected_hash {
+        return Err(VotingError::Busy {
+            message: "rejected delegation is no longer current".into(),
+        });
+    }
+    ledger_request(prepared, &db, request, Some(rejected_hash))
+}
+
+// Match the fixed authorization and the entire amount suffix. A title may
+// itself contain a newline, punctuation, or the word "Amount:".
+pub(super) fn saved_title(memo: &str, weight: u64) -> Option<(&str, bool)> {
+    let empty_title = display_memo("", weight);
+    let amount = empty_title
+        .strip_prefix(DISPLAY_MEMO_PREFIX)?
+        .strip_prefix(".\n")?;
+    let title_and_separator = memo
+        .strip_prefix(DISPLAY_MEMO_PREFIX)?
+        .strip_suffix(amount)?;
+    for (separator, legacy) in [(".\r\n", false), (".\n", true), (". ", false)] {
+        if let Some(title) = title_and_separator.strip_suffix(separator) {
+            return Some((title, legacy));
+        }
+    }
+    None
+}
+
+fn ledger_request(
+    prepared: &PreparedDelegationBundle,
+    voting_db: &VotingDb,
+    request: KeystoneSigningRequest,
+    rejected_hash: Option<&[u8; 32]>,
+) -> Result<KeystoneSigningRequest, VotingError> {
+    let keys = &prepared.delegation_keys;
+    let reviewable = ledger_can_review(
+        &request.pczt_bytes,
+        request.action_index as usize,
+        keys,
+        &request.display_memo,
+    )?;
+    let weight = crate::round::raw_bundle_weight(&prepared.bundle_note_infos)?;
+    let (title, default_profile) =
+        saved_title(&request.display_memo, weight).ok_or_else(|| VotingError::InvalidInput {
+            message: "cannot verify saved delegation authorization and amount".into(),
+        })?;
+    if reviewable && rejected_hash.is_none() {
+        return Ok(request);
+    }
+    verify_saved_account(&request, keys)?;
+    if rejected_hash.is_none() && !default_profile {
+        // The saved authorization is understood, but only a device rejection
+        // warrants replacing this alternate formatting.
+        return Ok(request);
+    }
+    if keys.van_blinding_key.is_none() {
+        return Err(VotingError::InvalidInput {
+            message: "Ledger recovery requires the local voting hotkey".into(),
+        });
+    }
+    let mut keys = keys.clone();
+    keys.round_name = title.to_owned();
+    let repaired = voting_db.build_or_repair_governance_pczt(
+        &prepared.round_id,
+        prepared.bundle_index,
+        &prepared.bundle_note_infos,
+        &keys,
+        Some(LedgerRepair {
+            previous_hash: &request.pczt_sighash,
+            notes: &prepared.bundle_note_infos,
+            after_device_rejection: rejected_hash.is_some(),
+        }),
+    )?;
+    let current = load_request(prepared, voting_db)?;
+    if current.pczt_sighash != repaired.pczt_sighash {
+        return Err(VotingError::Busy {
+            message: "delegation changed during Ledger recovery".into(),
+        });
+    }
+    Ok(current)
 }
 
 fn load_request(
@@ -117,13 +186,30 @@ fn verify_saved_account(
     let pczt = Pczt::parse(&request.pczt_bytes).map_err(|e| VotingError::Internal {
         message: format!("invalid saved delegation: {e:?}"),
     })?;
+    let action = pczt
+        .ironwood()
+        .sole_action()
+        .ok_or_else(|| VotingError::InvalidInput {
+            message: "expected one saved delegation action".into(),
+        })?;
+    if action.output().recipient().as_ref() != Some(&keys.hotkey_raw_address)
+        || *action.output().value() != Some(0)
+    {
+        return Err(VotingError::InvalidInput {
+            message: "saved delegation output differs from the voting target".into(),
+        });
+    }
     Verifier::new(pczt)
         .with_ironwood(|bundle| {
-            let spend = bundle
+            let action = bundle
                 .actions()
                 .get(request.action_index as usize)
-                .ok_or(OrchardError::Custom(()))?
-                .spend();
+                .ok_or(OrchardError::Custom(()))?;
+            let spend = action.spend();
+            action
+                .output()
+                .verify_note_commitment(spend)
+                .map_err(|_| OrchardError::Custom(()))?;
             let account = spend.zip32_derivation().as_ref().and_then(|path| {
                 path.extract_account_index(
                     &SeedFingerprint::from_bytes(keys.seed_fingerprint),

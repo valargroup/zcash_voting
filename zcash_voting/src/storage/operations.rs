@@ -1247,7 +1247,7 @@ impl VotingDb {
         bundle_index: u32,
         notes: &[NoteInfo],
         keys: &DelegationKeys,
-        repair_sighash: Option<&[u8]>,
+        repair: Option<crate::delegate::keystone::LedgerRepair<'_>>,
     ) -> Result<GovernancePczt, VotingError> {
         let wallet_id = self.wallet_id();
         // Every setup writer takes its bundle's lifecycle gate before
@@ -1272,7 +1272,7 @@ impl VotingDb {
         // this call carries. Nothing is discarded yet: the replacement takes
         // real time to build, and a discard committed ahead of it would leave
         // the bundle with neither its old setup nor a new one.
-        let rebuild = repair_sighash.is_some()
+        let rebuild = repair.is_some()
             || self.setup_target_needs_rebuild(
                 round_id,
                 bundle_index,
@@ -1282,7 +1282,7 @@ impl VotingDb {
             )?;
         // Ledger recovery keeps the same hotkey and note set, so reuse the
         // padding that PIR already covers. A different target needs fresh padding.
-        let padded_note_secrets = if repair_sighash.is_some() {
+        let padded_note_secrets = if repair.is_some() {
             queries::load_padded_note_secrets(&self.conn(), round_id, &wallet_id, bundle_index)?
         } else if rebuild {
             crate::action::sample_padded_note_secrets(notes.len())?
@@ -1311,7 +1311,7 @@ impl VotingDb {
             .ok_or_else(|| VotingError::InvalidInput {
                 message: "total note weight overflows u64".to_string(),
             })?;
-        if repair_sighash.is_some() {
+        if repair.is_some() {
             let memo = crate::delegate::ledger_display_memo(&keys.round_name, total_note_value);
             if !crate::delegate::keystone::ledger_can_review(
                 &result.pczt_bytes,
@@ -1334,7 +1334,7 @@ impl VotingDb {
                 round_id,
                 &wallet_id,
                 bundle_index,
-                repair_sighash,
+                repair,
                 &result.van_comm_rand,
                 &result.dummy_nullifiers,
                 &result.rho_signed,

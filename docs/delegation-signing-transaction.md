@@ -359,10 +359,20 @@ or database format.
 When Ledger review is enabled, the signing boundary first checks whether the
 account's external OVK recovers the zero-value hotkey output and its printable
 memo. A compatible request survives retries and restarts byte for byte. For a
-recognized default-profile request, the SDK can rebuild the same local bundle.
+recognized default-profile request, the SDK can rebuild the same local bundle using the title from the saved authorization and the verified note amount. A changed display title after restart is safe.
 A single database transaction checks the old signing hash, local note identities,
 stored signatures and broadcast evidence before replacing the setup and clearing
-its derived proof. The next proof must bind to the replacement.
+its derived proof. Cached note inclusion witnesses still apply to the same round
+snapshot and notes. The next proof must bind to the replacement.
+
+If the verified Ledger rejects Ironwood transaction data (instruction 0x58,
+status 0x6a80) before the wallet requests any signature, the wallet may call
+`recover_rejected_ledger_request` with that bundle and the exact rejected
+signing hash. This also accepts the SDK's printable memo or a CRLF separator.
+The saved authorization and full amount suffix must match. A successful
+device-triggered replacement records its one-use budget by wallet, round, and
+bundle in the same transaction. Restarting the wallet preserves that budget.
+The user must review and sign the replacement.
 
 ### Memo
 

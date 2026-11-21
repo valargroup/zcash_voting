@@ -1186,7 +1186,7 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
     round_id: &str,
     wallet_id: &str,
     bundle_index: u32,
-    repair_sighash: Option<&[u8]>,
+    repair: Option<crate::delegate::keystone::LedgerRepair<'_>>,
     van_comm_rand: &[u8],
     dummy_nullifiers: &[Vec<u8>],
     rho_signed: &[u8],
@@ -1227,8 +1227,9 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
         ));
     }
 
-    if let Some(expected) = repair_sighash {
-        if load_pczt_sighash(&tx, round_id, wallet_id, bundle_index)? != expected {
+    if let Some(repair) = repair {
+        require_bundle_notes(&tx, round_id, wallet_id, bundle_index, repair.notes)?;
+        if load_pczt_sighash(&tx, round_id, wallet_id, bundle_index)? != repair.previous_hash {
             return Err(VotingError::Busy {
                 message: "saved delegation changed during Ledger recovery".into(),
             });
@@ -1246,8 +1247,31 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
                     .into(),
             });
         }
+        if repair.after_device_rejection {
+            // This additive table is shared by the maintenance and development
+            // releases, whose numbered schema migrations differ.
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS ledger_delegation_retries (
+                round_id TEXT NOT NULL, wallet_id TEXT NOT NULL, bundle_index INTEGER NOT NULL,
+                PRIMARY KEY (round_id, wallet_id, bundle_index),
+                FOREIGN KEY (round_id, wallet_id) REFERENCES rounds(round_id, wallet_id) ON DELETE CASCADE
+            )").map_err(|e| VotingError::from_sqlite("initialize Ledger retry history", &e))?;
+            let inserted = tx.execute(
+                "INSERT INTO ledger_delegation_retries (round_id, wallet_id, bundle_index) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(round_id, wallet_id, bundle_index) DO NOTHING",
+                rusqlite::params![round_id, wallet_id, bundle_index],
+            ).map_err(|e| VotingError::from_sqlite("record Ledger retry", &e))?;
+            if inserted == 0 {
+                return Err(VotingError::InvalidInput { message: "Ledger already rejected a request for this bundle after one recovery attempt".into() });
+            }
+        }
     }
-    discard_unbroadcast_delegation_setup_within(&tx, round_id, wallet_id, Some(bundle_index))?;
+    discard_unbroadcast_delegation_setup_within(
+        &tx,
+        round_id,
+        wallet_id,
+        Some(bundle_index),
+        repair.is_some(),
+    )?;
     store_delegation_setup_within(
         &tx,
         round_id,
@@ -4489,7 +4513,7 @@ pub(crate) fn discard_unbroadcast_delegation_setup(
         )
     })?;
     let cleared =
-        discard_unbroadcast_delegation_setup_within(&tx, round_id, wallet_id, bundle_index)?;
+        discard_unbroadcast_delegation_setup_within(&tx, round_id, wallet_id, bundle_index, false)?;
     tx.commit().map_err(|error| {
         VotingError::from_sqlite(
             "failed to commit delegation setup discard transaction",
@@ -4509,6 +4533,7 @@ fn discard_unbroadcast_delegation_setup_within(
     round_id: &str,
     wallet_id: &str,
     bundle_index: Option<u32>,
+    preserve_note_witnesses: bool,
 ) -> Result<u32, VotingError> {
     // The outer filter runs against four different tables, so it stays
     // unqualified; the subquery below is the one that reads `bundles`.
@@ -4567,6 +4592,14 @@ fn discard_unbroadcast_delegation_setup_within(
         }
     };
 
+    if !preserve_note_witnesses {
+        let sql = format!("DELETE FROM witnesses WHERE {unbroadcast_guard}");
+        let mut statement = tx
+            .prepare(&sql)
+            .map_err(|e| VotingError::from_sqlite("prepare witness cleanup", &e))?;
+        params(&mut statement)
+            .map_err(|e| VotingError::from_sqlite("clear delegation witnesses", &e))?;
+    }
     let mut cleared = 0usize;
     for (label, sql) in [
         (
@@ -4601,10 +4634,6 @@ fn discard_unbroadcast_delegation_setup_within(
         (
             "discard delegation keystone signatures",
             format!("DELETE FROM keystone_signatures WHERE {unbroadcast_guard}"),
-        ),
-        (
-            "discard delegation witnesses",
-            format!("DELETE FROM witnesses WHERE {unbroadcast_guard}"),
         ),
         // The streak counts rejections of one delegation generation. Discarding
         // the setup ends that generation, so the count no longer describes
