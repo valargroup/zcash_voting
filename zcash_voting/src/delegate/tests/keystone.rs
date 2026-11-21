@@ -491,6 +491,34 @@ fn device_rejection_can_replace_only_the_current_request_once_across_restart() {
 }
 
 #[test]
+fn replanned_bundle_at_the_same_index_gets_its_own_ledger_retry() {
+    let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+    prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    let retry = |bundle: &PreparedDelegationBundle| {
+        let request = bundle.keystone_request(&db, &NoopProgressReporter).unwrap();
+        keystone::after_ledger_rejection(
+            bundle,
+            &db,
+            request.pczt_sighash.as_slice().try_into().unwrap(),
+        )
+    };
+    retry(&prepared).unwrap();
+
+    assert_eq!(db.delete_skipped_bundles(&prepared.round_id, 0).unwrap(), 1);
+    assert_eq!(prepared.bundle_note_infos.len(), 2);
+    prepared.bundle_note_infos.truncate(1);
+    prepared.layout = db
+        .ensure_bundles(&prepared.round_id, &prepared.bundle_note_infos)
+        .unwrap();
+
+    retry(&prepared).unwrap();
+    assert!(matches!(
+        retry(&prepared),
+        Err(VotingError::InvalidInput { .. })
+    ));
+}
+
+#[test]
 fn saved_authorization_title_is_bounded_by_the_verified_amount_suffix() {
     let weight = 987_654_321;
     for title in [

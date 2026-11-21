@@ -372,6 +372,8 @@ signing hash. This also accepts the SDK's printable memo or a CRLF separator.
 The saved authorization and full amount suffix must match. A successful
 device-triggered replacement records its one-use budget by wallet, round, and
 bundle in the same transaction. Restarting the wallet preserves that budget.
+Deleting a skipped bundle also deletes its retry record, so a newly planned
+bundle at that index gets its own retry.
 The user must review and sign the replacement.
 
 ### Memo
