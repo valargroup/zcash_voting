@@ -17,6 +17,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   seconds. Connection setup is still bounded at 5 seconds, and a retry still
   runs after an early failure such as a severed upload.
 
+### Fixed
+
+- Each saved Ledger delegation gets one repair after a verified device rejection.
+  Replanning a deleted bundle gives the new bundle its own retry, including in
+  databases created by earlier maintenance builds. Late device replies leave
+  deleted bundles and rounds untouched.
+
 ## v5.4.0
 
 Version 5.4.0 moves the default backend from Zakura Common 4.0.0 to Common

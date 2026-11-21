@@ -2527,6 +2527,7 @@ fn array64_slice(label: &str, value: &[u8]) -> Result<[u8; 64], VotingError> {
 #[cfg(test)]
 mod tests {
     mod observability;
+    pub(super) mod pipeline_fixture;
     mod pipeline_observability;
     mod setup_observability;
     use super::*;

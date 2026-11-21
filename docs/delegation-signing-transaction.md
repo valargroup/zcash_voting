@@ -339,8 +339,7 @@ the hotkey output instead of omitting it as a dummy output.
 Anyone holding that OVK can recover the hotkey address and delegation memo
 from the submitted action. This does not grant authority to sign a delegation,
 spend funds, or vote as the hotkey. Existing callers keep `OVK=None` unless
-they opt in. The option does not change the circuit, vote-chain verification,
-or database format.
+they opt in. The circuit and vote-chain verification rules stay the same.
 
 When Ledger review is enabled, the signing boundary first checks whether the
 account's external OVK recovers the zero-value hotkey output and its printable
@@ -358,7 +357,10 @@ signing hash. This also accepts the SDK's printable memo or a CRLF separator.
 The saved authorization and full amount suffix must match. A successful
 device-triggered replacement records its one-use budget by wallet, round, and
 bundle in the same transaction. Restarting the wallet preserves that budget.
-The user must review and sign the replacement.
+Deleting a skipped bundle also deletes its retry record, so a newly planned
+bundle at that index gets its own retry.
+A late rejection after a bundle is skipped or its round is cleared leaves the
+saved plan untouched. The user must review and sign the replacement.
 
 ### Memo
 

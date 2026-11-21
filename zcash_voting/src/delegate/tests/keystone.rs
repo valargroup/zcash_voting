@@ -481,6 +481,66 @@ fn device_rejection_can_replace_only_the_current_request_once_across_restart() {
 }
 
 #[test]
+fn replanned_bundle_at_the_same_index_gets_its_own_ledger_retry() {
+    let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+    prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    let retry = |bundle: &PreparedDelegationBundle| {
+        let request = bundle.keystone_request(&db, &NoopProgressReporter).unwrap();
+        keystone::after_ledger_rejection(
+            bundle,
+            &db,
+            request.pczt_sighash.as_slice().try_into().unwrap(),
+        )
+    };
+    retry(&prepared).unwrap();
+
+    assert_eq!(db.delete_skipped_bundles(&prepared.round_id, 0).unwrap(), 1);
+    assert_eq!(prepared.bundle_note_infos.len(), 2);
+    prepared.bundle_note_infos.truncate(1);
+    prepared.layout = db
+        .ensure_bundles(&prepared.round_id, &prepared.bundle_note_infos)
+        .unwrap();
+
+    retry(&prepared).unwrap();
+    assert!(matches!(
+        retry(&prepared),
+        Err(VotingError::InvalidInput { .. })
+    ));
+}
+
+#[test]
+fn late_ledger_rejection_leaves_a_pruned_plan_and_a_cleared_round_absent() {
+    let (pipeline, _wallet) = tests::pipeline_fixture::pipeline_with_wallet();
+    let pipeline = pipeline.with_ledger_output_review();
+    let db = pipeline.voting_db();
+    let round = pipeline.round_id();
+    let original = pipeline.keystone_request(0).unwrap();
+    db.conn().execute("DELETE FROM witnesses", []).unwrap();
+    assert!(matches!(
+        pipeline.recover_rejected_ledger_request(0, &[0; 32]),
+        Err(VotingError::InvalidInput { .. })
+    ));
+    assert!(!db.has_witnesses(round, 0).unwrap());
+    let repaired = pipeline
+        .recover_rejected_ledger_request(0, original.pczt_sighash.as_slice().try_into().unwrap())
+        .unwrap();
+    assert!(!db.has_witnesses(round, 0).unwrap());
+    let rejected = repaired.pczt_sighash.as_slice().try_into().unwrap();
+
+    db.delete_skipped_bundles(round, 0).unwrap();
+    assert!(pipeline
+        .recover_rejected_ledger_request(0, rejected)
+        .is_err());
+    assert_eq!(db.get_bundle_count(round).unwrap(), 0);
+
+    db.clear_round(round).unwrap();
+    assert!(pipeline
+        .recover_rejected_ledger_request(0, rejected)
+        .is_err());
+    assert!(!db.has_round(round).unwrap());
+}
+
+#[test]
 fn saved_authorization_title_is_bounded_by_the_verified_amount_suffix() {
     let weight = 987_654_321;
     for title in [
