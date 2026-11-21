@@ -353,12 +353,28 @@ the hotkey output instead of omitting it as a dummy output.
 Anyone holding that OVK can recover the hotkey address and delegation memo
 from the submitted action. This does not grant authority to sign a delegation,
 spend funds, or vote as the hotkey. Existing callers keep `OVK=None` unless
-they opt in. The option does not change the circuit, vote-chain verification,
-or database format.
+they opt in. The circuit and vote-chain verification rules stay the same.
 
-Saved delegation requests are reused byte for byte, including after restart.
-Enabling this option after setup does not rebuild an existing request or make
-an earlier request compatible with Ledger.
+When Ledger review is enabled, the signing boundary first checks whether the
+account's external OVK recovers the zero-value hotkey output and its printable
+memo. A compatible request survives retries and restarts byte for byte. For a
+recognized default-profile request, the SDK can rebuild the same local bundle using the title from the saved authorization and the verified note amount. A changed display title after restart is safe.
+A single database transaction checks the old signing hash, local note identities,
+stored signatures and broadcast evidence before replacing the setup and clearing
+its derived proof. Cached note inclusion witnesses still apply to the same round
+snapshot and notes. The next proof must bind to the replacement.
+
+If the verified Ledger rejects Ironwood transaction data (instruction 0x58,
+status 0x6a80) before the wallet requests any signature, the wallet may call
+`recover_rejected_ledger_request` with that bundle and the exact rejected
+signing hash. This also accepts the SDK's printable memo or a CRLF separator.
+The saved authorization and full amount suffix must match. A successful
+device-triggered replacement records its one-use budget by wallet, round, and
+bundle in the same transaction. Restarting the wallet preserves that budget.
+Deleting a skipped bundle also deletes its retry record, so a newly planned
+bundle at that index gets its own retry.
+A late rejection after a bundle is skipped or its round is cleared leaves the
+saved plan untouched. The user must review and sign the replacement.
 
 ### Memo
 
@@ -596,8 +612,7 @@ The complete caller-oriented flows are implemented in
 Setup stores the exact finalized PCZT atomically with its signing fields.
 Keystone request creation reloads those bytes, including after background ZKP1
 or restart, and validates the selected notes, hotkey target, sighash, and unique
-matching randomized key. It never substitutes newly randomized bytes for an
-existing setup. Schema 22 adds this nullable field; legacy rows without the
+matching randomized key. The default Keystone path always returns the existing setup. Schema 22 adds this nullable field; legacy rows without the
 original transaction fail with `DelegationPcztUnavailable`.
 
 The display memo is recovered from the stored governance output. If the host
@@ -613,7 +628,7 @@ that snapshot; later signing and submission still check the current setup.
 Proof generation captures the setup's transaction hash before starting. The
 proof persistence transaction requires that same hash to still be present, so
 a reset or replacement cannot leave a late proof attached to missing or different
-setup. If persistence wins before cleanup, cleanup preserves the proved bundle.
+setup. Routine cleanup preserves a proved bundle. Ledger recovery invalidates any proof for the replaced signing hash.
 Hosts should use the cache-only `reset_vote_tree` for normal navigation so
 background proofs and later signing can reuse the durable transaction.
 

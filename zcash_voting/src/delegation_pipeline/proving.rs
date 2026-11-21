@@ -431,6 +431,69 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
         )
     }
 
+    /// Rebuild an unsigned request once after the account-verified Ledger returned
+    /// 0x6a80 on the Ironwood transaction-data instruction (0x58), before signing.
+    /// The host must supply the hash from that attempt. A changed request,
+    /// stored signature, submission, or previous device-triggered repair refuses the write.
+    /// A late response leaves a pruned bundle or cleared round absent.
+    pub fn recover_rejected_ledger_request(
+        &self,
+        bundle_index: u32,
+        rejected_hash: &[u8; 32],
+    ) -> Result<KeystoneSigningRequest, VotingError> {
+        if !self.ledger_output_review {
+            return Err(VotingError::InvalidInput {
+                message: "Ledger output review is required".into(),
+            });
+        }
+
+        // A late device response must never initialize a cleared round, replan
+        // skipped bundles, or warm witnesses. Only the replacement may write.
+        let db = self.scoped_voting_db()?;
+        db.validate_stored_round(self.network(), &self.lwd.round_params)?;
+        let round_id = self.round_id();
+        crate::round::validate_bundle_index(db.get_bundle_count(round_id)?, bundle_index, "saved")?;
+
+        let wallet = self.wallet.open_for_read()?;
+        let inputs =
+            delegate::gather_delegation_wallet_inputs(delegate::GatherDelegationWalletParams {
+                wallet_db: &wallet,
+                account_uuid: &self.account_uuid,
+                voting_hotkey: self.hotkey()?,
+                snapshot_height: self.snapshot_height(),
+                scanned_height: crate::selection::wallet_fully_scanned_height(&wallet)?,
+                anchor_tree_state_bytes: self.lwd.anchor_tree_state_bytes.clone(),
+                resolved_round_name: self.lwd.resolved_round_name.clone(),
+            })?;
+        let policy = db.effective_bundle_policy(round_id, self.bundle_policy)?;
+        let plan =
+            db.effective_round_bundle_plan_for_notes(round_id, &inputs.round_note_infos, policy)?;
+        let layout = plan.persisted_layout();
+        let notes = plan
+            .plan
+            .bundles
+            .into_iter()
+            .nth(bundle_index as usize)
+            .ok_or_else(|| VotingError::InvalidInput {
+                message: format!(
+                    "saved delegation bundle {bundle_index} is missing from the wallet plan"
+                ),
+            })?;
+        let prepared = PreparedDelegationBundle {
+            round_id: round_id.to_owned(),
+            round_params: self.lwd.round_params.clone(),
+            bundle_index,
+            layout,
+            bundle_note_infos: notes,
+            delegation_keys: inputs.delegation_keys.with_ledger_output_review(),
+            branch_id_provider: self.lwd.branch_id_provider.clone(),
+            anchor_tree_state_bytes: inputs.anchor_tree_state_bytes,
+            network: self.network(),
+            round_name: self.lwd.resolved_round_name.clone(),
+        };
+        crate::delegate::keystone::after_ledger_rejection(&prepared, db, rejected_hash)
+    }
+
     /// Proves and signs one bundle, blocking the current thread.
     ///
     /// Emits the full progress sequence: `SelectingNotes`, the PCZT and

@@ -58,6 +58,10 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ### Fixed
 
+- A wallet can recover an unsigned delegation that Ledger cannot display and
+  ask the voter to approve the replacement. Each saved bundle gets one
+  device-triggered retry, including a new bundle planned at a previously used index.
+  A delayed device response leaves a deleted bundle or round untouched.
 - Let the round driver cast votes for bundles imported from a delegation
   capability. Its cast step checks each bundle against the round's voting
   hotkey by rebuilding the VAN and the governance output note, but an
