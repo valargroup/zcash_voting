@@ -519,6 +519,38 @@ fn replanned_bundle_at_the_same_index_gets_its_own_ledger_retry() {
 }
 
 #[test]
+fn late_ledger_rejection_leaves_a_pruned_plan_and_a_cleared_round_absent() {
+    let (pipeline, _wallet) = tests::pipeline_fixture::pipeline_with_wallet();
+    let pipeline = pipeline.with_ledger_output_review();
+    let db = pipeline.voting_db();
+    let round = pipeline.round_id();
+    let original = pipeline.keystone_request(0).unwrap();
+    db.conn().execute("DELETE FROM witnesses", []).unwrap();
+    assert!(matches!(
+        pipeline.recover_rejected_ledger_request(0, &[0; 32]),
+        Err(VotingError::Busy { .. })
+    ));
+    assert!(!db.has_witnesses(round, 0).unwrap());
+    let repaired = pipeline
+        .recover_rejected_ledger_request(0, original.pczt_sighash.as_slice().try_into().unwrap())
+        .unwrap();
+    assert!(!db.has_witnesses(round, 0).unwrap());
+    let rejected = repaired.pczt_sighash.as_slice().try_into().unwrap();
+
+    db.delete_skipped_bundles(round, 0).unwrap();
+    assert!(pipeline
+        .recover_rejected_ledger_request(0, rejected)
+        .is_err());
+    assert_eq!(db.get_bundle_count(round).unwrap(), 0);
+
+    db.clear_round(round).unwrap();
+    assert!(pipeline
+        .recover_rejected_ledger_request(0, rejected)
+        .is_err());
+    assert!(!db.has_round(round).unwrap());
+}
+
+#[test]
 fn saved_authorization_title_is_bounded_by_the_verified_amount_suffix() {
     let weight = 987_654_321;
     for title in [
