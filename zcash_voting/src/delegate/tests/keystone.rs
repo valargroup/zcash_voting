@@ -315,14 +315,332 @@ fn observed_keystone_requests_preserve_durable_reuse_and_missing_pczt_errors() {
 }
 
 #[test]
-fn enabling_ledger_output_review_does_not_rewrite_an_existing_signing_context() {
+fn ledger_recovers_an_unsigned_default_request_once() {
     let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
     let original = prepared
         .keystone_request(&db, &NoopProgressReporter)
         .unwrap();
+    queries::store_proof(
+        &db.conn(),
+        &prepared.round_id,
+        &db.wallet_id(),
+        0,
+        &[0xAB; 96],
+        None,
+    )
+    .unwrap();
+    prepared.delegation_keys.round_name = "Updated after restart".into();
     prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
-    let reused = prepared
+    let repaired = prepared
         .keystone_request(&db, &NoopProgressReporter)
         .unwrap();
-    assert_eq!(reused, original);
+    assert_ne!(repaired.pczt_sighash, original.pczt_sighash);
+    assert_eq!(
+        repaired.display_memo,
+        original.display_memo.replace('\n', " ")
+    );
+    assert_eq!(
+        db.delegation_phase(&prepared.round_id, 0).unwrap(),
+        DelegationPhase::PcztBuilt
+    );
+    assert!(crate::delegate::keystone::ledger_can_review(
+        &repaired.pczt_bytes,
+        repaired.action_index as usize,
+        &prepared.delegation_keys,
+        &repaired.display_memo
+    )
+    .unwrap());
+    assert_eq!(
+        prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap(),
+        repaired
+    );
+}
+
+#[test]
+fn ledger_recovery_preserves_a_signed_or_submitted_default_request() {
+    for signed in [true, false] {
+        let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+        let original = prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap();
+        if signed {
+            queries::store_keystone_signature(
+                &db.conn(),
+                &prepared.round_id,
+                &db.wallet_id(),
+                0,
+                &[0xAB; 64],
+                &original.pczt_sighash,
+                &original.rk,
+            )
+            .unwrap();
+        } else {
+            queries::store_delegation_tx_hash(
+                &db.conn(),
+                &prepared.round_id,
+                &db.wallet_id(),
+                0,
+                &"ab".repeat(32),
+            )
+            .unwrap();
+        }
+        let default_keys = prepared.delegation_keys.clone();
+        prepared.delegation_keys = default_keys.clone().with_ledger_output_review();
+        let error = prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap_err();
+        if signed {
+            assert!(matches!(error, VotingError::InvalidInput { .. }));
+            assert_eq!(
+                queries::get_keystone_signatures(&db.conn(), &prepared.round_id, &db.wallet_id())
+                    .unwrap()
+                    .len(),
+                1
+            );
+        } else {
+            assert!(matches!(
+                error,
+                VotingError::DelegationAlreadyBroadcast { .. }
+            ));
+        }
+        prepared.delegation_keys = default_keys;
+        assert_eq!(
+            prepared
+                .keystone_request(&db, &NoopProgressReporter)
+                .unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn ledger_recovery_refuses_a_different_account_derivation() {
+    let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+    let original = prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    let saved_keys = prepared.delegation_keys.clone();
+    prepared.delegation_keys = saved_keys.clone().with_ledger_output_review();
+    prepared.delegation_keys.account_index += 1;
+    assert!(matches!(
+        prepared.keystone_request(&db, &NoopProgressReporter),
+        Err(VotingError::InvalidInput { .. })
+    ));
+    prepared.delegation_keys = saved_keys;
+    assert_eq!(
+        prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap(),
+        original
+    );
+}
+
+#[test]
+fn device_rejection_can_replace_only_the_current_request_once_across_restart() {
+    let (_, params, _, mut prepared) = prepared_wallet_delegation_fixture();
+    prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    let path = std::env::temp_dir().join(format!("ledger-retry-{}.sqlite", uuid::Uuid::new_v4()));
+    let open = || {
+        let db = VotingDb::open(path.to_str().unwrap()).unwrap();
+        db.set_wallet_id("ledger");
+        db
+    };
+    let db = open();
+    db.ensure_round(Network::Regtest, &params, None).unwrap();
+    db.ensure_bundles(&prepared.round_id, &prepared.bundle_note_infos)
+        .unwrap();
+    let original = prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    assert!(keystone::after_ledger_rejection(&prepared, &db, &[0; 32]).is_err());
+    let replaced = keystone::after_ledger_rejection(
+        &prepared,
+        &db,
+        original.pczt_sighash.as_slice().try_into().unwrap(),
+    )
+    .unwrap();
+    assert_ne!(original.pczt_sighash, replaced.pczt_sighash);
+    assert_eq!(replaced.display_memo, original.display_memo);
+    drop(db);
+    let reopened = open();
+    assert!(keystone::after_ledger_rejection(
+        &prepared,
+        &reopened,
+        replaced.pczt_sighash.as_slice().try_into().unwrap()
+    )
+    .is_err());
+    assert_eq!(
+        prepared
+            .keystone_request(&reopened, &NoopProgressReporter)
+            .unwrap(),
+        replaced
+    );
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn replanned_bundle_at_the_same_index_gets_its_own_ledger_retry() {
+    let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+    prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    let retry = |bundle: &PreparedDelegationBundle| {
+        let request = bundle.keystone_request(&db, &NoopProgressReporter).unwrap();
+        keystone::after_ledger_rejection(
+            bundle,
+            &db,
+            request.pczt_sighash.as_slice().try_into().unwrap(),
+        )
+    };
+    retry(&prepared).unwrap();
+
+    assert_eq!(db.delete_skipped_bundles(&prepared.round_id, 0).unwrap(), 1);
+    assert_eq!(prepared.bundle_note_infos.len(), 2);
+    prepared.bundle_note_infos.truncate(1);
+    prepared.layout = db
+        .ensure_bundles(&prepared.round_id, &prepared.bundle_note_infos)
+        .unwrap();
+
+    retry(&prepared).unwrap();
+    assert!(matches!(
+        retry(&prepared),
+        Err(VotingError::InvalidInput { .. })
+    ));
+}
+
+#[test]
+fn late_ledger_rejection_leaves_a_pruned_plan_and_a_cleared_round_absent() {
+    let (pipeline, _wallet) = tests::pipeline_fixture::pipeline_with_wallet();
+    let pipeline = pipeline.with_ledger_output_review();
+    let db = pipeline.voting_db();
+    let round = pipeline.round_id();
+    let original = pipeline.keystone_request(0).unwrap();
+    db.conn().execute("DELETE FROM witnesses", []).unwrap();
+    assert!(matches!(
+        pipeline.recover_rejected_ledger_request(0, &[0; 32]),
+        Err(VotingError::Busy { .. })
+    ));
+    assert!(!db.has_witnesses(round, 0).unwrap());
+    let repaired = pipeline
+        .recover_rejected_ledger_request(0, original.pczt_sighash.as_slice().try_into().unwrap())
+        .unwrap();
+    assert!(!db.has_witnesses(round, 0).unwrap());
+    let rejected = repaired.pczt_sighash.as_slice().try_into().unwrap();
+
+    db.delete_skipped_bundles(round, 0).unwrap();
+    assert!(pipeline
+        .recover_rejected_ledger_request(0, rejected)
+        .is_err());
+    assert_eq!(db.get_bundle_count(round).unwrap(), 0);
+
+    db.clear_round(round).unwrap();
+    assert!(pipeline
+        .recover_rejected_ledger_request(0, rejected)
+        .is_err());
+    assert!(!db.has_round(round).unwrap());
+}
+
+#[test]
+fn saved_authorization_title_is_bounded_by_the_verified_amount_suffix() {
+    let weight = 987_654_321;
+    for title in [
+        "round-id",
+        "First.\nAmount: 1 ZEC. 第二",
+        &"投票".repeat(512),
+    ] {
+        let memo = display_memo(title, weight);
+        let (visible, legacy) = keystone::saved_title(&memo, weight).unwrap();
+        assert!(legacy);
+        assert!(title.starts_with(visible));
+        for separator in [". ", ".\r\n"] {
+            let (before, after) = memo.rsplit_once(".\nAmount:").unwrap();
+            let variant = format!("{before}{separator}Amount:{after}");
+            assert_eq!(
+                keystone::saved_title(&variant, weight),
+                Some((visible, false))
+            );
+        }
+        assert!(keystone::saved_title(&memo, weight + 1).is_none());
+        assert!(keystone::saved_title(&memo.replace("authorizing", "revoking"), weight).is_none());
+    }
+}
+
+#[test]
+#[ignore = "generates a real delegation proof; run with make proofs"]
+fn repair_preserves_note_witnesses_for_direct_proving() {
+    use crate::backend::{
+        orchard::tree::MerkleHashOrchard,
+        pasta_curves::{group::ff::PrimeField, pallas},
+    };
+    use voting_circuits::delegation::{ImtProvider, SpacedLeafImtProvider};
+    use voting_crypto_deps::incrementalmerkletree::{Hashable, Level};
+    struct Snapshot(SpacedLeafImtProvider);
+    impl crate::pir::PirProofSource for Snapshot {
+        fn circuit_root(&self) -> pallas::Base {
+            self.0.root()
+        }
+        fn fetch_proofs(
+            &self,
+            nfs: &[pallas::Base],
+        ) -> anyhow::Result<Vec<crate::pir::ImtProofData>> {
+            nfs.iter()
+                .map(|nf| {
+                    let proof = self.0.non_membership_proof(*nf).unwrap();
+                    Ok(crate::pir::ImtProofData {
+                        root: proof.root,
+                        nf_bounds: proof.nf_bounds,
+                        leaf_pos: proof.leaf_pos,
+                        path: proof.path,
+                    })
+                })
+                .collect()
+        }
+    }
+    let (_, mut params, _, mut prepared) = prepared_wallet_delegation_fixture();
+    prepared.bundle_note_infos.truncate(1);
+    let note = &prepared.bundle_note_infos[0];
+    let mut root =
+        MerkleHashOrchard::from_bytes(&note.commitment.as_slice().try_into().unwrap()).unwrap();
+    let mut auth_path = Vec::new();
+    for level in 0..32 {
+        let sibling = MerkleHashOrchard::empty_root(Level::from(level));
+        auth_path.push(sibling.to_bytes().to_vec());
+        root = if (note.position >> level) & 1 == 0 {
+            MerkleHashOrchard::combine(Level::from(level), &root, &sibling)
+        } else {
+            MerkleHashOrchard::combine(Level::from(level), &sibling, &root)
+        };
+    }
+    let pir = Snapshot(SpacedLeafImtProvider::new());
+    params.nc_root = root.to_bytes().to_vec();
+    params.nullifier_imt_root = pir.0.root().to_repr().to_vec();
+    let db = VotingDb::open_in_memory().unwrap();
+    db.set_wallet_id("ledger");
+    db.ensure_round(Network::Regtest, &params, None).unwrap();
+    db.ensure_bundles(&prepared.round_id, &prepared.bundle_note_infos)
+        .unwrap();
+    db.store_witnesses(
+        &prepared.round_id,
+        0,
+        &[crate::types::WitnessData {
+            position: note.position,
+            note_commitment: note.commitment.clone(),
+            root: params.nc_root,
+            auth_path,
+        }],
+    )
+    .unwrap();
+    prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
+    prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    assert!(!prepared
+        .prove(&db, &pir, &NoopProgressReporter)
+        .unwrap()
+        .bytes
+        .is_empty());
 }

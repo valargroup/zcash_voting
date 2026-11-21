@@ -13,7 +13,7 @@
 //! let _ = zcash_voting::round::VotingDb::build_and_prove_delegation;
 //! ```
 
-mod keystone;
+pub(crate) mod keystone;
 #[cfg(test)]
 #[path = "delegate/tests/keystone.rs"]
 mod keystone_tests;
@@ -141,7 +141,7 @@ impl DelegationKeys {
     ///
     /// Disabled by default. Account-OVK holders can recover the hotkey output and
     /// memo from published TX1 effects. Titles escape non-ASCII/control characters;
-    /// line breaks become spaces. Existing persisted PCZTs are reused unchanged.
+    /// line breaks become spaces. Unsigned local requests from the default profile can be rebuilt on Ledger review.
     pub fn with_ledger_output_review(mut self) -> Self {
         self.ledger_output_review = true;
         self
@@ -2419,16 +2419,15 @@ fn redact_orchard_like_bundle_for_signer(
     });
 }
 
+const DISPLAY_MEMO_MAX_BYTES: usize = 512;
+const DISPLAY_MEMO_PREFIX: &str = "I am authorizing this hotkey managed by my wallet to vote on ";
+const DISPLAY_MEMO_ROUND_SUFFIX: &str = ".\nAmount:";
+
 /// Returns the human-readable Keystone memo for a delegation PCZT.
 ///
 /// `total_weight_zatoshi` is displayed with exact 8-decimal ZEC precision. The
 /// returned string is capped at 512 bytes to fit signer display constraints.
 pub fn display_memo(round_name: &str, total_weight_zatoshi: u64) -> String {
-    const DISPLAY_MEMO_MAX_BYTES: usize = 512;
-    const DISPLAY_MEMO_PREFIX: &str =
-        "I am authorizing this hotkey managed by my wallet to vote on ";
-    const DISPLAY_MEMO_ROUND_SUFFIX: &str = ".\nAmount:";
-
     let zec_whole = total_weight_zatoshi / 100_000_000;
     let zec_frac = total_weight_zatoshi % 100_000_000;
     let amount_suffix = format!(" {}.{:08} ZEC.", zec_whole, zec_frac);
@@ -2528,6 +2527,7 @@ fn array64_slice(label: &str, value: &[u8]) -> Result<[u8; 64], VotingError> {
 #[cfg(test)]
 mod tests {
     mod observability;
+    pub(super) mod pipeline_fixture;
     mod pipeline_observability;
     mod setup_observability;
     use super::*;

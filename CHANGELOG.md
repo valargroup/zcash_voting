@@ -16,6 +16,26 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - Let the first PIR attempt use the whole 60-second budget instead of 15
   seconds. Connection setup is still bounded at 5 seconds, and a retry still
   runs after an early failure such as a severed upload.
+<<<<<<< HEAD
+=======
+- Raise the cap on each randomized initial helper-share delay from 100 hours
+  to seven days, so a vote's shares reveal across more of a long round.
+  `SHARE_SUBMIT_AT_MAX_DELAY_SECONDS` is now seven days.
+
+### Fixed
+
+- A wallet can recover an unsigned delegation that Ledger cannot display and
+  ask the voter to approve the replacement. Each saved bundle gets one
+  device-triggered retry, including a new bundle planned at a previously used index.
+  A delayed device response leaves a deleted bundle or round untouched.
+- Let the round driver cast votes for bundles imported from a delegation
+  capability. Its cast step checks each bundle against the round's voting
+  hotkey by rebuilding the VAN and the governance output note, but an
+  imported capability carries only the VAN opening. Every imported bundle
+  failed with "no delegation target binding" before a vote was built.
+  Imported bundles now check only the VAN, which still binds the hotkey, the
+  bundle's value and the round. Locally prepared bundles are checked as before.
+>>>>>>> 9cad63f (Recover unsigned delegations prepared before Ledger review (#405))
 
 ## v5.4.0
 
