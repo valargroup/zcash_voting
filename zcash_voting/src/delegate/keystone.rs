@@ -50,9 +50,10 @@ pub(crate) fn after_ledger_rejection(
         });
     }
     let db = voting_db.scoped(&voting_db.wallet_id())?;
+    prepared.validate_snapshot_branch_id_provider()?;
     let request = load_request(prepared, &db)?;
     if request.pczt_sighash.as_slice() != rejected_hash {
-        return Err(VotingError::Busy {
+        return Err(VotingError::InvalidInput {
             message: "rejected delegation is no longer current".into(),
         });
     }
@@ -116,6 +117,7 @@ fn ledger_request(
         prepared.bundle_index,
         &prepared.bundle_note_infos,
         &keys,
+        prepared.branch_id_provider.consensus_branch_id()?,
         Some(LedgerRepair {
             previous_hash: &request.pczt_sighash,
             notes: &prepared.bundle_note_infos,
@@ -124,7 +126,7 @@ fn ledger_request(
     )?;
     let current = load_request(prepared, voting_db)?;
     if current.pczt_sighash != repaired.pczt_sighash {
-        return Err(VotingError::Busy {
+        return Err(VotingError::InvalidInput {
             message: "delegation changed during Ledger recovery".into(),
         });
     }

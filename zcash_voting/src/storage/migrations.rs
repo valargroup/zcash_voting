@@ -186,7 +186,8 @@ pub fn migrate(conn: &mut Connection) -> Result<(), VotingError> {
     }
 
     if version == CURRENT_VERSION {
-        return ensure_current_chain_submission_schema(conn);
+        ensure_current_chain_submission_schema(conn)?;
+        return upgrade_ledger_retry_history(conn);
     }
 
     // Immediate: a deferred transaction takes the write lock lazily on its
@@ -267,7 +268,41 @@ pub fn migrate(conn: &mut Connection) -> Result<(), VotingError> {
 
     // A ladder that ends on a different shape than this build describes is the
     // same drift, reached the long way round.
-    ensure_current_chain_submission_schema(conn)
+    ensure_current_chain_submission_schema(conn)?;
+    upgrade_ledger_retry_history(conn)
+}
+
+/// Early Ledger builds attached retry history to the round. Keep spent retries
+/// for existing bundles, and let deletion of a bundle release only its retry.
+fn upgrade_ledger_retry_history(conn: &mut Connection) -> Result<(), VotingError> {
+    fn round_owned(conn: &Connection) -> rusqlite::Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM pragma_foreign_key_list('ledger_delegation_retries')
+             WHERE [table] = 'rounds')",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    let mut upgrade = || -> rusqlite::Result<()> {
+        if !round_owned(conn)? {
+            return Ok(());
+        }
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Another process may have finished the upgrade before we got the lock.
+        if round_owned(&tx)? {
+            tx.execute_batch("ALTER TABLE ledger_delegation_retries RENAME TO old_ledger_retries")?;
+            tx.execute_batch(include_str!("migrations/ledger_delegation_retries.sql"))?;
+            tx.execute_batch(
+                "INSERT INTO ledger_delegation_retries (round_id, wallet_id, bundle_index)
+                 SELECT round_id, wallet_id, bundle_index FROM old_ledger_retries
+                 INNER JOIN bundles USING (round_id, wallet_id, bundle_index);
+                 DROP TABLE old_ledger_retries;",
+            )?;
+        }
+        tx.commit()
+    };
+    upgrade().map_err(|e| VotingError::from_sqlite("upgrade Ledger delegation retry history", &e))
 }
 
 /// Recognizes the version-22 combined-vote preview without discarding its

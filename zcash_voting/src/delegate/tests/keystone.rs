@@ -326,7 +326,6 @@ fn ledger_recovers_an_unsigned_default_request_once() {
         &db.wallet_id(),
         0,
         &[0xAB; 96],
-        None,
     )
     .unwrap();
     prepared.delegation_keys.round_name = "Updated after restart".into();
@@ -519,7 +518,7 @@ fn late_ledger_rejection_leaves_a_pruned_plan_and_a_cleared_round_absent() {
     db.conn().execute("DELETE FROM witnesses", []).unwrap();
     assert!(matches!(
         pipeline.recover_rejected_ledger_request(0, &[0; 32]),
-        Err(VotingError::Busy { .. })
+        Err(VotingError::InvalidInput { .. })
     ));
     assert!(!db.has_witnesses(round, 0).unwrap());
     let repaired = pipeline

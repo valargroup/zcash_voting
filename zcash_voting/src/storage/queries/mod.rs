@@ -1229,7 +1229,7 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
     if let Some(repair) = repair {
         require_bundle_notes(&tx, round_id, wallet_id, bundle_index, repair.notes)?;
         if load_pczt_sighash(&tx, round_id, wallet_id, bundle_index)? != repair.previous_hash {
-            return Err(VotingError::Busy {
+            return Err(VotingError::InvalidInput {
                 message: "saved delegation changed during Ledger recovery".into(),
             });
         }
@@ -1249,15 +1249,8 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
         if repair.after_device_rejection {
             // This additive table is shared by the maintenance and development
             // releases, whose numbered schema migrations differ.
-            tx.execute_batch(
-                "CREATE TABLE IF NOT EXISTS ledger_delegation_retries (
-                round_id TEXT NOT NULL, wallet_id TEXT NOT NULL, bundle_index INTEGER NOT NULL,
-                PRIMARY KEY (round_id, wallet_id, bundle_index),
-                FOREIGN KEY (round_id, wallet_id, bundle_index)
-                    REFERENCES bundles(round_id, wallet_id, bundle_index) ON DELETE CASCADE
-            )",
-            )
-            .map_err(|e| VotingError::from_sqlite("initialize Ledger retry history", &e))?;
+            tx.execute_batch(include_str!("../migrations/ledger_delegation_retries.sql"))
+                .map_err(|e| VotingError::from_sqlite("initialize Ledger retry history", &e))?;
             let inserted = tx.execute(
                 "INSERT INTO ledger_delegation_retries (round_id, wallet_id, bundle_index) VALUES (?1, ?2, ?3)
                  ON CONFLICT(round_id, wallet_id, bundle_index) DO NOTHING",

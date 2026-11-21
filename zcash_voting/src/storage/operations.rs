@@ -1239,7 +1239,14 @@ impl VotingDb {
         keys: &DelegationKeys,
         consensus_branch_id: u32,
     ) -> Result<GovernancePczt, VotingError> {
-        self.build_or_repair_governance_pczt(round_id, bundle_index, notes, keys, None)
+        self.build_or_repair_governance_pczt(
+            round_id,
+            bundle_index,
+            notes,
+            keys,
+            consensus_branch_id,
+            None,
+        )
     }
 
     pub(crate) fn build_or_repair_governance_pczt(
@@ -1248,6 +1255,7 @@ impl VotingDb {
         bundle_index: u32,
         notes: &[NoteInfo],
         keys: &DelegationKeys,
+        consensus_branch_id: u32,
         repair: Option<crate::delegate::keystone::LedgerRepair<'_>>,
     ) -> Result<GovernancePczt, VotingError> {
         let wallet_id = self.wallet_id();
@@ -1281,8 +1289,10 @@ impl VotingDb {
                 stored_network,
                 keys,
             )?;
-        // Ledger recovery keeps the same hotkey and note set, so reuse the
-        // padding that PIR already covers. A different target needs fresh padding.
+        // A rebuild cannot reuse the stored padded secrets: they belong to the
+        // target the wallet can no longer reproduce. They are sampled in memory
+        // here and reach the database only with the replacement, so a failure
+        // anywhere below leaves the stored setup exactly as it was.
         let padded_note_secrets = if repair.is_some() {
             queries::load_padded_note_secrets(&self.conn(), round_id, &wallet_id, bundle_index)?
         } else if rebuild {
