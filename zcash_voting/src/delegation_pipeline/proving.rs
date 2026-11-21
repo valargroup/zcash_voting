@@ -431,6 +431,23 @@ impl<W: WalletDbOpener> DelegationPipeline<W> {
         )
     }
 
+    /// Rebuild an unsigned request once after the account-verified Ledger returned
+    /// 0x6a80 on the Ironwood transaction-data instruction (0x58), before signing.
+    /// The host must supply the hash from that attempt. A changed request,
+    /// stored signature, submission, or previous device-triggered repair refuses the write.
+    pub fn recover_rejected_ledger_request(
+        &self,
+        bundle_index: u32,
+        rejected_hash: &[u8; 32],
+    ) -> Result<KeystoneSigningRequest, VotingError> {
+        let prepared = self.execute_prepare(bundle_index, &crate::ObservationScope::disabled())?;
+        crate::delegate::keystone::after_ledger_rejection(
+            &prepared,
+            self.scoped_voting_db()?,
+            rejected_hash,
+        )
+    }
+
     /// Proves and signs one bundle, blocking the current thread.
     ///
     /// Emits the full progress sequence: `SelectingNotes`, the PCZT and
