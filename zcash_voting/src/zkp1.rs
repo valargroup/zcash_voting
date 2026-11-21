@@ -16,8 +16,8 @@ use orchard::{
 use pasta_curves::group::ff::PrimeField;
 use pasta_curves::{pallas, vesta};
 use voting_circuits::delegation::{
-    build_delegation_bundle, delegation_cached_keys, ImtError, ImtProofData, ImtProvider,
-    PrecomputedRandomness, RealNoteInput,
+    build_delegation_bundle, delegation_cached_keys, verify_delegation_proof, ImtError,
+    ImtProofData, ImtProvider, PrecomputedRandomness, RealNoteInput,
 };
 use voting_crypto_deps::incrementalmerkletree::Hashable;
 use zcash_keys::keys::UnifiedFullViewingKey;
@@ -535,6 +535,18 @@ pub(crate) fn observe_build_and_prove_delegation(
                     message: format!("create_proof failed: {error}"),
                 })?;
                 Ok::<_, VotingError>(transcript.finalize())
+            })?;
+
+            // Proof creation can succeed with an unsatisfied circuit. Verify before
+            // reporting completion or allowing the caller to persist the proof.
+            observations.measure("zkp1.verify", || {
+                verify_delegation_proof(&proof_bytes, &bundle.instance).map_err(|error| {
+                    VotingError::ProofFailed {
+                        message: format!(
+                            "generated delegation proof failed local verification: {error}"
+                        ),
+                    }
+                })
             })?;
 
             progress.on_progress(crate::delegate::DelegationProgress::ProofProgress(1.0));
@@ -1079,5 +1091,40 @@ mod tests {
         println!("=== Test passed ===");
         println!("  Proof size: {} bytes", result.proof.len());
         println!("  Progress callbacks: {progress_count}");
+
+        // A consistent but incorrect advertised root passes input parsing and
+        // proof creation; the finished proof must still fail verification.
+        let wrong_root = (bytes_to_base(&merkle_witnesses[0].root, "root").unwrap()
+            + pallas::Base::one())
+        .to_repr();
+        let mut wrong_witnesses = merkle_witnesses.clone();
+        for witness in &mut wrong_witnesses {
+            witness.root = wrong_root.to_vec();
+        }
+        count.store(0, Ordering::Relaxed);
+        let error = build_and_prove_delegation(
+            &full_notes,
+            &hotkey_raw_address,
+            &alpha.to_repr(),
+            &van_comm_rand.to_repr(),
+            &vote_round_id.to_repr(),
+            &wrong_witnesses,
+            &imt_proofs,
+            &[],
+            Network::Mainnet,
+            &reporter,
+            None,
+        )
+        .expect_err("a generated proof with an incorrect note root must be rejected locally");
+        assert!(matches!(
+            error,
+            VotingError::ProofFailed { message }
+                if message.starts_with("generated delegation proof failed local verification:")
+        ));
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            2,
+            "failed local verification must not report the final completion callback"
+        );
     }
 }
