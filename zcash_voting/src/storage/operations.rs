@@ -1239,6 +1239,25 @@ impl VotingDb {
         keys: &DelegationKeys,
         consensus_branch_id: u32,
     ) -> Result<GovernancePczt, VotingError> {
+        self.build_or_repair_governance_pczt(
+            round_id,
+            bundle_index,
+            notes,
+            keys,
+            consensus_branch_id,
+            None,
+        )
+    }
+
+    pub(crate) fn build_or_repair_governance_pczt(
+        &self,
+        round_id: &str,
+        bundle_index: u32,
+        notes: &[NoteInfo],
+        keys: &DelegationKeys,
+        consensus_branch_id: u32,
+        repair: Option<crate::delegate::keystone::LedgerRepair<'_>>,
+    ) -> Result<GovernancePczt, VotingError> {
         let wallet_id = self.wallet_id();
         // Every setup writer takes its bundle's lifecycle gate before
         // inspecting the binding and keeps it through persistence. The shared
@@ -1262,13 +1281,21 @@ impl VotingDb {
         // this call carries. Nothing is discarded yet: the replacement takes
         // real time to build, and a discard committed ahead of it would leave
         // the bundle with neither its old setup nor a new one.
-        let rebuild =
-            self.setup_target_needs_rebuild(round_id, bundle_index, &params, stored_network, keys)?;
+        let rebuild = repair.is_some()
+            || self.setup_target_needs_rebuild(
+                round_id,
+                bundle_index,
+                &params,
+                stored_network,
+                keys,
+            )?;
         // A rebuild cannot reuse the stored padded secrets: they belong to the
         // target the wallet can no longer reproduce. They are sampled in memory
         // here and reach the database only with the replacement, so a failure
         // anywhere below leaves the stored setup exactly as it was.
-        let padded_note_secrets = if rebuild {
+        let padded_note_secrets = if repair.is_some() {
+            queries::load_padded_note_secrets(&self.conn(), round_id, &wallet_id, bundle_index)?
+        } else if rebuild {
             crate::action::sample_padded_note_secrets(notes.len())?
         } else {
             self.ensure_padded_secrets(round_id, bundle_index, notes)?
@@ -1296,6 +1323,19 @@ impl VotingDb {
             .ok_or_else(|| VotingError::InvalidInput {
                 message: "total note weight overflows u64".to_string(),
             })?;
+        if repair.is_some() {
+            let memo = crate::delegate::ledger_display_memo(&keys.round_name, total_note_value);
+            if !crate::delegate::keystone::ledger_can_review(
+                &result.pczt_bytes,
+                result.action_index,
+                keys,
+                &memo,
+            )? {
+                return Err(VotingError::Internal {
+                    message: "replacement delegation cannot be reviewed on Ledger".into(),
+                });
+            }
+        }
         // Persist delegation data plus the PCZT-derived signing fields. A
         // rebuild exchanges the old setup for this one in a single
         // transaction; a first setup has nothing to exchange.
@@ -1306,6 +1346,7 @@ impl VotingDb {
                 round_id,
                 &wallet_id,
                 bundle_index,
+                repair,
                 &result.van_comm_rand,
                 &result.dummy_nullifiers,
                 &result.rho_signed,

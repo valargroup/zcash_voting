@@ -2281,3 +2281,36 @@ fn schema_objects(conn: &Connection) -> Vec<(String, String, String)> {
         .unwrap();
     objects
 }
+
+#[test]
+fn earlier_ledger_retry_history_keeps_current_bundles_and_follows_their_deletion() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON;
+         CREATE TABLE rounds (round_id TEXT, wallet_id TEXT, PRIMARY KEY(round_id, wallet_id));
+         CREATE TABLE bundles (round_id TEXT, wallet_id TEXT, bundle_index INTEGER,
+                               PRIMARY KEY(round_id, wallet_id, bundle_index));
+         CREATE TABLE ledger_delegation_retries (round_id TEXT, wallet_id TEXT, bundle_index INTEGER,
+             PRIMARY KEY(round_id, wallet_id, bundle_index),
+             FOREIGN KEY(round_id, wallet_id) REFERENCES rounds(round_id, wallet_id) ON DELETE CASCADE);
+         INSERT INTO rounds VALUES ('round', 'wallet');
+         INSERT INTO bundles VALUES ('round', 'wallet', 0);
+         INSERT INTO ledger_delegation_retries VALUES ('round', 'wallet', 0), ('round', 'wallet', 1);",
+    ).unwrap();
+    super::upgrade_ledger_retry_history(&mut conn).unwrap();
+    super::upgrade_ledger_retry_history(&mut conn).unwrap();
+    let kept: Vec<u32> = conn
+        .prepare("SELECT bundle_index FROM ledger_delegation_retries")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(kept, [0]);
+    conn.execute_batch(
+        "DELETE FROM bundles WHERE bundle_index=0;
+         INSERT INTO bundles VALUES ('round', 'wallet', 0);
+         INSERT INTO ledger_delegation_retries VALUES ('round', 'wallet', 0);",
+    )
+    .expect("a replacement bundle gets its own repair");
+}

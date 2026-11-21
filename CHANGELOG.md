@@ -4,7 +4,7 @@ All notable changes to this workspace will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v5.4.1
 
 ### Changed
 
@@ -16,6 +16,18 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - Let the first PIR attempt use the whole 60-second budget instead of 15
   seconds. Connection setup is still bounded at 5 seconds, and a retry still
   runs after an early failure such as a severed upload.
+
+### Fixed
+
+- Wallets can recover unsigned delegations saved before Ledger output review was
+  enabled. Recovery preserves the authorized title, amount, and voting commitment,
+  and keeps the note witnesses needed to prove the replacement.
+- After verifying the Ledger account, a wallet that receives status `0x6a80` on
+  Ironwood instruction `0x58` can call `recover_rejected_ledger_request` with
+  the rejected signing hash. Each saved bundle gets one such retry across
+  restarts. The voter reviews and approves the replacement on the device.
+  A late device reply cannot recreate a deleted round or bundle, and a newly
+  planned bundle at the same index gets its own retry.
 
 ## v5.4.0
 

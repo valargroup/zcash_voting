@@ -79,6 +79,25 @@ pub(crate) struct EffectiveRoundBundlePlan {
     pub(crate) skipped_suffix: SkippedBundleSuffix,
 }
 
+impl EffectiveRoundBundlePlan {
+    /// Describes the validated prefix of an existing round's bundle plan.
+    pub(crate) fn persisted_layout(&self) -> BundleLayout {
+        BundleLayout {
+            bundle_count: self.plan.bundles.len() as u32,
+            eligible_weight: self.plan.eligible_weight,
+            // This view describes the persisted prefix, not notes omitted while
+            // planning the original bundle set.
+            dropped_count: 0,
+            privacy_trim_dropped_bundles: self.plan.privacy_trim.dropped_bundles,
+            privacy_trim_dropped_notes: self.plan.privacy_trim.dropped_notes,
+            privacy_trim_dropped_value_zatoshi: self.plan.privacy_trim.dropped_value,
+            skipped_suffix_bundles: self.skipped_suffix.bundles,
+            skipped_suffix_notes: self.skipped_suffix.notes,
+            skipped_suffix_value_zatoshi: self.skipped_suffix.value_zatoshi,
+        }
+    }
+}
+
 /// Validates that `bundle_index` is in `[0, bundle_count)`.
 pub fn validate_bundle_index(
     bundle_count: u32,
@@ -508,33 +527,42 @@ impl VotingDb {
     ) -> Result<(), VotingError> {
         crate::types::validate_round_params(params)?;
         if self.has_round(&params.vote_round_id)? {
-            let conn = self.conn();
-            let wallet_id = self.wallet_id();
-            let (stored, stored_network) =
-                queries::load_round_params_with_network(&conn, &params.vote_round_id, &wallet_id)?;
-            if stored_network != network {
-                return Err(VotingError::InvalidInput {
-                    message: format!(
-                        "round {} exists for network {:?}, not {:?}",
-                        params.vote_round_id, stored_network, network
-                    ),
-                });
-            }
-            // The stored parameters bind every bundle, witness, and proof of
-            // the round. A caller holding different ones for the same id is
-            // working from another snapshot; setting up bundles under the
-            // stored ones would persist rows no later witness can validate.
-            if stored != *params {
-                return Err(VotingError::InvalidInput {
-                    message: format!(
-                        "round {} exists with different parameters: stored snapshot height {} and roots differ from the supplied snapshot height {}",
-                        params.vote_round_id, stored.snapshot_height, params.snapshot_height
-                    ),
-                });
-            }
-            return Ok(());
+            return self.validate_stored_round(network, params);
         }
         self.init_round(network, params, session_json)
+    }
+
+    /// Require the saved round to match this snapshot without initializing it.
+    pub(crate) fn validate_stored_round(
+        &self,
+        network: Network,
+        params: &RoundParams,
+    ) -> Result<(), VotingError> {
+        let conn = self.conn();
+        let wallet_id = self.wallet_id();
+        let (stored, stored_network) =
+            queries::load_round_params_with_network(&conn, &params.vote_round_id, &wallet_id)?;
+        if stored_network != network {
+            return Err(VotingError::InvalidInput {
+                message: format!(
+                    "round {} exists for network {:?}, not {:?}",
+                    params.vote_round_id, stored_network, network
+                ),
+            });
+        }
+        // The stored parameters bind every bundle, witness, and proof of
+        // the round. A caller holding different ones for the same id is
+        // working from another snapshot; setting up bundles under the
+        // stored ones would persist rows no later witness can validate.
+        if stored != *params {
+            return Err(VotingError::InvalidInput {
+                message: format!(
+                    "round {} exists with different parameters: stored snapshot height {} and roots differ from the supplied snapshot height {}",
+                    params.vote_round_id, stored.snapshot_height, params.snapshot_height
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Ensures a round exists and returns its persisted state.
@@ -853,19 +881,7 @@ impl VotingDb {
         // replacing unreadable policy JSON with the validated fallback.
         let conn = self.conn();
         queries::set_round_bundle_policy(&conn, round_id, &self.wallet_id(), policy)?;
-        Ok(BundleLayout {
-            bundle_count: stored_count,
-            eligible_weight: effective_plan.plan.eligible_weight,
-            // This view describes the persisted prefix, not notes omitted while
-            // planning the original bundle set.
-            dropped_count: 0,
-            privacy_trim_dropped_bundles: effective_plan.plan.privacy_trim.dropped_bundles,
-            privacy_trim_dropped_notes: effective_plan.plan.privacy_trim.dropped_notes,
-            privacy_trim_dropped_value_zatoshi: effective_plan.plan.privacy_trim.dropped_value,
-            skipped_suffix_bundles: effective_plan.skipped_suffix.bundles,
-            skipped_suffix_notes: effective_plan.skipped_suffix.notes,
-            skipped_suffix_value_zatoshi: effective_plan.skipped_suffix.value_zatoshi,
-        })
+        Ok(effective_plan.persisted_layout())
     }
 }
 
