@@ -1186,6 +1186,7 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
     round_id: &str,
     wallet_id: &str,
     bundle_index: u32,
+    repair_sighash: Option<&[u8]>,
     van_comm_rand: &[u8],
     dummy_nullifiers: &[Vec<u8>],
     rho_signed: &[u8],
@@ -1226,6 +1227,26 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
         ));
     }
 
+    if let Some(expected) = repair_sighash {
+        if load_pczt_sighash(&tx, round_id, wallet_id, bundle_index)? != expected {
+            return Err(VotingError::Busy {
+                message: "saved delegation changed during Ledger recovery".into(),
+            });
+        }
+        let eligible: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM bundles b WHERE b.round_id=?1 AND b.wallet_id=?2
+             AND b.bundle_index=?3 AND b.gov_comm=?4 AND b.note_identity_hashes_blob IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM keystone_signatures k
+             WHERE k.round_id=b.round_id AND k.wallet_id=b.wallet_id AND k.bundle_index=b.bundle_index))",
+            rusqlite::params![round_id, wallet_id, bundle_index, gov_comm], |row| row.get(0),
+        ).map_err(|e| VotingError::from_sqlite("check saved delegation before Ledger recovery", &e))?;
+        if !eligible {
+            return Err(VotingError::InvalidInput {
+                message: "Ledger recovery requires an unsigned local bundle with the same voting commitment"
+                    .into(),
+            });
+        }
+    }
     discard_unbroadcast_delegation_setup_within(&tx, round_id, wallet_id, Some(bundle_index))?;
     store_delegation_setup_within(
         &tx,

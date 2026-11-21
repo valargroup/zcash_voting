@@ -13,7 +13,7 @@
 //! let _ = zcash_voting::round::VotingDb::build_and_prove_delegation;
 //! ```
 
-mod keystone;
+pub(crate) mod keystone;
 #[cfg(test)]
 #[path = "delegate/tests/keystone.rs"]
 mod keystone_tests;
@@ -141,7 +141,7 @@ impl DelegationKeys {
     ///
     /// Disabled by default. Account-OVK holders can recover the hotkey output and
     /// memo from published TX1 effects. Titles escape non-ASCII/control characters;
-    /// line breaks become spaces. Existing persisted PCZTs are reused unchanged.
+    /// line breaks become spaces. Unsigned local requests from the default profile can be rebuilt on Ledger review.
     pub fn with_ledger_output_review(mut self) -> Self {
         self.ledger_output_review = true;
         self

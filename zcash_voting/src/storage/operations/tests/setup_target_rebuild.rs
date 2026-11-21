@@ -474,6 +474,7 @@ fn replace_setup(db: &VotingDb, van_comm_rand: &[u8; 32]) -> Result<(), VotingEr
         ROUND_ID,
         W,
         0,
+        None,
         van_comm_rand,
         &[vec![0x22; 32]],
         &[0x33; 32],
