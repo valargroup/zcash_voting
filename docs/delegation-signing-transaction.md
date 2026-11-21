@@ -356,9 +356,13 @@ spend funds, or vote as the hotkey. Existing callers keep `OVK=None` unless
 they opt in. The option does not change the circuit, vote-chain verification,
 or database format.
 
-Saved delegation requests are reused byte for byte, including after restart.
-Enabling this option after setup does not rebuild an existing request or make
-an earlier request compatible with Ledger.
+When Ledger review is enabled, the signing boundary first checks whether the
+account's external OVK recovers the zero-value hotkey output and its printable
+memo. A compatible request survives retries and restarts byte for byte. For a
+recognized default-profile request, the SDK can rebuild the same local bundle.
+A single database transaction checks the old signing hash, local note identities,
+stored signatures and broadcast evidence before replacing the setup and clearing
+its derived proof. The next proof must bind to the replacement.
 
 ### Memo
 
@@ -596,8 +600,7 @@ The complete caller-oriented flows are implemented in
 Setup stores the exact finalized PCZT atomically with its signing fields.
 Keystone request creation reloads those bytes, including after background ZKP1
 or restart, and validates the selected notes, hotkey target, sighash, and unique
-matching randomized key. It never substitutes newly randomized bytes for an
-existing setup. Schema 22 adds this nullable field; legacy rows without the
+matching randomized key. The default Keystone path always returns the existing setup. Schema 22 adds this nullable field; legacy rows without the
 original transaction fail with `DelegationPcztUnavailable`.
 
 The display memo is recovered from the stored governance output. If the host
@@ -613,7 +616,7 @@ that snapshot; later signing and submission still check the current setup.
 Proof generation captures the setup's transaction hash before starting. The
 proof persistence transaction requires that same hash to still be present, so
 a reset or replacement cannot leave a late proof attached to missing or different
-setup. If persistence wins before cleanup, cleanup preserves the proved bundle.
+setup. Routine cleanup preserves a proved bundle. Ledger recovery invalidates any proof for the replaced signing hash.
 Hosts should use the cache-only `reset_vote_tree` for normal navigation so
 background proofs and later signing can reuse the durable transaction.
 

@@ -324,14 +324,119 @@ fn observed_keystone_requests_preserve_durable_reuse_and_missing_pczt_errors() {
 }
 
 #[test]
-fn enabling_ledger_output_review_does_not_rewrite_an_existing_signing_context() {
+fn ledger_recovers_an_unsigned_default_request_once() {
     let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
     let original = prepared
         .keystone_request(&db, &NoopProgressReporter)
         .unwrap();
+    queries::store_proof(
+        &db.conn(),
+        &prepared.round_id,
+        &db.wallet_id(),
+        0,
+        &[0xAB; 96],
+        None,
+    )
+    .unwrap();
     prepared.delegation_keys = prepared.delegation_keys.with_ledger_output_review();
-    let reused = prepared
+    let repaired = prepared
         .keystone_request(&db, &NoopProgressReporter)
         .unwrap();
-    assert_eq!(reused, original);
+    assert_ne!(repaired.pczt_sighash, original.pczt_sighash);
+    assert_eq!(
+        db.delegation_phase(&prepared.round_id, 0).unwrap(),
+        DelegationPhase::PcztBuilt
+    );
+    assert!(crate::delegate::keystone::ledger_can_review(
+        &repaired.pczt_bytes,
+        repaired.action_index as usize,
+        &prepared.delegation_keys,
+        &repaired.display_memo
+    )
+    .unwrap());
+    assert_eq!(
+        prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap(),
+        repaired
+    );
+}
+
+#[test]
+fn ledger_recovery_preserves_a_signed_or_submitted_default_request() {
+    for signed in [true, false] {
+        let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+        let original = prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap();
+        if signed {
+            queries::store_keystone_signature(
+                &db.conn(),
+                &prepared.round_id,
+                &db.wallet_id(),
+                0,
+                &[0xAB; 64],
+                &original.pczt_sighash,
+                &original.rk,
+            )
+            .unwrap();
+        } else {
+            queries::store_delegation_tx_hash(
+                &db.conn(),
+                &prepared.round_id,
+                &db.wallet_id(),
+                0,
+                &"ab".repeat(32),
+            )
+            .unwrap();
+        }
+        let default_keys = prepared.delegation_keys.clone();
+        prepared.delegation_keys = default_keys.clone().with_ledger_output_review();
+        let error = prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap_err();
+        if signed {
+            assert!(matches!(error, VotingError::InvalidInput { .. }));
+            assert_eq!(
+                queries::get_keystone_signatures(&db.conn(), &prepared.round_id, &db.wallet_id())
+                    .unwrap()
+                    .len(),
+                1
+            );
+        } else {
+            assert!(matches!(
+                error,
+                VotingError::DelegationAlreadyBroadcast { .. }
+            ));
+        }
+        prepared.delegation_keys = default_keys;
+        assert_eq!(
+            prepared
+                .keystone_request(&db, &NoopProgressReporter)
+                .unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn ledger_recovery_refuses_a_different_account_derivation() {
+    let (db, _, _, mut prepared) = prepared_wallet_delegation_fixture();
+    let original = prepared
+        .keystone_request(&db, &NoopProgressReporter)
+        .unwrap();
+    let saved_keys = prepared.delegation_keys.clone();
+    prepared.delegation_keys = saved_keys.clone().with_ledger_output_review();
+    prepared.delegation_keys.account_index += 1;
+    assert!(matches!(
+        prepared.keystone_request(&db, &NoopProgressReporter),
+        Err(VotingError::InvalidInput { .. })
+    ));
+    prepared.delegation_keys = saved_keys;
+    assert_eq!(
+        prepared
+            .keystone_request(&db, &NoopProgressReporter)
+            .unwrap(),
+        original
+    );
 }
