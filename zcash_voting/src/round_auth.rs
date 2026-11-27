@@ -7,6 +7,8 @@ pub const ROUND_AUTH_VERSION_V2: u32 = 2;
 
 const ROUND_AUTH_DOMAIN_TAG_V2: [u8; 33] = *b"zcash-shielded-vote:round-auth:v2";
 
+const ROUND_AUTH_DOMAIN_TAG_V3: [u8; 33] = *b"zcash-shielded-vote:round-auth:v3";
+
 /// Typed round-auth v2 signing payload.
 ///
 /// Its fixed-width encoding is
@@ -48,6 +50,46 @@ impl RoundAuthPayloadV2 {
         bytes.extend_from_slice(&self.tier0_layers.to_le_bytes());
         bytes.extend_from_slice(&self.tier1_layers.to_le_bytes());
         bytes.extend_from_slice(&self.poly_len.to_le_bytes());
+        bytes
+    }
+}
+
+/// Typed round-auth v3 signing payload: a v2 attestation extended with the
+/// round's ballot digest.
+///
+/// Its fixed-width encoding is
+/// `domain || round_id || ea_pk || pir_depth || tier0_layers || tier1_layers
+/// || poly_len || ballot_digest`, with each `u32` little-endian and
+/// `ballot_digest` the 32-byte [`Ballot::digest`](crate::ballot::Ballot::digest).
+/// Signatures over it are carried in a round entry's `ballot_attestation`, next
+/// to the entry's v2 signatures, so wallets that predate it still resolve the
+/// round.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoundAuthPayloadV3 {
+    round: RoundAuthPayloadV2,
+    ballot_digest: [u8; 32],
+}
+
+impl RoundAuthPayloadV3 {
+    /// Constructs the payload for a round, its PIR layout, and its ballot.
+    pub fn new(
+        round_id: [u8; 32],
+        ea_pk: [u8; 32],
+        pir_layout: PirLayout,
+        ballot_digest: [u8; 32],
+    ) -> Self {
+        let mut round = RoundAuthPayloadV2::new(round_id, ea_pk, pir_layout);
+        round.domain = ROUND_AUTH_DOMAIN_TAG_V3;
+        Self {
+            round,
+            ballot_digest,
+        }
+    }
+
+    /// Returns the canonical fixed-width bytes to sign or verify.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.round.to_bytes();
+        bytes.extend_from_slice(&self.ballot_digest);
         bytes
     }
 }
