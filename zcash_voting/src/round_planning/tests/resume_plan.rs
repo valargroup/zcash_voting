@@ -471,7 +471,7 @@ fn a_bundles_delegation_step_blocks_its_own_vote_and_share_steps_only() {
     };
     let share_one = NextStep::ConfirmShare {
         bundle_index: 1,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let steps = vec![
@@ -757,7 +757,7 @@ fn an_unrostered_confirmed_vote_still_schedules_its_missing_shares() {
                 step,
                 NextStep::SubmitShares {
                     bundle_index: 0,
-                    proposal_id: 9,
+                    commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 9 },
                     ..
                 }
             )
@@ -1003,7 +1003,7 @@ fn blocking_share_retry_waits_for_submitted_vote_confirmation() {
             },
             NextStep::ConfirmShare {
                 bundle_index: 0,
-                proposal_id: 2,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 2 },
                 share_index: 0,
             },
         ]
@@ -1048,7 +1048,7 @@ fn non_anchor_share_retry_waits_for_submitted_batch_confirmation() {
             },
             NextStep::ConfirmShare {
                 bundle_index: 0,
-                proposal_id: 2,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 2 },
                 share_index: 0,
             },
         ]
@@ -1271,7 +1271,7 @@ fn plan_work_summary_classifies_every_step_kind() {
         },
         NextStep::SubmitShares {
             bundle_index: 0,
-            proposal_id: 1,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
             share_index: 0,
         },
     ] {
@@ -1288,7 +1288,7 @@ fn plan_work_summary_classifies_every_step_kind() {
     // finishes it without holding the foreground flow open.
     let confirm = [NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     }];
     let non_blocking = summarize_plan_work(&confirm, false);
@@ -3017,12 +3017,12 @@ fn confirmed_vote_without_recorded_shares_yields_submit_shares() {
         vec![
             NextStep::SubmitShares {
                 bundle_index: 1,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             NextStep::SubmitShares {
                 bundle_index: 1,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 1,
             },
             NextStep::CastVote {
@@ -3064,7 +3064,7 @@ fn confirmed_vote_with_partial_recorded_shares_yields_submit_shares() {
         plan.next_steps,
         vec![NextStep::SubmitShares {
             bundle_index: 0,
-            proposal_id: 2,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 2 },
             share_index: 1,
         }]
     );
@@ -3167,7 +3167,7 @@ fn confirm_share_emitted_for_unconfirmed_share() {
     assert!(
         plan.next_steps.contains(&NextStep::ConfirmShare {
             bundle_index: 0,
-            proposal_id: 2,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 2 },
             share_index: 0
         }),
         "expected ConfirmShare in steps, got: {:?}",
@@ -3222,7 +3222,7 @@ fn accepted_helper_share_confirmation_is_nonblocking_display_work() {
         plan.next_steps,
         vec![NextStep::ConfirmShare {
             bundle_index: 0,
-            proposal_id: 2,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 2 },
             share_index: 0
         }]
     );
@@ -3252,7 +3252,7 @@ fn unaccepted_helper_share_confirmation_blocks_foreground_recovery() {
         plan.next_steps,
         vec![NextStep::ConfirmShare {
             bundle_index: 0,
-            proposal_id: 2,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 2 },
             share_index: 0
         }]
     );

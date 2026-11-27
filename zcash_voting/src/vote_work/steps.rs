@@ -21,7 +21,7 @@ use crate::{
         blocking_prerequisite, plan_round_classified, resolve_step, ClassifiedPlan, Obligation,
     },
     session::{resume_plan, NextStep, RoundPlan},
-    share_tracking::ShareKey,
+    share_tracking::{CommitmentRef, ShareKey},
     AdvanceImportedDelegation, ChainAdvancePolicy, ChainAdvanceRequest, ChainRecoveryMode,
     ChainSubmissionControl, ChainTransport, VotingError,
 };
@@ -310,7 +310,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
             }
             Obligation::Deliver {
                 bundle_index,
-                proposal_id,
+                commitment: CommitmentRef::Vote { proposal_id },
                 ..
             } => {
                 self.run_deliver(&scope, bundle_index, proposal_id, progress)
@@ -318,7 +318,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
             }
             Obligation::Confirm {
                 bundle_index,
-                proposal_id,
+                commitment: CommitmentRef::Vote { proposal_id },
                 share_index,
                 accepted,
                 outcome_unknown,
@@ -356,15 +356,26 @@ impl<T: ChainTransport> RoundExecutor<T> {
                 }
                 self.run_confirm_share(
                     &scope,
-                    ShareKey {
-                        bundle_index,
-                        proposal_id,
-                        share_index,
-                    },
+                    ShareKey::vote(bundle_index, proposal_id, share_index),
                     progress,
                 )
                 .await
             }
+            // This build plans no DC share work.
+            Obligation::Deliver {
+                commitment: CommitmentRef::Proxy { .. },
+                ..
+            }
+            | Obligation::Confirm {
+                commitment: CommitmentRef::Proxy { .. },
+                ..
+            } => Err(self.step_failure(
+                RoundStepFailureKind::InvariantViolation,
+                Some(&scope.step),
+                None,
+                &ledger,
+                "this build plans no delegation commitment share work",
+            )),
             // Never projected as a step, so never resolved from one.
             Obligation::Retire { .. } | Obligation::Blocked { .. } => {
                 Ok(self.no_work(Some(scope.step), classified.plan))

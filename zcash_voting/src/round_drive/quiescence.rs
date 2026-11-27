@@ -181,11 +181,11 @@ fn background_share_handoff(
         .map(|step| match step {
             NextStep::ConfirmShare {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
             } if requires_background_tracking(step, obligations) => Some(ShareKey {
                 bundle_index: *bundle_index,
-                proposal_id: *proposal_id,
+                commitment: *commitment,
                 share_index: *share_index,
             }),
             _ => None,
@@ -204,13 +204,13 @@ pub(super) fn requires_background_tracking(step: &NextStep, obligations: &[Oblig
     match step {
         NextStep::ConfirmShare {
             bundle_index,
-            proposal_id,
+            commitment,
             share_index,
         } => share_requires_tracking(
             obligations,
             &ShareKey {
                 bundle_index: *bundle_index,
-                proposal_id: *proposal_id,
+                commitment: *commitment,
                 share_index: *share_index,
             },
         ),
@@ -228,13 +228,13 @@ fn share_requires_tracking(obligations: &[Obligation], share: &ShareKey) -> bool
             obligation,
             Obligation::Confirm {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
                 accepted,
                 outcome_unknown,
                 ..
             } if *bundle_index == share.bundle_index
-                && *proposal_id == share.proposal_id
+                && *commitment == share.commitment
                 && *share_index == share.share_index
                 && (*accepted || *outcome_unknown)
         )

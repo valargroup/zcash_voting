@@ -131,7 +131,7 @@ pub use submission_schedule::{
 pub use timing::{
     is_last_moment, last_moment_buffer_seconds, last_moment_deadline_seconds,
     overdue_threshold_seconds, share_recovery_base_time, should_resubmit_share,
-    summarize_share_tracking, LAST_MOMENT_BUFFER_FRACTION_DENOMINATOR,
+    summarize_share_tracking, ShareSchedule, LAST_MOMENT_BUFFER_FRACTION_DENOMINATOR,
     LAST_MOMENT_BUFFER_FRACTION_NUMERATOR, LAST_MOMENT_BUFFER_MAX_SECONDS,
     SHARE_MAX_OVERDUE_THRESHOLD_SECONDS, SHARE_MIN_OVERDUE_THRESHOLD_SECONDS,
     SHARE_RESUBMIT_CUTOFF_SECONDS,

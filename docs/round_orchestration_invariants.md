@@ -119,8 +119,8 @@ canonical obligations are:
 | `Retire` | vote unit | unit id and every member; an undispatched unit a member of which left the roster |
 | `Cast` | bundle | every draft `(proposal_id, choice)` the bundle must cast, the units to retire first, the delegation prerequisite if any |
 | `ReconcileChain` | vote unit | unit id, ordered member proposals, phase, tx hash, the delegation prerequisite if any |
-| `Deliver` | confirmed vote | vote key, tree position, the share indexes owed, whether a durable helper plan already exists |
-| `Confirm` | share | share key; whether a helper accepted it; whether an attempt's outcome is unknown or still in flight |
+| `Deliver` | confirmed vote | bundle, commitment (`CommitmentRef`), tree position, the share indexes owed, whether a durable helper plan already exists |
+| `Confirm` | share | share key with its commitment; whether a helper accepted it; whether an attempt's outcome is unknown or still in flight |
 | `Blocked` | bundle cast | the reason the host must resolve: an open ballot, or unrostered intents to clear |
 
 An obligation carries everything its execution needs. The executor never
@@ -336,7 +336,9 @@ source of truth:
 - steps are ordered delegation first, then vote and share submission,
   then share confirmation; within a rank proposal-primary, then bundle, then
   share index, so an interrupted question finishes across bundles before a
-  later question resumes;
+  later question resumes. A DC's share steps belong to no proposal: they rank
+  ahead of every proposal's within their tier, by bundle and then slot and
+  share, and are not `recovered_vote_work`;
 - `blocking_prerequisite` answers from the obligation's prerequisite;
 - the derived flags (`has_unconfirmed_shares`, `blocking_share_work`,
   `has_recoverable_vote_or_share_work`, `immediate_share_key`,

@@ -1,27 +1,21 @@
 use std::collections::HashSet;
 
-use crate::recovery as vote_recovery;
 use crate::{
     helper::client::{HelperClient, HelperError},
-    round::VotingDb,
     share,
     share_policy::{
         is_share_resubmission_window_open, resubmission_server_order,
         resubmission_server_order_random_bytes_required,
     },
-    types::{ShareDelegationRecord, VotingError},
+    types::VotingError,
 };
 
-use super::{dedupe_preserving_order, ShareTrackingParams};
+use super::{dedupe_preserving_order, tracked_share::TrackedShare, ShareTrackingParams};
 
 pub(super) enum ResubmitOutcome {
     DefinitelyAcceptedByHelper(String),
     /// No helper in the recovery order definitely accepted the share this pass.
     NoDefiniteAcceptanceObserved,
-    /// The share's recovery material is missing, so no wire payload can be built.
-    Unrecoverable,
-    /// Recovery exists but confirmation has not recorded the real VC position.
-    AwaitingVcPosition,
     /// The loaded share was deleted or replaced while recovery was in flight.
     StaleGeneration,
     /// The vote-end recovery window closed during this tracking pass.
@@ -60,7 +54,8 @@ impl From<VotingError> for FailedResubmission {
 }
 
 pub(super) struct ResubmitRequest<'a> {
-    pub(super) share: &'a ShareDelegationRecord,
+    /// The share's helper request, rebuilt with the schedule's `submit_at`.
+    pub(super) share_wire_json: &'a str,
     /// The configured helper fleet, already canonicalized by the caller.
     pub(super) configured_urls: &'a [String],
     pub(super) definite_acceptance_urls: &'a [String],
@@ -86,7 +81,7 @@ pub(super) enum ResubmissionSchedule {
 }
 
 impl ResubmissionSchedule {
-    fn submit_at(self) -> u64 {
+    pub(super) fn submit_at(self) -> u64 {
         match self {
             Self::PreserveScheduledSubmitAt(scheduled_submit_at) => scheduled_submit_at,
             Self::Immediate => 0,
@@ -112,10 +107,8 @@ impl ResubmissionSchedule {
 /// Degraded helpers move behind healthy peers in their group. Every POST is
 /// journaled before dispatch, and every accepted or ambiguous outcome is
 /// persisted before returning or advancing to another helper.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn resubmit_to_next_helper(
-    db: &VotingDb,
-    scope: &share::ShareOperationScope,
+pub(super) async fn resubmit_to_next_helper<S: TrackedShare>(
+    tracked: &S,
     params: &ShareTrackingParams<'_>,
     client: &HelperClient,
     request: &ResubmitRequest<'_>,
@@ -123,78 +116,6 @@ pub(super) async fn resubmit_to_next_helper(
     cancel: &(dyn Fn() -> bool + Send + Sync),
     elapsed_seconds: &(dyn Fn() -> u64 + Send + Sync),
 ) -> Result<ResubmitReport, FailedResubmission> {
-    let share = request.share;
-    let generation = share::ShareGeneration::new(scope, &share.nullifier);
-    let bundle = match vote_recovery::helper_recovery_material_for_wallet(
-        db,
-        scope.wallet_id(),
-        params.round_id,
-        share.bundle_index,
-        share.proposal_id,
-    )? {
-        vote_recovery::HelperRecoveryMaterial::Ready(bundle) => bundle,
-        vote_recovery::HelperRecoveryMaterial::AwaitingVcPosition => {
-            return Ok(ResubmitReport {
-                outcome: ResubmitOutcome::AwaitingVcPosition,
-                outcome_unknown_urls: Vec::new(),
-            });
-        }
-        vote_recovery::HelperRecoveryMaterial::Missing => {
-            return Ok(ResubmitReport {
-                outcome: ResubmitOutcome::Unrecoverable,
-                outcome_unknown_urls: Vec::new(),
-            });
-        }
-    };
-
-    let recovered_share_wire_json = match share::observe_recover_wire_json(
-        &bundle.commitment_bundle_json,
-        share.proposal_id,
-        share.share_index,
-        bundle.vc_tree_position,
-        request.schedule.submit_at(),
-        &client.observation_scope(),
-    ) {
-        Ok(recovered_share_wire_json) => recovered_share_wire_json,
-        // Corrupt recovery material cannot be fixed by trying another helper.
-        Err(_) => {
-            return Ok(ResubmitReport {
-                outcome: ResubmitOutcome::Unrecoverable,
-                outcome_unknown_urls: Vec::new(),
-            });
-        }
-    };
-    let recovered_nullifier = match share::nullifier_from_recovery_json(
-        &bundle.commitment_bundle_json,
-        share.proposal_id,
-        share.share_index,
-    ) {
-        Ok(nullifier) => nullifier,
-        Err(_) => {
-            return Ok(ResubmitReport {
-                outcome: ResubmitOutcome::Unrecoverable,
-                outcome_unknown_urls: Vec::new(),
-            });
-        }
-    };
-    if recovered_nullifier.as_slice() != share.nullifier {
-        return Ok(ResubmitReport {
-            outcome: if share::is_current_generation(
-                db,
-                params.round_id,
-                share.bundle_index,
-                share.proposal_id,
-                share.share_index,
-                generation,
-            )? {
-                ResubmitOutcome::Unrecoverable
-            } else {
-                ResubmitOutcome::StaleGeneration
-            },
-            outcome_unknown_urls: Vec::new(),
-        });
-    }
-
     let ambiguous_helpers: HashSet<&str> =
         request.ambiguous_urls.iter().map(String::as_str).collect();
     let interrupted_helpers: HashSet<&str> = request
@@ -311,15 +232,6 @@ pub(super) async fn resubmit_to_next_helper(
             } else {
                 share::ShareAttemptCapacityPolicy::EnforcePlacementTarget
             };
-        let attempt = share::ShareDeliveryAttemptParams {
-            round_id: params.round_id,
-            bundle_index: share.bundle_index,
-            proposal_id: share.proposal_id,
-            share_index: share.share_index,
-            server_url: &server_url,
-            target_count: request.target_count,
-            submit_at: request.schedule.submit_at(),
-        };
         // Outcome-unknown and previously accepted helpers are already durably
         // journaled, so the journal-before-dispatch invariant holds without a
         // new attempting marker (which the guard would refuse). Re-read
@@ -328,16 +240,16 @@ pub(super) async fn resubmit_to_next_helper(
             if fresh_placement_capacity_reached {
                 continue;
             }
-            match share::begin_existing_delivery_attempt_for_generation(
-                db,
-                &attempt,
-                generation,
-                request.configured_urls,
-                capacity_policy,
-            )
-            .map_err(|error| {
-                FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
-            })? {
+            match tracked
+                .begin_attempt(
+                    &server_url,
+                    request.target_count,
+                    request.configured_urls,
+                    capacity_policy,
+                )
+                .map_err(|error| {
+                    FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
+                })? {
                 crate::storage::queries::ShareAttemptReservation::Started => true,
                 crate::storage::queries::ShareAttemptReservation::AlreadyRecorded => false,
                 crate::storage::queries::ShareAttemptReservation::PlacementCapacityReached => {
@@ -352,7 +264,7 @@ pub(super) async fn resubmit_to_next_helper(
                 }
             }
         } else {
-            match share::is_confirmed_for_generation(db, &attempt, generation).map_err(|error| {
+            match tracked.stored_confirmation().map_err(|error| {
                 FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
             })? {
                 Some(confirmed) => !confirmed,
@@ -368,42 +280,14 @@ pub(super) async fn resubmit_to_next_helper(
             continue;
         }
         match client
-            .resubmit_share(
-                &server_url,
-                &recovered_share_wire_json,
-                current_time,
-                cancel,
-            )
+            .resubmit_share(&server_url, request.share_wire_json, current_time, cancel)
             .await
         {
             Ok(_) => {
-                if !share::resolve_delivery_attempt_for_generation(
-                    db,
-                    &attempt,
-                    generation,
-                    share::ShareDeliveryAttemptOutcome::Accepted,
-                    request.schedule.reset_submit_at(),
-                )
-                .map_err(|error| {
-                    FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
-                })? {
-                    return Ok(ResubmitReport {
-                        outcome: ResubmitOutcome::StaleGeneration,
-                        outcome_unknown_urls: newly_outcome_unknown_urls,
-                    });
-                }
-                return Ok(ResubmitReport {
-                    outcome: ResubmitOutcome::DefinitelyAcceptedByHelper(server_url),
-                    outcome_unknown_urls: newly_outcome_unknown_urls,
-                });
-            }
-            Err(HelperError::Cancelled) => {
-                if journals_fresh_attempt
-                    && !share::resolve_delivery_attempt_for_generation(
-                        db,
-                        &attempt,
-                        generation,
-                        share::ShareDeliveryAttemptOutcome::DefiniteFailure,
+                if !tracked
+                    .resolve_attempt(
+                        &server_url,
+                        share::ShareDeliveryAttemptOutcome::Accepted,
                         request.schedule.reset_submit_at(),
                     )
                     .map_err(|error| {
@@ -419,6 +303,31 @@ pub(super) async fn resubmit_to_next_helper(
                     });
                 }
                 return Ok(ResubmitReport {
+                    outcome: ResubmitOutcome::DefinitelyAcceptedByHelper(server_url),
+                    outcome_unknown_urls: newly_outcome_unknown_urls,
+                });
+            }
+            Err(HelperError::Cancelled) => {
+                if journals_fresh_attempt
+                    && !tracked
+                        .resolve_attempt(
+                            &server_url,
+                            share::ShareDeliveryAttemptOutcome::DefiniteFailure,
+                            request.schedule.reset_submit_at(),
+                        )
+                        .map_err(|error| {
+                            FailedResubmission::after_retained_outcomes(
+                                error,
+                                &newly_outcome_unknown_urls,
+                            )
+                        })?
+                {
+                    return Ok(ResubmitReport {
+                        outcome: ResubmitOutcome::StaleGeneration,
+                        outcome_unknown_urls: newly_outcome_unknown_urls,
+                    });
+                }
+                return Ok(ResubmitReport {
                     outcome: ResubmitOutcome::Cancelled,
                     outcome_unknown_urls: newly_outcome_unknown_urls,
                 });
@@ -427,16 +336,19 @@ pub(super) async fn resubmit_to_next_helper(
             // durable acceptance established by the original request.
             Err(error) if error.is_ambiguous() && retries_definitely_accepted_helper => {}
             Err(error) if error.is_ambiguous() => {
-                if !share::resolve_delivery_attempt_for_generation(
-                    db,
-                    &attempt,
-                    generation,
-                    share::ShareDeliveryAttemptOutcome::Ambiguous,
-                    request.schedule.reset_submit_at(),
-                )
-                .map_err(|error| {
-                    FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
-                })? {
+                if !tracked
+                    .resolve_attempt(
+                        &server_url,
+                        share::ShareDeliveryAttemptOutcome::Ambiguous,
+                        request.schedule.reset_submit_at(),
+                    )
+                    .map_err(|error| {
+                        FailedResubmission::after_retained_outcomes(
+                            error,
+                            &newly_outcome_unknown_urls,
+                        )
+                    })?
+                {
                     return Ok(ResubmitReport {
                         outcome: ResubmitOutcome::StaleGeneration,
                         outcome_unknown_urls: newly_outcome_unknown_urls,
@@ -447,16 +359,19 @@ pub(super) async fn resubmit_to_next_helper(
                 }
             }
             Err(_) if retries_interrupted_helper => {
-                if !share::resolve_delivery_attempt_for_generation(
-                    db,
-                    &attempt,
-                    generation,
-                    share::ShareDeliveryAttemptOutcome::Ambiguous,
-                    request.schedule.reset_submit_at(),
-                )
-                .map_err(|error| {
-                    FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
-                })? {
+                if !tracked
+                    .resolve_attempt(
+                        &server_url,
+                        share::ShareDeliveryAttemptOutcome::Ambiguous,
+                        request.schedule.reset_submit_at(),
+                    )
+                    .map_err(|error| {
+                        FailedResubmission::after_retained_outcomes(
+                            error,
+                            &newly_outcome_unknown_urls,
+                        )
+                    })?
+                {
                     return Ok(ResubmitReport {
                         outcome: ResubmitOutcome::StaleGeneration,
                         outcome_unknown_urls: newly_outcome_unknown_urls,
@@ -468,16 +383,19 @@ pub(super) async fn resubmit_to_next_helper(
             // outcome-unknown POST, so that persisted state is kept.
             Err(_) if retries_outcome_unknown_helper => {}
             Err(_) => {
-                if !share::resolve_delivery_attempt_for_generation(
-                    db,
-                    &attempt,
-                    generation,
-                    share::ShareDeliveryAttemptOutcome::DefiniteFailure,
-                    request.schedule.reset_submit_at(),
-                )
-                .map_err(|error| {
-                    FailedResubmission::after_retained_outcomes(error, &newly_outcome_unknown_urls)
-                })? {
+                if !tracked
+                    .resolve_attempt(
+                        &server_url,
+                        share::ShareDeliveryAttemptOutcome::DefiniteFailure,
+                        request.schedule.reset_submit_at(),
+                    )
+                    .map_err(|error| {
+                        FailedResubmission::after_retained_outcomes(
+                            error,
+                            &newly_outcome_unknown_urls,
+                        )
+                    })?
+                {
                     return Ok(ResubmitReport {
                         outcome: ResubmitOutcome::StaleGeneration,
                         outcome_unknown_urls: newly_outcome_unknown_urls,

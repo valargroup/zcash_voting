@@ -137,12 +137,12 @@ fn every_step_variant() -> Vec<NextStep> {
         },
         NextStep::SubmitShares {
             bundle_index: 7,
-            proposal_id: 1,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
             share_index: 0,
         },
         NextStep::ConfirmShare {
             bundle_index: 7,
-            proposal_id: 1,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
             share_index: 0,
         },
     ]

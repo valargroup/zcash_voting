@@ -591,11 +591,11 @@ async fn confirm_immediate(
             round_id: &config.round_id,
             helper_urls: &config.endpoints.helper_urls,
         },
-        zcash_voting::share_tracking::ShareKey {
-            bundle_index: designated.bundle_index,
-            proposal_id: designated.proposal_id,
-            share_index: designated.share_index,
-        },
+        zcash_voting::share_tracking::ShareKey::vote(
+            designated.bundle_index,
+            designated.proposal_id,
+            designated.share_index,
+        ),
         budget,
         events,
     )
@@ -747,16 +747,16 @@ fn round_event(event: &RoundDriveEvent) -> PhaseEvent {
             }
             NextStep::SubmitShares {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
             }
             | NextStep::ConfirmShare {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
             } => {
                 phase.bundle_index = Some(*bundle_index);
-                phase.proposal_id = Some(*proposal_id);
+                phase.proposal_id = commitment.proposal_id();
                 phase.share_index = Some(*share_index);
             }
             _ => {}

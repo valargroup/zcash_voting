@@ -203,7 +203,7 @@ fn an_undelivered_share_on_a_skipped_bundle_does_not_hold_the_run_open() {
     let mut plan = share_round_plan();
     plan.plan.next_steps.push(NextStep::ConfirmShare {
         bundle_index: 3,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 9,
     });
     assert!(

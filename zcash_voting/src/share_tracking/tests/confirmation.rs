@@ -144,7 +144,7 @@ async fn focused_confirmation_confirms_only_the_requested_share() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -233,7 +233,7 @@ async fn focused_confirmation_ignores_malformed_unrelated_share() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -281,7 +281,7 @@ async fn focused_confirmation_rejects_a_missing_share_without_network_io() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 99,
             },
             configured_server_urls: &configured,
@@ -316,7 +316,7 @@ async fn focused_confirmation_returns_an_existing_confirmation_without_network_i
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -361,7 +361,7 @@ async fn focused_confirmation_bypasses_the_tracker_status_grace() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -418,7 +418,7 @@ async fn focused_confirmation_does_not_confirm_a_replacement_generation() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -449,7 +449,7 @@ async fn focused_confirmation_reports_cancellation_without_mutation() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,

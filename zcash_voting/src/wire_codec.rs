@@ -728,6 +728,7 @@ impl TryFrom<session::NextStep> for NextStepView {
                 proposal_id: 0,
                 choice: 0,
                 share_index: 0,
+                dc_slot: None,
             }),
             session::NextStep::CastVote {
                 bundle_index,
@@ -739,6 +740,7 @@ impl TryFrom<session::NextStep> for NextStepView {
                 proposal_id,
                 choice,
                 share_index: 0,
+                dc_slot: None,
             }),
             session::NextStep::AdvanceVote {
                 bundle_index,
@@ -753,22 +755,24 @@ impl TryFrom<session::NextStep> for NextStepView {
                 proposal_id,
                 choice: 0,
                 share_index: 0,
+                dc_slot: None,
             }),
             session::NextStep::SubmitShares {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
             }
             | session::NextStep::ConfirmShare {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
             } => Ok(Self {
                 kind,
                 bundle_index,
-                proposal_id,
+                proposal_id: commitment_proposal_id(commitment),
                 choice: 0,
                 share_index,
+                dc_slot: commitment_dc_slot(commitment),
             }),
         }
     }
@@ -806,12 +810,12 @@ impl From<NextStepView> for session::NextStep {
             },
             Kind::SubmitShares => Self::SubmitShares {
                 bundle_index: view.bundle_index,
-                proposal_id: view.proposal_id,
+                commitment: view_commitment(view.proposal_id, view.dc_slot),
                 share_index: view.share_index,
             },
             Kind::ConfirmShare => Self::ConfirmShare {
                 bundle_index: view.bundle_index,
-                proposal_id: view.proposal_id,
+                commitment: view_commitment(view.proposal_id, view.dc_slot),
                 share_index: view.share_index,
             },
         }
@@ -1085,9 +1089,34 @@ impl From<crate::share_tracking::ShareKey> for ShareKeyView {
     fn from(key: crate::share_tracking::ShareKey) -> Self {
         Self {
             bundle_index: key.bundle_index,
-            proposal_id: key.proposal_id,
+            proposal_id: commitment_proposal_id(key.commitment),
             share_index: key.share_index,
+            dc_slot: commitment_dc_slot(key.commitment),
         }
+    }
+}
+
+/// The flat views' `proposal_id` for `commitment`: the vote's proposal, or 0,
+/// the pool proposal every DC share reveals into.
+fn commitment_proposal_id(commitment: crate::share_tracking::CommitmentRef) -> u32 {
+    commitment
+        .proposal_id()
+        .unwrap_or(crate::proxy::POOL_PROPOSAL_ID)
+}
+
+/// The flat views' `dc_slot` for `commitment`: present only for a DC.
+fn commitment_dc_slot(commitment: crate::share_tracking::CommitmentRef) -> Option<u8> {
+    match commitment {
+        crate::share_tracking::CommitmentRef::Vote { .. } => None,
+        crate::share_tracking::CommitmentRef::Proxy { dc_slot } => Some(dc_slot),
+    }
+}
+
+/// The commitment a flat view names: a DC when it carries a slot, else a vote.
+fn view_commitment(proposal_id: u32, dc_slot: Option<u8>) -> crate::share_tracking::CommitmentRef {
+    match dc_slot {
+        Some(dc_slot) => crate::share_tracking::CommitmentRef::Proxy { dc_slot },
+        None => crate::share_tracking::CommitmentRef::Vote { proposal_id },
     }
 }
 
@@ -1811,6 +1840,7 @@ mod tests {
     mod error_view;
     mod pir_snapshot_view;
     mod round_drive_view;
+    mod share_identity_view;
     mod share_tracking_drive_view;
     mod step_failure_view;
 
@@ -2866,12 +2896,12 @@ mod tests {
                 },
                 session::NextStep::SubmitShares {
                     bundle_index: 8,
-                    proposal_id: 14,
+                    commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 14 },
                     share_index: 0,
                 },
                 session::NextStep::ConfirmShare {
                     bundle_index: 9,
-                    proposal_id: 15,
+                    commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 15 },
                     share_index: 1,
                 },
                 session::NextStep::AdvanceImportedDelegation { bundle_index: 10 },

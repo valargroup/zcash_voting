@@ -423,9 +423,13 @@ pub struct ShareWorkflowRecoveryView {
 pub struct NextStepView {
     pub kind: NextStepKind,
     pub bundle_index: u32,
+    /// The step's proposal; 0 for a step on a delegation commitment.
     pub proposal_id: u32,
     pub choice: u32,
     pub share_index: u32,
+    /// The delegation commitment's slot, for a share step on a DC only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_slot: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -732,8 +736,12 @@ pub struct VoteKeyView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShareKeyView {
     pub bundle_index: u32,
+    /// The vote's proposal; 0 for a share of a delegation commitment.
     pub proposal_id: u32,
     pub share_index: u32,
+    /// The delegation commitment's slot, for a DC share only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dc_slot: Option<u8>,
 }
 
 /// How one PIR endpoint answered a snapshot-height probe.

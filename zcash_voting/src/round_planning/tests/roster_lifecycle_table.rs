@@ -60,7 +60,7 @@ fn delivers(obligations: &[Obligation]) -> Vec<(u32, u32, Vec<u32>)> {
         .filter_map(|obligation| match obligation {
             Obligation::Deliver {
                 bundle_index,
-                proposal_id,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id },
                 share_indexes,
                 ..
             } => Some((*bundle_index, *proposal_id, share_indexes.clone())),

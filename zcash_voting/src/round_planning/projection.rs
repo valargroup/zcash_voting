@@ -10,7 +10,8 @@ use crate::session::{
     DelegationRecoveryWorkKind, DelegationStatus, NextStep, RoundPlan, RoundPlanAction,
     VoteRecoveryWork, VoteRecoveryWorkKind,
 };
-use crate::share_policy::round_immediate_share_key;
+use crate::share_policy::{round_immediate_share_key, VOTE_COMMITMENT_SHARE_COUNT};
+use crate::share_tracking::{CommitmentRef, ShareKey};
 use crate::types::VotingError;
 
 use super::classify::{Obligation, RoundObligations};
@@ -47,18 +48,22 @@ pub(crate) fn project(
     let mut steps = steps_from_obligations(&obligations.obligations);
     steps.sort_by_key(step_rank);
 
-    let blocking_confirm_share_keys: BTreeSet<(u32, u32, u32)> = obligations
+    let blocking_confirm_share_keys: BTreeSet<ShareKey> = obligations
         .obligations
         .iter()
         .filter_map(|obligation| match obligation {
             Obligation::Confirm {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
                 accepted: false,
                 outcome_unknown: false,
                 ..
-            } => Some((*bundle_index, *proposal_id, *share_index)),
+            } => Some(ShareKey {
+                bundle_index: *bundle_index,
+                commitment: *commitment,
+                share_index: *share_index,
+            }),
             _ => None,
         })
         .collect();
@@ -92,9 +97,13 @@ pub(crate) fn project(
         || steps.iter().any(|step| match step {
             NextStep::ConfirmShare {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
-            } => blocking_confirm_share_keys.contains(&(*bundle_index, *proposal_id, *share_index)),
+            } => blocking_confirm_share_keys.contains(&ShareKey {
+                bundle_index: *bundle_index,
+                commitment: *commitment,
+                share_index: *share_index,
+            }),
             _ => true,
         });
 
@@ -333,7 +342,7 @@ fn steps_from_obligations(obligations: &[Obligation]) -> Vec<NextStep> {
             }),
             Obligation::Deliver {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_indexes,
                 ..
             } => steps.extend(
@@ -341,18 +350,18 @@ fn steps_from_obligations(obligations: &[Obligation]) -> Vec<NextStep> {
                     .iter()
                     .map(|share_index| NextStep::SubmitShares {
                         bundle_index: *bundle_index,
-                        proposal_id: *proposal_id,
+                        commitment: *commitment,
                         share_index: *share_index,
                     }),
             ),
             Obligation::Confirm {
                 bundle_index,
-                proposal_id,
+                commitment,
                 share_index,
                 ..
             } => steps.push(NextStep::ConfirmShare {
                 bundle_index: *bundle_index,
-                proposal_id: *proposal_id,
+                commitment: *commitment,
                 share_index: *share_index,
             }),
             Obligation::Retire { .. } | Obligation::Blocked { .. } => {}
@@ -433,29 +442,29 @@ pub(crate) fn resolve_step<'a>(
             (
                 Obligation::Deliver {
                     bundle_index,
-                    proposal_id,
+                    commitment,
                     share_indexes,
                     ..
                 },
                 NextStep::SubmitShares {
                     bundle_index: b,
-                    proposal_id: p,
+                    commitment: c,
                     share_index,
                 },
-            ) => bundle_index == b && proposal_id == p && share_indexes.contains(share_index),
+            ) => bundle_index == b && commitment == c && share_indexes.contains(share_index),
             (
                 Obligation::Confirm {
                     bundle_index,
-                    proposal_id,
+                    commitment,
                     share_index,
                     ..
                 },
                 NextStep::ConfirmShare {
                     bundle_index: b,
-                    proposal_id: p,
+                    commitment: c,
                     share_index: s,
                 },
-            ) => bundle_index == b && proposal_id == p && share_index == s,
+            ) => bundle_index == b && commitment == c && share_index == s,
             _ => false,
         })
 }
@@ -483,14 +492,33 @@ pub(crate) fn step_rank(step: &NextStep) -> (u32, u32, u32, u32) {
         } => (1, *proposal_id, *bundle_index, 0),
         NextStep::SubmitShares {
             bundle_index,
-            proposal_id,
+            commitment,
             share_index,
-        } => (1, *proposal_id, *bundle_index, *share_index),
+        } => share_rank(1, *bundle_index, *commitment, *share_index),
         NextStep::ConfirmShare {
             bundle_index,
-            proposal_id,
+            commitment,
             share_index,
-        } => (2, *proposal_id, *bundle_index, *share_index),
+        } => share_rank(2, *bundle_index, *commitment, *share_index),
+    }
+}
+
+/// The rank of a share step in `tier`. A vote's shares rank with their
+/// proposal, and a DC's shares rank ahead of every proposal's, by slot.
+fn share_rank(
+    tier: u32,
+    bundle_index: u32,
+    commitment: CommitmentRef,
+    share_index: u32,
+) -> (u32, u32, u32, u32) {
+    match commitment {
+        CommitmentRef::Vote { proposal_id } => (tier, proposal_id, bundle_index, share_index),
+        CommitmentRef::Proxy { dc_slot } => (
+            tier,
+            0,
+            bundle_index,
+            u32::from(dc_slot) * VOTE_COMMITMENT_SHARE_COUNT as u32 + share_index,
+        ),
     }
 }
 
@@ -678,7 +706,7 @@ fn recovered_delegation_work_from_steps(
 
 fn recovered_vote_work_from_steps(
     snapshot: &RoundSnapshot,
-    blocking_confirm_share_keys: &BTreeSet<(u32, u32, u32)>,
+    blocking_confirm_share_keys: &BTreeSet<ShareKey>,
     obligations: &[Obligation],
     steps: &[NextStep],
 ) -> Result<Vec<VoteRecoveryWork>, VotingError> {
@@ -739,7 +767,7 @@ fn recovered_vote_work_from_steps(
             }
             NextStep::SubmitShares {
                 bundle_index,
-                proposal_id,
+                commitment: CommitmentRef::Vote { proposal_id },
                 share_index,
             } => {
                 let Some(Obligation::Deliver {
@@ -758,9 +786,9 @@ fn recovered_vote_work_from_steps(
             }
             NextStep::ConfirmShare {
                 bundle_index,
-                proposal_id,
+                commitment: CommitmentRef::Vote { proposal_id },
                 share_index,
-            } if blocking_confirm_share_keys.contains(&(
+            } if blocking_confirm_share_keys.contains(&ShareKey::vote(
                 bundle_index,
                 proposal_id,
                 share_index,
@@ -782,11 +810,16 @@ fn recovered_vote_work_from_steps(
                 );
             }
             // Listed exhaustively on purpose: a new step must be classified
-            // here rather than silently dropped.
+            // here rather than silently dropped. A DC's share work is proxy
+            // delegation work, not a vote to recover.
             NextStep::Delegate { .. }
             | NextStep::AdvanceDelegation { .. }
             | NextStep::AdvanceImportedDelegation { .. }
             | NextStep::CastVote { .. }
+            | NextStep::SubmitShares {
+                commitment: CommitmentRef::Proxy { .. },
+                ..
+            }
             | NextStep::ConfirmShare { .. } => {}
         }
     }

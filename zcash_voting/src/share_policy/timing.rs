@@ -2,6 +2,31 @@ use crate::types::ShareDelegationRecord;
 
 use super::{ShareTimingPolicy, ShareTrackingSummary};
 
+/// The schedule of a stored helper share, vote or delegation commitment,
+/// which the timing policy reads.
+pub trait ShareSchedule {
+    /// Unix seconds when helpers reveal the share, or 0 for at once.
+    fn submit_at(&self) -> u64;
+    /// Unix seconds when the share was first recorded.
+    fn created_at(&self) -> u64;
+    /// Whether the configured helper quorum was durably observed.
+    fn is_confirmed(&self) -> bool;
+}
+
+impl ShareSchedule for ShareDelegationRecord {
+    fn submit_at(&self) -> u64 {
+        self.submit_at
+    }
+
+    fn created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    fn is_confirmed(&self) -> bool {
+        self.confirmed
+    }
+}
+
 /// Seconds to wait after helper submission time before polling share status.
 pub(crate) const SHARE_STATUS_CHECK_GRACE_SECONDS: u64 = 10;
 /// Minimum seconds before an unconfirmed share is considered overdue.
@@ -70,21 +95,21 @@ pub fn is_last_moment(
 /// Return the time recovery should use as the share's base time.
 ///
 /// Delayed shares use `submit_at`; immediate shares use `created_at`.
-pub fn share_recovery_base_time(share: &ShareDelegationRecord) -> u64 {
-    if share.submit_at > 0 {
-        share.submit_at
+pub fn share_recovery_base_time(share: &(impl ShareSchedule + ?Sized)) -> u64 {
+    if share.submit_at() > 0 {
+        share.submit_at()
     } else {
-        share.created_at
+        share.created_at()
     }
 }
 
 /// Return true once a helper has had enough time to process this share.
 pub(crate) fn is_share_ready_for_status_check(
-    share: &ShareDelegationRecord,
+    share: &(impl ShareSchedule + ?Sized),
     now_seconds: u64,
     policy: ShareTimingPolicy,
 ) -> bool {
-    if share.confirmed {
+    if share.is_confirmed() {
         return false;
     }
     now_seconds >= share_recovery_base_time(share).saturating_add(policy.status_check_grace_seconds)
@@ -95,7 +120,7 @@ pub(crate) fn is_share_ready_for_status_check(
 /// The threshold is one quarter of the remaining vote window from the share's
 /// base time, bounded by the policy's minimum and maximum seconds.
 pub fn overdue_threshold_seconds(
-    share: &ShareDelegationRecord,
+    share: &(impl ShareSchedule + ?Sized),
     vote_end_time_seconds: u64,
     policy: ShareTimingPolicy,
 ) -> u64 {
@@ -112,12 +137,12 @@ pub fn overdue_threshold_seconds(
 
 /// Return true when a pending share should be retried immediately.
 pub fn should_resubmit_share(
-    share: &ShareDelegationRecord,
+    share: &(impl ShareSchedule + ?Sized),
     now_seconds: u64,
     vote_end_time_seconds: u64,
     policy: ShareTimingPolicy,
 ) -> bool {
-    if share.confirmed {
+    if share.is_confirmed() {
         return false;
     }
     let base_time = share_recovery_base_time(share);
@@ -153,8 +178,8 @@ pub(crate) fn is_share_resubmission_window_open(
 /// share must not queue behind an unrelated share whose check is further out.
 /// The returned delay is always at least `min_tracking_delay_seconds`, and
 /// `None` means no unconfirmed share remains — the signal to stop tracking.
-pub(crate) fn next_tracking_delay_seconds(
-    shares: &[ShareDelegationRecord],
+pub(crate) fn next_tracking_delay_seconds<'a, S: ShareSchedule + ?Sized + 'a>(
+    shares: impl IntoIterator<Item = &'a S>,
     now_seconds: u64,
     policy: ShareTimingPolicy,
 ) -> Option<u64> {
@@ -162,7 +187,7 @@ pub(crate) fn next_tracking_delay_seconds(
     let mut has_unconfirmed = false;
     let mut has_ready = false;
 
-    for share in shares.iter().filter(|share| !share.confirmed) {
+    for share in shares.into_iter().filter(|share| !share.is_confirmed()) {
         has_unconfirmed = true;
         let base_time = share_recovery_base_time(share);
         let check_at = base_time.saturating_add(policy.status_check_grace_seconds);

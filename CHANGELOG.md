@@ -35,6 +35,9 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ### Changed
 
+- **Breaking:** Share steps and `ShareKey` name their commitment with
+  `share_tracking::CommitmentRef` in place of `proposal_id`. A vote step's
+  JSON is unchanged.
 - Keep voting with the existing Ironwood V3 format independent of later
   consensus branch IDs. Eligibility uses NU6.3 activation at the stored
   snapshot height, and TX1 retains its fixed V6 / NU6.3 signing profile.

@@ -51,7 +51,7 @@ async fn invalid_status_scores_a_failure_without_blocking_confirmation() {
         report.confirmed,
         vec![ShareKey {
             bundle_index: 0,
-            proposal_id: 1,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
             share_index: 0
         }]
     );
@@ -283,7 +283,7 @@ async fn stalled_status_poll_does_not_starve_a_later_share() {
         report.confirmed,
         vec![ShareKey {
             bundle_index: 0,
-            proposal_id: 1,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
             share_index: 1,
         }]
     );
@@ -346,7 +346,7 @@ async fn one_confirmation_does_not_suppress_under_placement_recovery() {
         vec![ResubmittedShare {
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             server_url: helper(2),
@@ -405,7 +405,7 @@ async fn overdue_share_reaches_an_untried_helper_and_records_it() {
         vec![ResubmittedShare {
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0
             },
             server_url: helper(2),
@@ -990,7 +990,7 @@ async fn failed_recovery_reports_ambiguity_retained_before_the_error() {
         vec![ResubmittedShare {
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             server_url: helper(2),
@@ -1155,7 +1155,7 @@ async fn overdue_recovery_retries_ambiguous_helper_after_untried() {
         vec![ResubmittedShare {
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0
             },
             server_url: helper(2),
@@ -1777,12 +1777,11 @@ async fn cancelled_outcome_unknown_retry_preserves_ambiguous_state() {
     let scope = share::ShareOperationScope::capture(&db);
 
     let report = resubmit_to_next_helper(
-        &db,
-        &scope,
+        &VoteShareJournal::tracking(&db, &scope, ROUND_ID, stored),
         &tracking_params,
         &client,
         &ResubmitRequest {
-            share: &stored,
+            share_wire_json: valid_share_json(),
             configured_urls: &configured,
             definite_acceptance_urls: &[],
             ambiguous_urls: &outcome_unknown_urls,
@@ -1825,12 +1824,11 @@ async fn cancelled_accepted_fallback_preserves_acceptance() {
     let scope = share::ShareOperationScope::capture(&db);
 
     let report = resubmit_to_next_helper(
-        &db,
-        &scope,
+        &VoteShareJournal::tracking(&db, &scope, ROUND_ID, stored),
         &tracking_params,
         &client,
         &ResubmitRequest {
-            share: &stored,
+            share_wire_json: valid_share_json(),
             configured_urls: &configured,
             definite_acceptance_urls: &definite_acceptance_urls,
             ambiguous_urls: &[],
@@ -1886,9 +1884,13 @@ async fn cancellation_aborts_wait_for_live_share_operation() {
     let db =
         db_with_delivery_for_wallet("cancellation-lock-wait", &configured, &[], configured.len());
     let scope = share::ShareOperationScope::capture(&db);
-    let _operation_guard = lock_share_operation(&scope, ROUND_ID, 0, 1, 0)
-        .await
-        .unwrap();
+    let _operation_guard = lock_share_operation(
+        &scope,
+        ROUND_ID,
+        crate::share_tracking::ShareKey::vote(0, 1, 0),
+    )
+    .await
+    .unwrap();
     let transport = Arc::new(MockTransport::default());
     let client = client_with(transport.clone());
     let random = zero_bytes;

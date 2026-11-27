@@ -37,7 +37,7 @@ use crate::{
     share_policy::{
         effective_share_submission_target_count, is_share_ready_for_status_check,
         is_share_resubmission_window_open, next_tracking_delay_seconds, should_resubmit_share,
-        ShareSubmissionPlan, ShareTimingPolicy,
+        ShareSchedule, ShareSubmissionPlan, ShareTimingPolicy,
     },
     types::{ShareDelegationRecord, VotingError},
 };
@@ -60,9 +60,7 @@ const _: () = assert!(SHARE_OPERATION_LOCK_CANCEL_CHECK_MILLISECONDS > 0);
 struct ShareOperationLockKey {
     wallet_id: String,
     round_id: String,
-    bundle_index: u32,
-    proposal_id: u32,
-    share_index: u32,
+    share: ShareKey,
 }
 
 static SHARE_OPERATION_LOCKS: LazyLock<
@@ -72,16 +70,12 @@ static SHARE_OPERATION_LOCKS: LazyLock<
 async fn lock_share_operation(
     scope: &share::ShareOperationScope,
     round_id: &str,
-    bundle_index: u32,
-    proposal_id: u32,
-    share_index: u32,
+    share: ShareKey,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, VotingError> {
     let key = ShareOperationLockKey {
         wallet_id: scope.wallet_id().to_string(),
         round_id: round_id.to_string(),
-        bundle_index,
-        proposal_id,
-        share_index,
+        share,
     };
     let lock = {
         let mut locks = SHARE_OPERATION_LOCKS
@@ -101,18 +95,18 @@ async fn lock_share_operation(
     Ok(lock.lock_owned().await)
 }
 
-async fn lock_share_operation_or_cancel(
+/// Takes the process-wide operation lock of `share`, or returns `None` once
+/// `cancel` fires while waiting for it.
+pub(crate) async fn lock_share_operation_or_cancel(
     scope: &share::ShareOperationScope,
     round_id: &str,
-    bundle_index: u32,
-    proposal_id: u32,
-    share_index: u32,
+    share: ShareKey,
     cancel: &(dyn Fn() -> bool + Send + Sync),
     observations: &crate::ObservationScope,
 ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, VotingError> {
     let wait = observations.stage("helper::share_lock_wait");
     let admission = async {
-        let lock = lock_share_operation(scope, round_id, bundle_index, proposal_id, share_index);
+        let lock = lock_share_operation(scope, round_id, share);
         tokio::pin!(lock);
 
         loop {
@@ -143,23 +137,64 @@ async fn lock_share_operation_or_cancel(
     admission
 }
 
+/// The commitment a helper share belongs to, within its bundle: a vote, or a
+/// delegation commitment (DC) named by its slot, since every DC's shares
+/// reveal into proposal 0.
+///
+/// It serializes as its one field, `proposal_id` or `dc_slot`, so a vote's
+/// step serializes as it did before DCs existed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CommitmentRef {
+    /// The vote commitment for `proposal_id`.
+    Vote {
+        /// The proposal the vote is for.
+        proposal_id: u32,
+    },
+    /// The DC in slot `dc_slot` of the bundle's proxy batch.
+    Proxy {
+        /// The DC's slot, below [`MAX_DC_SLOTS`](crate::proxy::MAX_DC_SLOTS).
+        dc_slot: u8,
+    },
+}
+
+impl CommitmentRef {
+    /// The proposal a vote commitment is for; `None` for a DC.
+    pub const fn proposal_id(&self) -> Option<u32> {
+        match self {
+            Self::Vote { proposal_id } => Some(*proposal_id),
+            Self::Proxy { .. } => None,
+        }
+    }
+}
+
 /// Identifies one helper share within a round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShareKey {
-    /// Index of the committed vote bundle that owns the share.
+    /// Index of the bundle that owns the share.
     pub bundle_index: u32,
-    /// Proposal whose vote commitment contains the share.
-    pub proposal_id: u32,
-    /// Position of the share within that proposal's commitment.
+    /// The commitment within that bundle that contains the share.
+    pub commitment: CommitmentRef,
+    /// Position of the share within that commitment.
     pub share_index: u32,
 }
 
 impl ShareKey {
-    fn of(share: &ShareDelegationRecord) -> Self {
+    /// Share `share_index` of `bundle_index`'s vote for `proposal_id`.
+    pub const fn vote(bundle_index: u32, proposal_id: u32, share_index: u32) -> Self {
         Self {
-            bundle_index: share.bundle_index,
-            proposal_id: share.proposal_id,
-            share_index: share.share_index,
+            bundle_index,
+            commitment: CommitmentRef::Vote { proposal_id },
+            share_index,
+        }
+    }
+
+    /// Share `share_index` of the DC in `bundle_index`'s slot `dc_slot`.
+    pub const fn proxy(bundle_index: u32, dc_slot: u8, share_index: u32) -> Self {
+        Self {
+            bundle_index,
+            commitment: CommitmentRef::Proxy { dc_slot },
+            share_index,
         }
     }
 }
@@ -191,7 +226,7 @@ impl ShareTrackingFlags {
 /// vote window, so with no window there is nothing to measure against, and
 /// guessing would resubmit shares that are merely young.
 pub fn share_tracking_flags(
-    share: &ShareDelegationRecord,
+    share: &(impl ShareSchedule + ?Sized),
     now_seconds: u64,
     vote_end_time_seconds: Option<u64>,
     policy: ShareTimingPolicy,
@@ -509,6 +544,7 @@ mod immediate_designation;
 mod initial_delivery;
 mod post_capacity;
 mod recovery;
+mod tracked_share;
 
 pub(crate) use delivery_plan::{
     load_delivery_plans, prepare_share_delivery_plan, DeliveryPlanRequest,
@@ -523,10 +559,12 @@ pub(crate) use immediate_designation::round_immediate_share;
 pub(crate) use initial_delivery::submit_committed_share_to_helpers;
 #[cfg(test)]
 use initial_delivery::submit_share_to_helpers;
+use initial_delivery::{ShareAttemptJournal, VoteShareJournal};
 use recovery::{
     resubmit_to_next_helper, ResubmissionCandidates, ResubmissionSchedule, ResubmitOutcome,
     ResubmitRequest,
 };
+pub(crate) use tracked_share::{ResendPayload, TrackedShare};
 
 /// Polls and, on quorum, confirms exactly one durable helper share.
 ///
@@ -562,7 +600,7 @@ pub(crate) async fn observe_confirm_pending_share(
     observations.bind_round_id(params.round_id);
     let attributed = observations.attributed(crate::ObservationAttribution {
         bundle_index: Some(params.share.bundle_index),
-        proposal_id: Some(params.share.proposal_id),
+        proposal_id: params.share.commitment.proposal_id(),
         share_index: Some(params.share.share_index),
     });
     let stage = attributed.stage("helper::confirm_pending_share");
@@ -577,64 +615,23 @@ pub(crate) async fn observe_confirm_pending_share(
                 .with_helper_fleet(configured_fleet.urls()),
         );
         let client = &observed_client;
-        let loaded_share = share::get_delegation_for_scope(
-            db,
-            &scope,
-            params.round_id,
-            params.share.bundle_index,
-            params.share.proposal_id,
-            params.share.share_index,
-        )?
-        .ok_or_else(|| VotingError::InvalidInput {
-            message: format!(
-                "helper share not found: round={}, bundle={}, proposal={}, share={}",
-                params.round_id,
-                params.share.bundle_index,
-                params.share.proposal_id,
-                params.share.share_index
-            ),
-        })?;
-
-        let Some(_operation_guard) = lock_share_operation_or_cancel(
-            &scope,
-            params.round_id,
-            params.share.bundle_index,
-            params.share.proposal_id,
-            params.share.share_index,
-            cancel,
-            &client.observation_scope(),
-        )
-        .await?
-        else {
-            return Ok(ShareConfirmationReport {
-                cancelled: true,
-                ..ShareConfirmationReport::default()
-            });
-        };
-
-        let Some(share) = share::get_delegation_for_scope(
-            db,
-            &scope,
-            params.round_id,
-            params.share.bundle_index,
-            params.share.proposal_id,
-            params.share.share_index,
-        )?
-        .filter(|share| share.nullifier == loaded_share.nullifier) else {
-            return Ok(ShareConfirmationReport::default());
-        };
-
-        poll_and_confirm_share(
-            db,
-            &scope,
-            params.round_id,
-            &share,
-            configured_fleet.urls(),
-            client,
-            params.now_seconds,
-            cancel,
-        )
-        .await
+        match params.share.commitment {
+            CommitmentRef::Vote { proposal_id } => {
+                confirm_vote_share(
+                    db,
+                    &scope,
+                    params,
+                    proposal_id,
+                    &configured_fleet,
+                    client,
+                    cancel,
+                )
+                .await
+            }
+            CommitmentRef::Proxy { .. } => Err(VotingError::InvalidInput {
+                message: "this build tracks no delegation commitment shares".to_string(),
+            }),
+        }
     }
     .await;
     let outcome = match &operation_result {
@@ -674,18 +671,166 @@ pub async fn confirm_pending_share_with_report(
     invocation.complete("confirm_pending_share", outcome, operation_result)
 }
 
-async fn poll_and_confirm_share(
+/// [`confirm_pending_share`] for a share of `proposal_id`'s vote commitment.
+async fn confirm_vote_share(
+    db: &VotingDb,
+    scope: &share::ShareOperationScope,
+    params: &ShareConfirmationParams<'_>,
+    proposal_id: u32,
+    configured_fleet: &ConfiguredHelperFleet,
+    client: &HelperClient,
+    cancel: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<ShareConfirmationReport, VotingError> {
+    let key = params.share;
+    confirm_stored_share(
+        scope,
+        params,
+        configured_fleet.urls(),
+        client,
+        cancel,
+        || {
+            share::get_delegation_for_scope(
+                db,
+                scope,
+                params.round_id,
+                key.bundle_index,
+                proposal_id,
+                key.share_index,
+            )
+        },
+        || VotingError::InvalidInput {
+            message: format!(
+                "helper share not found: round={}, bundle={}, proposal={}, share={}",
+                params.round_id, key.bundle_index, proposal_id, key.share_index
+            ),
+        },
+        |share| confirm_vote_share_generation(db, scope, params.round_id, share),
+    )
+    .await
+}
+
+/// The parts of a stored helper share, vote or DC, that confirmation and
+/// tracking read.
+pub(crate) trait StoredShare: ShareSchedule {
+    /// The reveal nullifier helpers report the share's status under.
+    fn reveal_nullifier(&self) -> &[u8];
+    /// The definite acceptances the plan aims for.
+    fn target_count(&self) -> u32;
+    /// Helpers that definitely accepted the share.
+    fn sent_to_urls(&self) -> &[String];
+    /// Helpers whose acceptance is unknown.
+    fn ambiguous_urls(&self) -> &[String];
+    /// Helpers reserved before a POST whose outcome is not yet recorded.
+    fn attempting_urls(&self) -> &[String];
+}
+
+impl StoredShare for ShareDelegationRecord {
+    fn reveal_nullifier(&self) -> &[u8] {
+        &self.nullifier
+    }
+
+    fn target_count(&self) -> u32 {
+        self.target_count
+    }
+
+    fn sent_to_urls(&self) -> &[String] {
+        &self.sent_to_urls
+    }
+
+    fn ambiguous_urls(&self) -> &[String] {
+        &self.ambiguous_urls
+    }
+
+    fn attempting_urls(&self) -> &[String] {
+        &self.attempting_urls
+    }
+}
+
+/// [`confirm_pending_share`] for one stored share, vote or DC.
+///
+/// Loads the share with `load`, failing with `not_found` when it is absent,
+/// and waits for its operation lock. It then reloads the share and returns
+/// an unconfirmed report when the share is gone or has a new nullifier.
+/// Otherwise see [`poll_and_confirm_share`], with `mark_confirmed` called on
+/// the reloaded share.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn confirm_stored_share<S: StoredShare>(
+    scope: &share::ShareOperationScope,
+    params: &ShareConfirmationParams<'_>,
+    configured_urls: &[String],
+    client: &HelperClient,
+    cancel: &(dyn Fn() -> bool + Send + Sync),
+    load: impl Fn() -> Result<Option<S>, VotingError>,
+    not_found: impl FnOnce() -> VotingError,
+    mark_confirmed: impl FnOnce(&S) -> Result<bool, VotingError>,
+) -> Result<ShareConfirmationReport, VotingError> {
+    let loaded_share = load()?.ok_or_else(not_found)?;
+
+    let Some(_operation_guard) = lock_share_operation_or_cancel(
+        scope,
+        params.round_id,
+        params.share,
+        cancel,
+        &client.observation_scope(),
+    )
+    .await?
+    else {
+        return Ok(ShareConfirmationReport {
+            cancelled: true,
+            ..ShareConfirmationReport::default()
+        });
+    };
+
+    let Some(share) =
+        load()?.filter(|share| share.reveal_nullifier() == loaded_share.reveal_nullifier())
+    else {
+        return Ok(ShareConfirmationReport::default());
+    };
+
+    poll_and_confirm_share(
+        params.round_id,
+        &share,
+        configured_urls,
+        client,
+        params.now_seconds,
+        cancel,
+        || mark_confirmed(&share),
+    )
+    .await
+}
+
+/// Durably confirms the vote share generation `share` was loaded at, and
+/// returns `false` when the stored share was replaced or deleted since.
+fn confirm_vote_share_generation(
     db: &VotingDb,
     scope: &share::ShareOperationScope,
     round_id: &str,
     share: &ShareDelegationRecord,
+) -> Result<bool, VotingError> {
+    share::confirm_for_generation(
+        db,
+        round_id,
+        share.bundle_index,
+        share.proposal_id,
+        share.share_index,
+        share::ShareGeneration::new(scope, &share.nullifier),
+    )
+}
+
+/// Returns a confirmed report at once when `share` is already confirmed.
+/// Otherwise polls the configured fleet for its reveal and, on the quorum,
+/// calls `mark_confirmed`, whose result is the report's `confirmed`.
+async fn poll_and_confirm_share(
+    round_id: &str,
+    share: &impl StoredShare,
     configured_urls: &[String],
     client: &HelperClient,
     now_seconds: u64,
     cancel: &(dyn Fn() -> bool + Send + Sync),
+    mark_confirmed: impl FnOnce() -> Result<bool, VotingError>,
 ) -> Result<ShareConfirmationReport, VotingError> {
     let observations = client.observation_scope();
-    if share.confirmed {
+    if share.is_confirmed() {
         observations
             .stage("helper::confirmation_reused")
             .finish(crate::ObservationOutcome::Reused, None);
@@ -695,7 +840,7 @@ async fn poll_and_confirm_share(
         });
     }
 
-    let share_id = hex::encode(&share.nullifier);
+    let share_id = hex::encode(share.reveal_nullifier());
     let quorum = observations.stage("helper::confirmation_quorum");
     let observed_client = client.observing(quorum.scope());
     let polled = poll_share_helpers(
@@ -728,16 +873,8 @@ async fn poll_and_confirm_share(
             Ok(ShareConfirmationReport::default())
         }
         ShareStatusOutcome::ConfiguredHelperQuorumObserved => {
-            let generation = share::ShareGeneration::new(scope, &share.nullifier);
             let persistence = observations.stage("helper::persist_confirmation");
-            let confirmed = share::confirm_for_generation(
-                db,
-                round_id,
-                share.bundle_index,
-                share.proposal_id,
-                share.share_index,
-                generation,
-            );
+            let confirmed = mark_confirmed();
             persistence.finish(
                 match &confirmed {
                     Ok(true) => crate::ObservationOutcome::Succeeded,
@@ -931,235 +1068,27 @@ async fn walk_pending_shares(
     // Validate the complete trust boundary before reading or mutating storage
     // and before dispatching any helper request.
     let configured_fleet = ConfiguredHelperFleet::new(params.configured_server_urls)?;
-    let configured_urls = configured_fleet.urls();
     let observed_client = client.observing(
         &client
             .observation_scope()
-            .with_helper_fleet(configured_urls),
+            .with_helper_fleet(configured_fleet.urls()),
     );
-    let client = &observed_client;
+    let pass = TrackingPass {
+        scope,
+        params,
+        configured_fleet: &configured_fleet,
+        client: &observed_client,
+        cancel,
+        elapsed_seconds,
+    };
 
-    let pending_shares = share::unconfirmed_for_scope(db, &scope, params.round_id)?;
+    let pending_shares = share::unconfirmed_for_scope(db, scope, params.round_id)?;
     report.unconfirmed_at_entry = Some(u32::try_from(pending_shares.len()).unwrap_or(u32::MAX));
 
     for loaded_share in pending_shares {
-        let observations = client
-            .observation_scope()
-            .attributed(crate::ObservationAttribution {
-                bundle_index: Some(loaded_share.bundle_index),
-                proposal_id: Some(loaded_share.proposal_id),
-                share_index: Some(loaded_share.share_index),
-            });
-        let observed_client = client.observing(&observations);
-        let client = &observed_client;
-        if cancel() {
-            report.cancelled = true;
+        let tracked = VoteShareJournal::tracking(db, scope, params.round_id, loaded_share);
+        if !track_share(&pass, &tracked, report).await? {
             break;
-        }
-        let Some(_operation_guard) = lock_share_operation_or_cancel(
-            &scope,
-            params.round_id,
-            loaded_share.bundle_index,
-            loaded_share.proposal_id,
-            loaded_share.share_index,
-            cancel,
-            &client.observation_scope(),
-        )
-        .await?
-        else {
-            report.cancelled = true;
-            break;
-        };
-        let Some(share) = share::get_delegation_for_scope(
-            db,
-            &scope,
-            params.round_id,
-            loaded_share.bundle_index,
-            loaded_share.proposal_id,
-            loaded_share.share_index,
-        )?
-        .filter(|share| !share.confirmed && share.nullifier == loaded_share.nullifier) else {
-            continue;
-        };
-
-        // Only configured helpers count toward current placement or polling.
-        let configured_definite_acceptance_urls = share
-            .sent_to_urls
-            .iter()
-            .filter(|url| configured_fleet.contains(url))
-            .cloned()
-            .collect::<Vec<_>>();
-        // An `attempting` marker left by an interrupted process is an unknown
-        // POST outcome. Keep it separate from explicit ambiguity so recovery
-        // can reconcile the crash marker even without vote-end timing.
-        let configured_outcome_unknown_urls = share
-            .ambiguous_urls
-            .iter()
-            .filter(|url| configured_fleet.contains(url))
-            .cloned()
-            .collect::<Vec<_>>();
-        let configured_interrupted_attempt_urls = share
-            .attempting_urls
-            .iter()
-            .filter(|url| configured_fleet.contains(url))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut delivery_state = share::ShareDeliveryState::from_url_lists(
-            &configured_definite_acceptance_urls,
-            &configured_outcome_unknown_urls,
-            &configured_interrupted_attempt_urls,
-        )?;
-        // Network failures that are definitely known not to have placed a
-        // share are not durable state, but they must still be remembered for
-        // this pass so filling a multi-helper deficit never contacts the same
-        // failing endpoint again.
-        let mut attempted_urls_this_pass = Vec::new();
-        let target_count =
-            effective_share_submission_target_count(share.target_count, configured_fleet.len());
-        let mut current_time = params.now_seconds.saturating_add(elapsed_seconds());
-        let mut flags = share_tracking_flags(
-            &share,
-            current_time,
-            params.vote_end_time_seconds,
-            params.policy,
-        );
-        if flags.is_idle()
-            && delivery_state.accepted_urls().len() >= target_count
-            && configured_interrupted_attempt_urls.is_empty()
-        {
-            continue;
-        }
-
-        if flags.ready_for_status_check {
-            let confirmation = poll_and_confirm_share(
-                db,
-                &scope,
-                params.round_id,
-                &share,
-                configured_urls,
-                client,
-                current_time,
-                cancel,
-            )
-            .await?;
-            if confirmation.cancelled {
-                report.cancelled = true;
-                break;
-            }
-            if confirmation.confirmed {
-                report.confirmed.push(ShareKey::of(&share));
-                continue;
-            }
-        }
-
-        // A status walk can consume enough time to cross an overdue or cutoff
-        // boundary. Refresh before making any recovery decision.
-        current_time = params.now_seconds.saturating_add(elapsed_seconds());
-        flags = share_tracking_flags(
-            &share,
-            current_time,
-            params.vote_end_time_seconds,
-            params.policy,
-        );
-
-        let resubmission_window_open = params.vote_end_time_seconds.is_none_or(|vote_end| {
-            is_share_resubmission_window_open(current_time, vote_end, params.policy)
-        });
-        let under_placed = delivery_state.accepted_urls().len() < target_count;
-        let reconcile_interrupted_only = !flags.overdue_for_retry
-            && !under_placed
-            && !configured_interrupted_attempt_urls.is_empty();
-        if resubmission_window_open
-            && (flags.overdue_for_retry
-                || under_placed
-                || !configured_interrupted_attempt_urls.is_empty())
-        {
-            let schedule = if flags.overdue_for_retry {
-                ResubmissionSchedule::Immediate
-            } else {
-                ResubmissionSchedule::PreserveScheduledSubmitAt(share.submit_at)
-            };
-            loop {
-                let resubmission = resubmit_to_next_helper(
-                    db,
-                    &scope,
-                    params,
-                    client,
-                    &ResubmitRequest {
-                        share: &share,
-                        configured_urls,
-                        definite_acceptance_urls: delivery_state.accepted_urls(),
-                        ambiguous_urls: &configured_outcome_unknown_urls,
-                        interrupted_attempt_urls: &configured_interrupted_attempt_urls,
-                        target_count,
-                        schedule,
-                        candidates: if reconcile_interrupted_only {
-                            ResubmissionCandidates::InterruptedOnly
-                        } else {
-                            ResubmissionCandidates::FullRecoveryOrder
-                        },
-                    },
-                    &mut attempted_urls_this_pass,
-                    cancel,
-                    elapsed_seconds,
-                )
-                .await;
-                let resubmission = match resubmission {
-                    Ok(resubmission) => resubmission,
-                    Err(failure) => {
-                        record_ambiguous_recovery_effects(
-                            &mut delivery_state,
-                            report,
-                            &share,
-                            failure.outcome_unknown_urls,
-                        )?;
-                        return Err(failure.error);
-                    }
-                };
-                if matches!(resubmission.outcome, ResubmitOutcome::StaleGeneration) {
-                    break;
-                }
-                record_ambiguous_recovery_effects(
-                    &mut delivery_state,
-                    report,
-                    &share,
-                    resubmission.outcome_unknown_urls,
-                )?;
-                match resubmission.outcome {
-                    ResubmitOutcome::DefinitelyAcceptedByHelper(server_url) => {
-                        // An overdue re-POST can convert an outcome-unknown
-                        // helper into a definite placement.
-                        let newly_definite_placement =
-                            !delivery_state.accepted_urls().contains(&server_url);
-                        delivery_state.mark_accepted(&server_url)?;
-                        report.resubmitted.push(ResubmittedShare {
-                            share: ShareKey::of(&share),
-                            server_url,
-                        });
-                        if !reconcile_interrupted_only
-                            && (delivery_state.accepted_urls().len() >= target_count
-                                || !newly_definite_placement)
-                        {
-                            break;
-                        }
-                    }
-                    ResubmitOutcome::Unrecoverable => {
-                        report.unrecoverable.push(ShareKey::of(&share));
-                        break;
-                    }
-                    ResubmitOutcome::AwaitingVcPosition
-                    | ResubmitOutcome::StaleGeneration
-                    | ResubmitOutcome::NoDefiniteAcceptanceObserved
-                    | ResubmitOutcome::CutoffReached => break,
-                    ResubmitOutcome::Cancelled => {
-                        report.cancelled = true;
-                        break;
-                    }
-                }
-            }
-            if report.cancelled {
-                break;
-            }
         }
     }
 
@@ -1167,17 +1096,258 @@ async fn walk_pending_shares(
     // during this pass do not remain in the next-delay calculation.
     let current_time = params.now_seconds.saturating_add(elapsed_seconds());
     report.next_delay_seconds = next_tracking_delay_seconds(
-        &share::unconfirmed_for_scope(db, &scope, params.round_id)?,
+        &share::unconfirmed_for_scope(db, scope, params.round_id)?,
         current_time,
         params.policy,
     );
     Ok(())
 }
 
+/// What every share of one tracking pass is walked with.
+#[derive(Clone, Copy)]
+struct TrackingPass<'a> {
+    scope: &'a share::ShareOperationScope,
+    params: &'a ShareTrackingParams<'a>,
+    /// The configured fleet, validated before the walk.
+    configured_fleet: &'a ConfiguredHelperFleet,
+    client: &'a HelperClient,
+    cancel: &'a (dyn Fn() -> bool + Send + Sync),
+    elapsed_seconds: &'a (dyn Fn() -> u64 + Send + Sync),
+}
+
+/// One share's turn in a tracking pass, as [`track_pending_shares`]
+/// describes it, vote or DC alike. Returns `false`, with the report marked
+/// cancelled, once `cancel` stops the pass.
+async fn track_share<S: TrackedShare>(
+    pass: &TrackingPass<'_>,
+    tracked: &S,
+    report: &mut ShareTrackingReport,
+) -> Result<bool, VotingError> {
+    let TrackingPass {
+        scope,
+        params,
+        configured_fleet,
+        cancel,
+        elapsed_seconds,
+        ..
+    } = *pass;
+    let configured_urls = configured_fleet.urls();
+    let key = tracked.share();
+    let observations = pass
+        .client
+        .observation_scope()
+        .attributed(crate::ObservationAttribution {
+            bundle_index: Some(key.bundle_index),
+            proposal_id: key.commitment.proposal_id(),
+            share_index: Some(key.share_index),
+        });
+    let observed_client = pass.client.observing(&observations);
+    let client = &observed_client;
+    if cancel() {
+        report.cancelled = true;
+        return Ok(false);
+    }
+    let Some(_operation_guard) = lock_share_operation_or_cancel(
+        scope,
+        params.round_id,
+        key,
+        cancel,
+        &client.observation_scope(),
+    )
+    .await?
+    else {
+        report.cancelled = true;
+        return Ok(false);
+    };
+    let Some(share) = tracked.reload()?.filter(|share| !share.is_confirmed()) else {
+        return Ok(true);
+    };
+
+    // Only configured helpers count toward current placement or polling.
+    let configured_only = |urls: &[String]| {
+        urls.iter()
+            .filter(|url| configured_fleet.contains(url))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let configured_definite_acceptance_urls = configured_only(share.sent_to_urls());
+    // An `attempting` marker left by an interrupted process is an unknown
+    // POST outcome. Keep it separate from explicit ambiguity so recovery
+    // can reconcile the crash marker even without vote-end timing.
+    let configured_outcome_unknown_urls = configured_only(share.ambiguous_urls());
+    let configured_interrupted_attempt_urls = configured_only(share.attempting_urls());
+    let mut delivery_state = share::ShareDeliveryState::from_url_lists(
+        &configured_definite_acceptance_urls,
+        &configured_outcome_unknown_urls,
+        &configured_interrupted_attempt_urls,
+    )?;
+    // Network failures that are definitely known not to have placed a
+    // share are not durable state, but they must still be remembered for
+    // this pass so filling a multi-helper deficit never contacts the same
+    // failing endpoint again.
+    let mut attempted_urls_this_pass = Vec::new();
+    let target_count =
+        effective_share_submission_target_count(share.target_count(), configured_fleet.len());
+    let mut current_time = params.now_seconds.saturating_add(elapsed_seconds());
+    let mut flags = share_tracking_flags(
+        &share,
+        current_time,
+        params.vote_end_time_seconds,
+        params.policy,
+    );
+    if flags.is_idle()
+        && delivery_state.accepted_urls().len() >= target_count
+        && configured_interrupted_attempt_urls.is_empty()
+    {
+        return Ok(true);
+    }
+
+    if flags.ready_for_status_check {
+        let confirmation = poll_and_confirm_share(
+            params.round_id,
+            &share,
+            configured_urls,
+            client,
+            current_time,
+            cancel,
+            || tracked.mark_confirmed(),
+        )
+        .await?;
+        if confirmation.cancelled {
+            report.cancelled = true;
+            return Ok(false);
+        }
+        if confirmation.confirmed {
+            report.confirmed.push(key);
+            return Ok(true);
+        }
+    }
+
+    // A status walk can consume enough time to cross an overdue or cutoff
+    // boundary. Refresh before making any recovery decision.
+    current_time = params.now_seconds.saturating_add(elapsed_seconds());
+    flags = share_tracking_flags(
+        &share,
+        current_time,
+        params.vote_end_time_seconds,
+        params.policy,
+    );
+
+    let resubmission_window_open = params.vote_end_time_seconds.is_none_or(|vote_end| {
+        is_share_resubmission_window_open(current_time, vote_end, params.policy)
+    });
+    let under_placed = delivery_state.accepted_urls().len() < target_count;
+    let reconcile_interrupted_only = !flags.overdue_for_retry
+        && !under_placed
+        && !configured_interrupted_attempt_urls.is_empty();
+    if !(resubmission_window_open
+        && (flags.overdue_for_retry
+            || under_placed
+            || !configured_interrupted_attempt_urls.is_empty()))
+    {
+        return Ok(true);
+    }
+    let schedule = if flags.overdue_for_retry {
+        ResubmissionSchedule::Immediate
+    } else {
+        ResubmissionSchedule::PreserveScheduledSubmitAt(share.submit_at())
+    };
+    let share_wire_json =
+        match tracked.resend_payload(schedule.submit_at(), &client.observation_scope())? {
+            ResendPayload::Ready(share_wire_json) => share_wire_json,
+            ResendPayload::AwaitingVcPosition => return Ok(true),
+            ResendPayload::Unrecoverable => {
+                report.unrecoverable.push(key);
+                return Ok(true);
+            }
+            // The same generation makes the mismatch persistent; a replaced
+            // or deleted share is left to the operation that changed it.
+            ResendPayload::NullifierMismatch => {
+                if tracked.stored_confirmation()?.is_some() {
+                    report.unrecoverable.push(key);
+                }
+                return Ok(true);
+            }
+        };
+    loop {
+        let resubmission = resubmit_to_next_helper(
+            tracked,
+            params,
+            client,
+            &ResubmitRequest {
+                share_wire_json: &share_wire_json,
+                configured_urls,
+                definite_acceptance_urls: delivery_state.accepted_urls(),
+                ambiguous_urls: &configured_outcome_unknown_urls,
+                interrupted_attempt_urls: &configured_interrupted_attempt_urls,
+                target_count,
+                schedule,
+                candidates: if reconcile_interrupted_only {
+                    ResubmissionCandidates::InterruptedOnly
+                } else {
+                    ResubmissionCandidates::FullRecoveryOrder
+                },
+            },
+            &mut attempted_urls_this_pass,
+            cancel,
+            elapsed_seconds,
+        )
+        .await;
+        let resubmission = match resubmission {
+            Ok(resubmission) => resubmission,
+            Err(failure) => {
+                record_ambiguous_recovery_effects(
+                    &mut delivery_state,
+                    report,
+                    key,
+                    failure.outcome_unknown_urls,
+                )?;
+                return Err(failure.error);
+            }
+        };
+        if matches!(resubmission.outcome, ResubmitOutcome::StaleGeneration) {
+            break;
+        }
+        record_ambiguous_recovery_effects(
+            &mut delivery_state,
+            report,
+            key,
+            resubmission.outcome_unknown_urls,
+        )?;
+        match resubmission.outcome {
+            ResubmitOutcome::DefinitelyAcceptedByHelper(server_url) => {
+                // An overdue re-POST can convert an outcome-unknown
+                // helper into a definite placement.
+                let newly_definite_placement =
+                    !delivery_state.accepted_urls().contains(&server_url);
+                delivery_state.mark_accepted(&server_url)?;
+                report.resubmitted.push(ResubmittedShare {
+                    share: key,
+                    server_url,
+                });
+                if !reconcile_interrupted_only
+                    && (delivery_state.accepted_urls().len() >= target_count
+                        || !newly_definite_placement)
+                {
+                    break;
+                }
+            }
+            ResubmitOutcome::StaleGeneration
+            | ResubmitOutcome::NoDefiniteAcceptanceObserved
+            | ResubmitOutcome::CutoffReached => break,
+            ResubmitOutcome::Cancelled => {
+                report.cancelled = true;
+                break;
+            }
+        }
+    }
+    Ok(!report.cancelled)
+}
+
 fn record_ambiguous_recovery_effects(
     delivery_state: &mut share::ShareDeliveryState,
     report: &mut ShareTrackingReport,
-    recovered_share: &ShareDelegationRecord,
+    recovered_share: ShareKey,
     outcome_unknown_urls: Vec<String>,
 ) -> Result<(), VotingError> {
     for server_url in outcome_unknown_urls {
@@ -1185,7 +1355,7 @@ fn record_ambiguous_recovery_effects(
         delivery_state.mark_outcome_unknown(&server_url)?;
         if newly_outcome_unknown {
             report.ambiguous.push(ResubmittedShare {
-                share: ShareKey::of(recovered_share),
+                share: recovered_share,
                 server_url,
             });
         }

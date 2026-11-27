@@ -52,7 +52,9 @@ pub(crate) async fn observe_helper_http<F: Future>(
     if !observations.is_enabled() {
         return future.await;
     }
-    let mut future = std::pin::pin!(future);
+    // tokio::pin!, not std::pin::pin!: std's expands to `super let`, which
+    // flutter_rust_bridge_codegen's parser rejects in Vizor's bindings build.
+    tokio::pin!(future);
     let mut previous: Option<Arc<RequestWake>> = None;
     let mut suspended: Option<ObservationStage> = None;
     HTTP_SCOPE

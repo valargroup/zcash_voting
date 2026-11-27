@@ -18,6 +18,7 @@ use zcash_voting::{
     delegate::DelegationProgress,
     round_drive::{RoundDriveEvent, RoundDriveReporter},
     session::NextStep,
+    share_tracking::CommitmentRef,
     vote::VoteCommitStage,
     RoundStepProgress,
 };
@@ -79,12 +80,12 @@ impl CrashReporter {
             }
             | NextStep::SubmitShares {
                 bundle_index,
-                proposal_id,
+                commitment: CommitmentRef::Vote { proposal_id },
                 ..
             }
             | NextStep::ConfirmShare {
                 bundle_index,
-                proposal_id,
+                commitment: CommitmentRef::Vote { proposal_id },
                 ..
             } => {
                 if *proposal_id != self.target.proposal_id {
