@@ -497,7 +497,8 @@ exactly as before
   spends the dead VAN even if a batch was dispatched after the cast was
   planned (`a_fully_delegated_van_proves_no_vote`).
 - End to end, a landed batch that took the bundle's whole weight leaves a run
-  that delivers the DC's shares and stops with `NoWorkLeft`, before and after
+  that delivers the DC's shares and stops with `BackgroundShareWorkOnly`,
+  leaving their reveals to background tracking, before and after
   the ballot is recorded, with no vote POST and no vote share sent; a kept
   remainder plans its cast from the answers recorded before the commit once
   the batch lands, and the planner still owes the ballot for kept weight
