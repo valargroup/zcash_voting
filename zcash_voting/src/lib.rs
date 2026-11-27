@@ -51,6 +51,7 @@ pub use observability::{
     ObservabilityOptions, ObservationAttribution, ObservationOutcome, ObservationRecord,
     ObservationSummary, OperationObservability, OperationReport,
 };
+pub mod ballot;
 pub mod delegate_and_vote_batch;
 pub mod phases;
 pub mod pir;

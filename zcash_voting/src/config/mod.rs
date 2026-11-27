@@ -68,7 +68,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    round_auth::{RoundAuthPayloadV2, ROUND_AUTH_VERSION_V2},
+    round_auth::{RoundAuthPayloadV2, RoundAuthPayloadV3, ROUND_AUTH_VERSION_V2},
     types::validate_vote_round_id_hex,
 };
 
@@ -211,6 +211,15 @@ pub struct ResolvedStaticVotingConfig {
     pub dynamic_config_urls: Vec<String>,
     /// `static_config_version` of the document this was resolved from.
     pub static_config_version: u32,
+    /// Whether every round must carry a valid ballot attestation.
+    ///
+    /// Read from the hash-pinned static config, so the dynamic-config host
+    /// cannot clear it: when set, a round whose entry lacks a valid
+    /// `ballot_attestation` is skipped rather than authenticated without one.
+    /// Defaults to `false` for static configs, and for summaries persisted by
+    /// earlier versions, that predate the field.
+    #[serde(default)]
+    pub require_ballot_attestation: bool,
     trusted_keys: Vec<TrustedKey>,
 }
 
@@ -235,6 +244,13 @@ pub struct AuthenticatedRound {
     pub round_id: String,
     #[serde(with = "base64_bytes")]
     pub ea_pk: Vec<u8>,
+    /// Lowercase-hex [`crate::ballot::BallotDigest`] attested for this round,
+    /// or `None` when its config entry carries no ballot attestation.
+    ///
+    /// Check served ballot content against it with
+    /// [`ResolvedVotingConfig::authenticate_ballot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ballot_digest: Option<String>,
 }
 
 impl ResolvedVotingConfig {
@@ -443,6 +459,7 @@ pub fn resolve_static_voting_config(
         dynamic_config_url: dynamic_config_urls[0].clone(),
         dynamic_config_urls,
         static_config_version: static_config.static_config_version,
+        require_ballot_attestation: static_config.require_ballot_attestation,
         trusted_keys: static_config.trusted_keys,
     })
 }
@@ -468,6 +485,7 @@ pub fn resolve_dynamic_voting_config(
         &dynamic_config.rounds,
         &resolved_static.trusted_keys,
         dynamic_config.pir_layout,
+        resolved_static.require_ballot_attestation,
     );
 
     let authenticated_count = authenticated_rounds.authenticated_rounds.len();
@@ -861,6 +879,9 @@ struct WireStaticVotingConfig {
     #[serde(default)]
     dynamic_config_urls: Option<Vec<String>>,
     trusted_keys: Vec<TrustedKey>,
+    /// See [`ResolvedStaticVotingConfig::require_ballot_attestation`].
+    #[serde(default)]
+    require_ballot_attestation: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -887,6 +908,21 @@ struct RoundEntry {
     auth_version: u32,
     #[serde(with = "base64_bytes")]
     ea_pk: Vec<u8>,
+    signatures: Vec<RoundSignature>,
+    /// Signatures over [`RoundAuthPayloadV3`], binding the round's ballot.
+    ///
+    /// Optional and additive: deployed wallets ignore the field and verify
+    /// `signatures` as before. Kept as raw JSON and decoded per round in
+    /// [`verify_round_entry`], so one malformed attestation skips only its own
+    /// round instead of failing the whole dynamic config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ballot_attestation: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+struct BallotAttestation {
+    /// Lowercase-hex ballot digest.
+    ballot_digest: String,
     signatures: Vec<RoundSignature>,
 }
 
@@ -1070,18 +1106,18 @@ fn authenticate_dynamic_rounds(
     rounds: &BTreeMap<String, RoundEntry>,
     trusted_keys: &[TrustedKey],
     pir_layout: PirLayout,
+    require_ballot_attestation: bool,
 ) -> AuthenticatedRounds {
     let mut authenticated_rounds = Vec::new();
     let mut skipped_round_ids = Vec::new();
     for (round_id, entry) in rounds {
-        if !verify_round_entry(round_id, entry, trusted_keys, pir_layout) {
-            skipped_round_ids.push(round_id.clone());
-            continue;
+        match verify_round_entry(round_id, entry, trusted_keys, pir_layout) {
+            Some(round) if require_ballot_attestation && round.ballot_digest.is_none() => {
+                skipped_round_ids.push(round_id.clone())
+            }
+            Some(round) => authenticated_rounds.push(round),
+            None => skipped_round_ids.push(round_id.clone()),
         }
-        authenticated_rounds.push(AuthenticatedRound {
-            round_id: round_id.clone(),
-            ea_pk: entry.ea_pk.clone(),
-        });
     }
     AuthenticatedRounds {
         authenticated_rounds,
@@ -1089,32 +1125,60 @@ fn authenticate_dynamic_rounds(
     }
 }
 
+/// Authenticates one round entry, or returns `None` to skip it.
+///
+/// The v2 signatures must verify. A `ballot_attestation`, when present, must
+/// also verify; an entry whose attestation is malformed or untrusted is
+/// skipped rather than accepted without its ballot binding.
 fn verify_round_entry(
     round_id: &str,
     entry: &RoundEntry,
     trusted_keys: &[TrustedKey],
     pir_layout: PirLayout,
-) -> bool {
-    if entry.auth_version != ROUND_AUTH_VERSION_V2
-        || entry.ea_pk.len() != 32
-        || entry.signatures.is_empty()
-    {
-        return false;
+) -> Option<AuthenticatedRound> {
+    if entry.auth_version != ROUND_AUTH_VERSION_V2 {
+        return None;
     }
     // Round keys are hex-validated during dynamic-config validation, but decode
     // defensively: an undecodable round id can never authenticate.
-    let Ok(round_id_bytes) = hex::decode(round_id) else {
-        return false;
-    };
-    let Ok(round_id_bytes) = <[u8; 32]>::try_from(round_id_bytes.as_slice()) else {
-        return false;
-    };
-    let Ok(ea_pk) = <[u8; 32]>::try_from(entry.ea_pk.as_slice()) else {
-        return false;
-    };
-    let payload = RoundAuthPayloadV2::new(round_id_bytes, ea_pk, pir_layout).to_bytes();
+    let round_id_bytes = <[u8; 32]>::try_from(hex::decode(round_id).ok()?.as_slice()).ok()?;
+    let ea_pk = <[u8; 32]>::try_from(entry.ea_pk.as_slice()).ok()?;
 
-    for signature in &entry.signatures {
+    let round_payload = RoundAuthPayloadV2::new(round_id_bytes, ea_pk, pir_layout).to_bytes();
+    if !any_trusted_signature(&round_payload, &entry.signatures, trusted_keys) {
+        return None;
+    }
+
+    let ballot_digest = match &entry.ballot_attestation {
+        None => None,
+        Some(raw) => {
+            let attestation: BallotAttestation = serde_json::from_value(raw.clone()).ok()?;
+            validate_lowercase_hex_32(&attestation.ballot_digest, "ballot_digest").ok()?;
+            let digest =
+                <[u8; 32]>::try_from(hex::decode(&attestation.ballot_digest).ok()?).ok()?;
+            let ballot_payload =
+                RoundAuthPayloadV3::new(round_id_bytes, ea_pk, pir_layout, digest).to_bytes();
+            if !any_trusted_signature(&ballot_payload, &attestation.signatures, trusted_keys) {
+                return None;
+            }
+            Some(attestation.ballot_digest.clone())
+        }
+    };
+
+    Some(AuthenticatedRound {
+        round_id: round_id.to_string(),
+        ea_pk: entry.ea_pk.clone(),
+        ballot_digest,
+    })
+}
+
+/// True when at least one signature verifies `payload` under a trusted key.
+fn any_trusted_signature(
+    payload: &[u8],
+    signatures: &[RoundSignature],
+    trusted_keys: &[TrustedKey],
+) -> bool {
+    for signature in signatures {
         let Some(key) = trusted_keys
             .iter()
             .find(|key| key.key_id == signature.key_id)
@@ -1135,7 +1199,7 @@ fn verify_round_entry(
             continue;
         };
         let sig = Signature::from_bytes(&sig_bytes);
-        if verifying_key.verify(&payload, &sig).is_ok() {
+        if verifying_key.verify(payload, &sig).is_ok() {
             return true;
         }
     }
@@ -1403,6 +1467,7 @@ mod tests {
             vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk: vec![7u8; 32],
+                ballot_digest: None,
             }]
         );
         assert!(resolved.skipped_round_ids.is_empty());
@@ -1668,6 +1733,7 @@ mod tests {
             vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk: vec![7u8; 32],
+                ballot_digest: None,
             }]
         );
         assert!(resolved.skipped_round_ids.is_empty());
@@ -1725,6 +1791,7 @@ mod tests {
             vec![AuthenticatedRound {
                 round_id: UI_ROUND_ID.to_string(),
                 ea_pk: BASE64.decode(UI_EA_PK).unwrap(),
+                ballot_digest: None,
             }]
         );
         assert!(resolved.skipped_round_ids.is_empty());
@@ -1774,6 +1841,7 @@ mod tests {
             vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk: vec![7u8; 32],
+                ballot_digest: None,
             }]
         );
         assert_eq!(resolved.skipped_round_ids, vec![ROUND_ID_2.to_string()]);
@@ -1869,6 +1937,7 @@ mod tests {
             vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk: vec![7u8; 32],
+                ballot_digest: None,
             }]
         );
         assert_eq!(resolved.skipped_round_ids, vec![ROUND_ID_2.to_string()]);
@@ -1903,6 +1972,7 @@ mod tests {
             authenticated_rounds: vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk: vec![7u8; 32],
+                ballot_digest: None,
             }],
             skipped_round_ids: vec![ROUND_ID_2.to_string()],
             conditions: vec![],
@@ -1940,6 +2010,7 @@ mod tests {
             authenticated_rounds: vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk,
+                ballot_digest: None,
             }],
             skipped_round_ids: vec![],
             conditions: vec![],
@@ -2036,6 +2107,7 @@ mod tests {
             vec![AuthenticatedRound {
                 round_id: ROUND_ID.to_string(),
                 ea_pk: vec![7u8; 32],
+                ballot_digest: None,
             }]
         );
     }

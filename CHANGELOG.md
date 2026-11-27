@@ -8,6 +8,34 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 
 ### Added
 
+- Round entries in the dynamic voting config can carry a `ballot_attestation`
+  that binds the round's displayed content (round title, description and
+  discussion link; each proposal's text, ZIP number, forum link, and options)
+  to the trusted config keys. See `docs/ballot_authentication.md` for the
+  canonical encoding and `zcash_voting/test-vectors/ballot_digest_v1.json` for
+  cross-language vectors.
+  - New `ballot` module: `Ballot`, `BallotProposal`, `BallotOption`,
+    `Ballot::digest`, `BallotDigest`, `AuthenticatedBallot`, and
+    `BallotAuthenticationError`.
+  - New `round_auth::RoundAuthPayloadV3`, the payload signed by a ballot
+    attestation: the v2 payload under its own domain tag, followed by the
+    ballot digest.
+  - New `ResolvedVotingConfig::authenticate_ballot`, which checks ballot
+    content served for a round against its attested digest. Wallets should
+    display only the returned `AuthenticatedBallot`.
+  - `AuthenticatedRound::ballot_digest` is a new public field; code that builds
+    the struct with a literal must set it. It deserializes as `None` from
+    summaries persisted by earlier versions.
+  - The field is additive. Earlier versions ignore it and authenticate the
+    round from its v2 signatures as before. A round whose attestation is
+    present but malformed or not signed by a trusted key is skipped; other
+    rounds in the same config are unaffected.
+  - The static config may set `require_ballot_attestation: true`. Because the
+    static config is hash-pinned, the dynamic-config host cannot clear it;
+    when set, rounds without a valid attestation are skipped.
+    `ResolvedStaticVotingConfig::require_ballot_attestation` is a new public
+    field and defaults to `false` when absent.
+
 - Delegation requests now tell the vote chain which circuit key made their
   proof. The SDK records a fingerprint of the delegation verifying key when it
   proves, saves it beside the proof, and sends it in the
