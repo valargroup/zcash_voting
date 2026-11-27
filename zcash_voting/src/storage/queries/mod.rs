@@ -1918,11 +1918,10 @@ pub(crate) struct DelegationTargetBindingInputs {
     pub(crate) van_comm_rand: Vec<u8>,
     pub(crate) gov_comm: Vec<u8>,
     pub(crate) total_note_value: u64,
-    /// The spend note's constrained rho. Reconstructs the *spend*, not the
-    /// output; `crate::action` documents the split where both are produced.
-    pub(crate) rho_signed: Vec<u8>,
     /// The spend's nullifier, which Orchard makes the governance *output*
-    /// note's rho. This is the one that reproduces `cmx_new`.
+    /// note's rho. This is the one that reproduces `cmx_new`; the spend note's
+    /// own constrained `rho_signed` reconstructs the spend, not the output, so
+    /// it is not loaded here. `crate::action` documents the split.
     pub(crate) nf_signed: Vec<u8>,
     pub(crate) rseed_output: Vec<u8>,
     pub(crate) cmx_new: Vec<u8>,
@@ -1937,8 +1936,8 @@ pub(crate) fn load_delegation_target_binding_inputs(
     bundle_index: u32,
 ) -> Result<DelegationTargetBindingInputs, VotingError> {
     conn.query_row(
-        "SELECT van_comm_rand, gov_comm, total_note_value, rho_signed, nf_signed, rseed_output, \
-         cmx_new FROM bundles \
+        "SELECT van_comm_rand, gov_comm, total_note_value, nf_signed, rseed_output, cmx_new \
+         FROM bundles \
          WHERE round_id = :round_id AND wallet_id = :wallet_id AND bundle_index = :bundle_index",
         named_params! {
             ":round_id": round_id,
@@ -1950,10 +1949,9 @@ pub(crate) fn load_delegation_target_binding_inputs(
                 van_comm_rand: row.get(0)?,
                 gov_comm: row.get(1)?,
                 total_note_value: row.get::<_, i64>(2)? as u64,
-                rho_signed: row.get(3)?,
-                nf_signed: row.get(4)?,
-                rseed_output: row.get(5)?,
-                cmx_new: row.get(6)?,
+                nf_signed: row.get(3)?,
+                rseed_output: row.get(4)?,
+                cmx_new: row.get(5)?,
             })
         },
     )
@@ -4504,6 +4502,7 @@ fn first_broadcast_evidence(
 /// Every broadcast guard is repeated in the statement itself, not just checked
 /// beforehand, so a submission that starts between the check and the write
 /// cannot lose its setup. Returns the number of bundles cleared.
+#[cfg(test)]
 pub(crate) fn discard_unbroadcast_delegation_setup(
     conn: &Connection,
     round_id: &str,

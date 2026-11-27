@@ -851,6 +851,7 @@ impl VotingDb {
     /// Refuses the whole call when the requested scope shows any broadcast
     /// evidence, and the write itself repeats every guard, so a submission
     /// racing this call cannot lose its setup.
+    #[cfg(test)]
     pub(crate) fn discard_unbroadcast_delegation(
         &self,
         round_id: &str,
@@ -867,6 +868,7 @@ impl VotingDb {
     /// Split out because a discard whose lease ends at the return is only half
     /// of a rebuild: the replacement setup is built and written afterwards,
     /// and that write must be covered by the same exclusion as the discard.
+    #[cfg(test)]
     fn discard_unbroadcast_delegation_locked(
         &self,
         round_id: &str,
@@ -887,6 +889,7 @@ impl VotingDb {
     ///
     /// Exposed so a host can ask before offering a destructive recovery, and
     /// so the refusal below and the UI it drives agree on one definition.
+    #[cfg(test)]
     pub(crate) fn delegation_broadcast_evidence(
         &self,
         round_id: &str,
@@ -897,6 +900,7 @@ impl VotingDb {
         queries::delegation_broadcast_evidence(&conn, round_id, &wallet_id, bundle_index)
     }
 
+    #[cfg(test)]
     fn refuse_if_broadcast(
         &self,
         round_id: &str,
@@ -2877,7 +2881,7 @@ impl VotingDb {
     /// integrations should use
     /// `ConfirmedVote::submit_prepared_shares`, which derives the nullifier
     /// and owns journaled delivery.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub(crate) fn record_share_delegation(
         &self,
         round_id: &str,
@@ -2906,7 +2910,7 @@ impl VotingDb {
     }
 
     /// Record helper deliveries and return the effective write-once schedule.
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_share_delivery(
         &self,

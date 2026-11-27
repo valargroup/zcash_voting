@@ -344,7 +344,7 @@ fn designated_position(
 /// rather than delivery capacity.
 fn gate_outcome(outcome: GateWait) -> crate::ObservationOutcome {
     match outcome {
-        GateWait::AlreadyAccepted | GateWait::Accepted => crate::ObservationOutcome::Succeeded,
+        GateWait::Accepted => crate::ObservationOutcome::Succeeded,
         GateWait::Expired => crate::ObservationOutcome::Pending,
         GateWait::Cancelled => crate::ObservationOutcome::Cancelled,
     }
