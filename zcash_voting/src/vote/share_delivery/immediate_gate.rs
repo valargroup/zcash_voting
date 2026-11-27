@@ -149,8 +149,6 @@ pub(super) struct ImmediateGate {
 /// that did its job from one that timed out, which are very different runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GateWait {
-    /// The designated share was already accepted, so nothing waited.
-    AlreadyAccepted,
     /// A helper acknowledged the immediate share while this caller waited.
     Accepted,
     /// [`WAIT_BUDGET`] expired first; delivery proceeds unprioritised.
