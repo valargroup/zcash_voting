@@ -94,6 +94,7 @@ impl BallotDigest {
         Self(bytes)
     }
 
+    /// The raw 32 digest bytes, as appended to the attestation payload.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

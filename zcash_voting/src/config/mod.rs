@@ -211,6 +211,15 @@ pub struct ResolvedStaticVotingConfig {
     pub dynamic_config_urls: Vec<String>,
     /// `static_config_version` of the document this was resolved from.
     pub static_config_version: u32,
+    /// Whether every round must carry a valid ballot attestation.
+    ///
+    /// Read from the hash-pinned static config, so the dynamic-config host
+    /// cannot clear it: when set, a round whose entry lacks a valid
+    /// `ballot_attestation` is skipped rather than authenticated without one.
+    /// Defaults to `false` for static configs, and for summaries persisted by
+    /// earlier versions, that predate the field.
+    #[serde(default)]
+    pub require_ballot_attestation: bool,
     trusted_keys: Vec<TrustedKey>,
 }
 
@@ -450,6 +459,7 @@ pub fn resolve_static_voting_config(
         dynamic_config_url: dynamic_config_urls[0].clone(),
         dynamic_config_urls,
         static_config_version: static_config.static_config_version,
+        require_ballot_attestation: static_config.require_ballot_attestation,
         trusted_keys: static_config.trusted_keys,
     })
 }
@@ -475,6 +485,7 @@ pub fn resolve_dynamic_voting_config(
         &dynamic_config.rounds,
         &resolved_static.trusted_keys,
         dynamic_config.pir_layout,
+        resolved_static.require_ballot_attestation,
     );
 
     let authenticated_count = authenticated_rounds.authenticated_rounds.len();
@@ -868,6 +879,9 @@ struct WireStaticVotingConfig {
     #[serde(default)]
     dynamic_config_urls: Option<Vec<String>>,
     trusted_keys: Vec<TrustedKey>,
+    /// See [`ResolvedStaticVotingConfig::require_ballot_attestation`].
+    #[serde(default)]
+    require_ballot_attestation: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -898,9 +912,11 @@ struct RoundEntry {
     /// Signatures over [`RoundAuthPayloadV3`], binding the round's ballot.
     ///
     /// Optional and additive: deployed wallets ignore the field and verify
-    /// `signatures` as before.
+    /// `signatures` as before. Kept as raw JSON and decoded per round in
+    /// [`verify_round_entry`], so one malformed attestation skips only its own
+    /// round instead of failing the whole dynamic config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    ballot_attestation: Option<BallotAttestation>,
+    ballot_attestation: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -1090,11 +1106,15 @@ fn authenticate_dynamic_rounds(
     rounds: &BTreeMap<String, RoundEntry>,
     trusted_keys: &[TrustedKey],
     pir_layout: PirLayout,
+    require_ballot_attestation: bool,
 ) -> AuthenticatedRounds {
     let mut authenticated_rounds = Vec::new();
     let mut skipped_round_ids = Vec::new();
     for (round_id, entry) in rounds {
         match verify_round_entry(round_id, entry, trusted_keys, pir_layout) {
+            Some(round) if require_ballot_attestation && round.ballot_digest.is_none() => {
+                skipped_round_ids.push(round_id.clone())
+            }
             Some(round) => authenticated_rounds.push(round),
             None => skipped_round_ids.push(round_id.clone()),
         }
@@ -1131,7 +1151,8 @@ fn verify_round_entry(
 
     let ballot_digest = match &entry.ballot_attestation {
         None => None,
-        Some(attestation) => {
+        Some(raw) => {
+            let attestation: BallotAttestation = serde_json::from_value(raw.clone()).ok()?;
             validate_lowercase_hex_32(&attestation.ballot_digest, "ballot_digest").ok()?;
             let digest =
                 <[u8; 32]>::try_from(hex::decode(&attestation.ballot_digest).ok()?).ok()?;

@@ -28,7 +28,13 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
     summaries persisted by earlier versions.
   - The field is additive. Earlier versions ignore it and authenticate the
     round from its v2 signatures as before. A round whose attestation is
-    present but malformed or not signed by a trusted key is skipped.
+    present but malformed or not signed by a trusted key is skipped; other
+    rounds in the same config are unaffected.
+  - The static config may set `require_ballot_attestation: true`. Because the
+    static config is hash-pinned, the dynamic-config host cannot clear it;
+    when set, rounds without a valid attestation are skipped.
+    `ResolvedStaticVotingConfig::require_ballot_attestation` is a new public
+    field and defaults to `false` when absent.
 
 - Delegation requests now tell the vote chain which circuit key made their
   proof. The SDK records a fingerprint of the delegation verifying key when it

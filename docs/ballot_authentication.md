@@ -80,11 +80,33 @@ a coordinated wallet release.
 A wallet that understands the field:
 
 1. verifies the v2 `signatures` as before;
-2. if `ballot_attestation` is present, requires `ballot_digest` to be 64
-   lowercase hex characters and at least one signature over the v3 payload to
-   verify under a trusted key, and skips the round otherwise;
+2. if `ballot_attestation` is present, requires it to decode, its
+   `ballot_digest` to be 64 lowercase hex characters, and at least one
+   signature over the v3 payload to verify under a trusted key, and skips the
+   round otherwise. A malformed attestation skips only its own round;
 3. records the attested digest on the authenticated round
    (`AuthenticatedRound::ballot_digest`).
+
+## Requiring attestations
+
+The dynamic config is served by a host that can edit it, so it could remove an
+entry's `ballot_attestation` while leaving the v2 signatures intact. Making
+attestations mandatory therefore has to be anchored in the hash-pinned static
+config:
+
+```json
+{
+  "static_config_version": 2,
+  "dynamic_config_urls": ["..."],
+  "trusted_keys": [ ... ],
+  "require_ballot_attestation": true
+}
+```
+
+When it is `true`, a wallet skips every round without a valid ballot
+attestation, so `BallotNotAttested` cannot occur. It defaults to `false`, and
+wallets that predate the field ignore it. Set it once signers publish an
+attestation for every round the wallet should show.
 
 ## Wallet check
 
@@ -101,7 +123,7 @@ the returned `AuthenticatedBallot`. Its errors are distinct:
 
 How a wallet treats `BallotNotAttested` while signers roll out attestations is
 a wallet policy decision. Once every published round carries an attestation,
-wallets should treat it as a failure.
+set `require_ballot_attestation` in the static config, as described above.
 
 ## Signer procedure
 

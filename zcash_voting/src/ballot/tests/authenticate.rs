@@ -1,7 +1,8 @@
 //! Matching a served ballot against the ballot attestation in resolved config.
 
 use super::fixtures::{
-    full_ballot, resolved_config, trusted_key, untrusted_key, Attestation, ROUND_ID,
+    full_ballot, resolved_config, resolved_config_requiring_attestation,
+    resolved_config_with_rounds, trusted_key, untrusted_key, Attestation, ROUND_ID,
 };
 
 use crate::ballot::BallotAuthenticationError;
@@ -114,4 +115,41 @@ fn adding_a_ballot_attestation_to_a_live_round_is_not_a_config_change() {
         decide_config_switch(Some(before), after).kind,
         ConfigSwitchKind::Unchanged
     );
+}
+
+#[test]
+fn an_undecodable_attestation_skips_only_its_own_round() {
+    let other_round = "02".repeat(32);
+    for broken in [
+        Attestation::UndecodableSignature,
+        Attestation::MissingDigest,
+    ] {
+        let config = resolved_config_with_rounds(vec![
+            (ROUND_ID, broken),
+            (other_round.as_str(), attested_by_trusted_key()),
+        ]);
+        assert_eq!(config.skipped_round_ids, vec![ROUND_ID.to_string()]);
+        assert_eq!(config.authenticated_rounds.len(), 1);
+        assert_eq!(config.authenticated_rounds[0].round_id, other_round);
+    }
+}
+
+#[test]
+fn a_trust_anchor_requiring_attestation_skips_rounds_without_one() {
+    // The dynamic-config host can strip an attestation; the hash-pinned static
+    // config's requirement is what makes that visible.
+    let attested_round = "02".repeat(32);
+    let config = resolved_config_requiring_attestation(vec![
+        (ROUND_ID, Attestation::Absent),
+        (attested_round.as_str(), attested_by_trusted_key()),
+    ]);
+    assert_eq!(config.skipped_round_ids, vec![ROUND_ID.to_string()]);
+    assert_eq!(config.authenticated_rounds.len(), 1);
+    assert_eq!(config.authenticated_rounds[0].round_id, attested_round);
+}
+
+#[test]
+fn without_the_requirement_an_unattested_round_still_authenticates() {
+    let config = resolved_config(Attestation::Absent);
+    assert_eq!(config.authenticated_rounds.len(), 1);
 }

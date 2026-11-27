@@ -15,14 +15,17 @@ pub struct AuthenticatedBallot {
 }
 
 impl AuthenticatedBallot {
+    /// The round whose attestation this ballot matched, as lowercase hex.
     pub fn round_id(&self) -> &str {
         &self.round_id
     }
 
+    /// The ballot digest, equal to the one attested for the round.
     pub fn digest(&self) -> BallotDigest {
         self.digest
     }
 
+    /// The authenticated content, for display.
     pub fn ballot(&self) -> &Ballot {
         &self.ballot
     }
@@ -32,6 +35,10 @@ impl AuthenticatedBallot {
         self.ballot.proposals.iter().map(|p| p.id).collect()
     }
 
+    /// Consumes the wrapper and returns the content.
+    ///
+    /// The returned [`Ballot`] no longer carries proof of authentication; keep
+    /// the [`AuthenticatedBallot`] wherever a later step must rely on it.
     pub fn into_ballot(self) -> Ballot {
         self.ballot
     }
