@@ -11,7 +11,7 @@ ZAKURA_TARGET_DIR := $(ROOT)/target/zakura
 LRZ_TARGET_DIR    := $(ROOT)/target/lrz
 VCT_TARGET_DIR    := $(ROOT)/target/vct
 
-APP_PACKAGES  := -p zcash_voting -p zcash-voting-wallet-example
+APP_PACKAGES  := -p zcash_voting -p zcash_vote_delegate -p zcash-voting-wallet-example
 VCT_PACKAGES  := -p vote-commitment-tree -p vote-commitment-tree-client
 
 # Profile from .config/nextest.toml. `agent` reports failures only; `ci`
@@ -19,6 +19,7 @@ VCT_PACKAGES  := -p vote-commitment-tree -p vote-commitment-tree-client
 NEXTEST_PROFILE ?= agent
 
 .PHONY: help check test test-lrz check-vct test-vct doc-test proofs msrv fmt clippy \
+	delegate-vectors \
 	recovery-conformance-check recovery-conformance recovery-conformance-crash \
 	recovery-conformance-stalls recovery-conformance-fleet \
 	stage-bench-check stage-bench-worker stage-bench stage-bench-unit
@@ -89,6 +90,15 @@ fmt: ## Check formatting (FMT_FLAGS= applies formatting)
 clippy: ## Lint the default Zakura stack
 	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" \
 		cargo clippy $(APP_PACKAGES) --all-targets --features test-fixtures --locked
+
+# Recomputes every expected output in zcash_vote_delegate's golden vectors
+# from its inputs. Run it after editing inputs, then update the hash the
+# vector test pins. A rewrite is a contract change: review the diff and copy
+# the sections vote-sdk vendors byte for byte.
+delegate-vectors: ## Rewrite zcash_vote_delegate's golden vectors' expected outputs (contract change only)
+	@ZCASH_VOTE_DELEGATE_WRITE_VECTORS=1 CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" \
+		cargo nextest run -P $(NEXTEST_PROFILE) -p zcash_vote_delegate --locked \
+		--run-ignored ignored-only -E 'test(=rewrite_expected_outputs)'
 
 # Staging crash-recovery conformance. Deliberately not in APP_PACKAGES: this
 # package drives a real staging round over the network and kills its own child

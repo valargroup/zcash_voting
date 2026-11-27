@@ -82,6 +82,17 @@ pub use crate::share_policy::{ImmediateShareKey, ShareSubmissionPlan};
 pub use crate::types::WireEncryptedShare;
 pub use crate::vote::VanWitness;
 
+mod proxy_delegator;
+mod proxy_registry;
+pub use proxy_delegator::{ProxyAllocationRequest, ProxyDelegateChoice};
+pub use proxy_registry::{
+    DelegateCheck, DelegateEntryStatus, DelegateKeyInfo, DelegateLookup, ProxyDelegateBrowse,
+    ProxyDelegateListing,
+};
+
+mod proxy_delegate;
+pub use proxy_delegate::ProxyDelegateProvider;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegationSubmissionWire {
     pub rk: String,

@@ -70,6 +70,7 @@ tonic = { version = "0.14", default-features = false, features = ["codegen", "ch
 
 vote-commitment-tree = { path = "../vote-commitment-tree", version = "=0.9.0", default-features = false }
 vote-commitment-tree-client = { path = "../vote-commitment-tree-client", version = "=0.11.0", default-features = false, features = ["http"] }
+zcash_vote_delegate = { path = "../zcash_vote_delegate", version = "=0.1.0" }
 
 rusqlite = { version = "0.37", features = ["bundled"] }
 
@@ -114,3 +115,10 @@ tower-service = "0.3"
 name = "pir_smoke"
 path = "examples/pir_smoke.rs"
 test = false
+
+# Dev-only reader of a dev stack round, run by the delegate verifier's
+# scripts/devstack/test.sh. Its argument parsing has a unit test.
+[[example]]
+name = "wallet_check"
+path = "examples/wallet_check.rs"
+test = true

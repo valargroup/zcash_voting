@@ -3,6 +3,7 @@ members = [
     "recovery-conformance",
     "stage-bench",
     "zcash_voting",
+    "zcash_vote_delegate",
     "vote-commitment-tree",
     "vote-commitment-tree-client",
     "wallet-example",
@@ -10,8 +11,10 @@ members = [
 # The default root build is the Zakura application path. LRZ and the
 # lower-level VCT packages are validated in separate invocations because their
 # backend features are mutually exclusive within one Cargo resolve.
+# `zcash_vote_delegate` has no backend, so it joins every invocation unchanged.
 default-members = [
     "zcash_voting",
+    "zcash_vote_delegate",
     "wallet-example",
 ]
 resolver = "2"

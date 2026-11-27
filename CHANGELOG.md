@@ -27,6 +27,11 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   - The voting database moves to schema version 25, which adds one nullable
     column. Existing rounds and proofs are preserved; a proof saved by an
     earlier version is sent without a fingerprint.
+- Proxy delegation (contracts v1), not yet usable. `zcash_voting::proxy`
+  adds the registry client (`proxy::registry`: registry cache, handle
+  search, signed wallet list, lookups, the pre-proving check of each chosen
+  delegate's proven entry). Host types live in `zcash_voting::wire`, and
+  `zcash_vote_delegate` holds the shared formats. No existing flow calls it.
 
 ### Changed
 
