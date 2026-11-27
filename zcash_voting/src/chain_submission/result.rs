@@ -61,6 +61,15 @@ pub enum ChainSubmissionDiagnosticKind {
     /// without the gateway's error envelope. A proxy can produce either after
     /// forwarding the POST upstream, so this does not establish non-dispatch.
     RouteAnswerReplaced,
+    /// The vote chain refused a proxy delegation batch because DC batches are
+    /// paused (`vote` 51). It is retried until it lands or voting ends.
+    ProxyBatchPaused,
+    /// A proxy delegation batch attempt was answered expired (`vote` 52). The
+    /// generation is retired and the batch is re-signed.
+    ProxyBatchExpired,
+    /// The registration a proxy delegation batch carried landed on its own.
+    /// The generation is retired and the batch is proved again.
+    ProxyRegistrationLanded,
 }
 
 impl ChainSubmissionDiagnosticKind {
@@ -78,6 +87,9 @@ impl ChainSubmissionDiagnosticKind {
             Self::StorageFailure => "storage_failure",
             Self::EndpointUnsupported => "endpoint_unsupported",
             Self::RouteAnswerReplaced => "route_answer_replaced",
+            Self::ProxyBatchPaused => "proxy_batch_paused",
+            Self::ProxyBatchExpired => "proxy_batch_expired",
+            Self::ProxyRegistrationLanded => "proxy_registration_landed",
         }
     }
 
@@ -94,6 +106,9 @@ impl ChainSubmissionDiagnosticKind {
             "storage_failure" => Some(Self::StorageFailure),
             "endpoint_unsupported" => Some(Self::EndpointUnsupported),
             "route_answer_replaced" => Some(Self::RouteAnswerReplaced),
+            "proxy_batch_paused" => Some(Self::ProxyBatchPaused),
+            "proxy_batch_expired" => Some(Self::ProxyBatchExpired),
+            "proxy_registration_landed" => Some(Self::ProxyRegistrationLanded),
             _ => None,
         }
     }
@@ -393,6 +408,16 @@ impl ChainSubmissionFailure {
             kind,
             strongest_state: Some(ChainSubmissionFailureState::durable(durable_state)),
             redacted_message: bounded_redacted_text(redacted_message.as_ref()),
+        }
+    }
+
+    /// Returns this failure unchanged if it already carries a state, and
+    /// otherwise the same failure carrying `durable_state`.
+    pub(super) fn or_durable_state(self, durable_state: ChainSubmissionState) -> Self {
+        if self.strongest_state.is_some() {
+            self
+        } else {
+            Self::with_durable_state(self.kind, durable_state, &self.redacted_message)
         }
     }
 

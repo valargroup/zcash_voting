@@ -340,7 +340,25 @@ Regression coverage:
 3. At most one share is designated as the round's immediate share. It is share
    index 0 of the lowest voted proposal ID in the highest eligible bundle
    index. Bundles are value-descending, so this is the lowest-value eligible
-   bundle.
+   bundle. A bundle whose dispatched or landed proxy DCs took its whole
+   weight is not eligible: it never casts, so a designation there would name
+   a share that never exists. Round planning and helper planning pick the
+   bundle by one rule, `immediate_share_bundle`, and a designation already
+   persisted stands
+   (`the_immediate_share_skips_a_fully_delegated_higher_bundle`,
+   `a_lower_bundle_s_vote_carries_the_immediate_share_past_a_fully_delegated_one`).
+
+   A delegation can make a bundle ineligible after a lower-indexed bundle's
+   vote saved its plan without the immediate share. The rule would then name
+   that vote's share, its plan would disagree, and
+   `validate_round_immediate_plans` would refuse every vote share delivery of
+   the round. So once any vote of the round has a saved plan, a proxy
+   allocation's preview and commit refuse with `AlreadyVoted`, and
+   `proxy::availability` reports `AlreadyVoted { used_elsewhere: false }`. A
+   retired or recast vote's plan is deleted with its generation and no longer
+   counts, and an undispatched vote without a plan still allows delegating
+   (`lowest_bundle_with_vote_share_plan`, regression test
+   `a_saved_vote_share_plan_refuses_delegating`).
 4. The immediate designation is derived from durable ballot choices the
    first time the designated vote's own plan is prepared, and is then durable
    state of its own (`round_immediate_share`, schema version 20): stable
@@ -446,6 +464,7 @@ Regression coverage:
    `an_expired_gate_wait_is_recorded_separately_from_queue_time`.
 
 Enforcement:
+[`immediate_share_bundle`](../zcash_voting/src/share_policy/initial_placement.rs),
 [`round_immediate_share_key`](../zcash_voting/src/share_policy/initial_placement.rs)
 and
 [`plan_share_submissions`](../zcash_voting/src/share_policy/initial_placement.rs).
@@ -1908,9 +1927,9 @@ delivery history as part of that deletion. The records are not selectively
 cleared while their round remains live.
 
 `VotingDb::delete_round` refuses a round that shows broadcast evidence — a
-delegation transaction hash, a VAN position, a chain submission, a vote, or a
-delivered helper share — so ordinary deletion cannot destroy what recovers a
-round. `VotingDb::delete_round_discarding_recovery` remains the explicit
+delegation transaction hash, a VAN position, a chain submission, a vote, a
+delivered helper share, or a proved proxy delegation batch — so ordinary
+deletion cannot destroy what recovers a round. `VotingDb::delete_round_discarding_recovery` remains the explicit
 per-round escape hatch for a deliberate abandonment and is not refused. Both
 take the round's chain-submission gate before reading the evidence they act on,
 and the checked path re-reads that evidence inside the transaction that

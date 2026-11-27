@@ -110,6 +110,10 @@ pub(super) enum SubmissionObservation {
     /// attempt may have landed, this is chain evidence that nothing landed and
     /// makes the generation terminal so its members can be retired.
     TerminalRejection(ChainSubmissionDiagnostic),
+    /// The chain proved a proxy batch generation never landed and never can
+    /// (see `ProxyRetirement`). Terminal from any live state whatever
+    /// ambiguity preceded.
+    ProxyGenerationRetired(ChainSubmissionDiagnostic),
     SubmittedWithoutHash(ChainSubmissionDiagnostic),
     CandidatePending,
     TrackingWindowExpired(ChainSubmissionDiagnostic),
@@ -159,6 +163,10 @@ pub(super) fn apply_submission_observation(
         (Some(State::Submitting), Observation::TerminalRejection(diagnostic)) => {
             Ok(Some(State::Rejected(diagnostic)))
         }
+        (
+            Some(State::Submitting | State::Tracking { .. } | State::Recovering { .. }),
+            Observation::ProxyGenerationRetired(diagnostic),
+        ) => Ok(Some(State::Rejected(diagnostic))),
         (Some(State::Submitting), Observation::SubmittedWithoutHash(diagnostic))
         | (Some(State::Recovering { .. }), Observation::SubmittedWithoutHash(diagnostic)) => {
             Ok(Some(State::SubmittedWithoutHash(diagnostic)))
@@ -330,6 +338,7 @@ impl SubmissionObservation {
             Self::PossiblyDispatched(_) => "possibly_dispatched",
             Self::DefiniteRejection(_) => "definite_rejection",
             Self::TerminalRejection(_) => "terminal_rejection",
+            Self::ProxyGenerationRetired(_) => "proxy_generation_retired",
             Self::SubmittedWithoutHash(_) => "submitted_without_hash",
             Self::CandidatePending => "candidate_pending",
             Self::TrackingWindowExpired(_) => "tracking_window_expired",
@@ -750,10 +759,11 @@ mod tests {
         ContinueRecovery,
         AbandonedSubmitting,
         SubmittedWithoutHash,
+        ProxyGenerationRetired,
     }
 
     impl ObservationKind {
-        const ALL: [Self; 15] = [
+        const ALL: [Self; 16] = [
             Self::ReserveFreshSubmission,
             Self::DefinitelyNotDispatched,
             Self::UsableCandidateHash,
@@ -769,6 +779,7 @@ mod tests {
             Self::ContinueRecovery,
             Self::AbandonedSubmitting,
             Self::SubmittedWithoutHash,
+            Self::ProxyGenerationRetired,
         ];
 
         fn observation(self) -> SubmissionObservation {
@@ -808,6 +819,9 @@ mod tests {
                 Self::SubmittedWithoutHash => {
                     SubmissionObservation::SubmittedWithoutHash(diagnostic("submitted"))
                 }
+                Self::ProxyGenerationRetired => {
+                    SubmissionObservation::ProxyGenerationRetired(diagnostic("retired"))
+                }
             }
         }
     }
@@ -827,6 +841,7 @@ mod tests {
                     | Observation::TerminalRejection
                     | Observation::SubmittedWithoutHash
                     | Observation::AbandonedSubmitting
+                    | Observation::ProxyGenerationRetired
             ),
             State::Tracking => matches!(
                 observation,
@@ -835,6 +850,7 @@ mod tests {
                     | Observation::CandidateCommittedFailure
                     | Observation::TerminalCandidateFailure
                     | Observation::ConfirmedByHash
+                    | Observation::ProxyGenerationRetired
             ),
             State::RecoveringWithoutCandidate => matches!(
                 observation,
@@ -846,6 +862,7 @@ mod tests {
                     | Observation::ConfirmedByTree
                     | Observation::ContinueRecovery
                     | Observation::SubmittedWithoutHash
+                    | Observation::ProxyGenerationRetired
             ),
             State::RecoveringWithCandidate => matches!(
                 observation,
@@ -860,6 +877,7 @@ mod tests {
                     | Observation::ConfirmedByTree
                     | Observation::ContinueRecovery
                     | Observation::SubmittedWithoutHash
+                    | Observation::ProxyGenerationRetired
             ),
             State::ConfirmedByHash => matches!(observation, Observation::ConfirmedByHash),
             State::ConfirmedByTree => matches!(observation, Observation::ConfirmedByTree),
@@ -889,6 +907,37 @@ mod tests {
             assert!(apply_submission_observation(
                 ambiguous.state(),
                 SubmissionObservation::TerminalRejection(diagnostic("late")),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn a_retired_proxy_generation_is_rejected_from_every_live_state_and_never_after() {
+        for live in [
+            StateCase::Submitting,
+            StateCase::Tracking,
+            StateCase::RecoveringWithoutCandidate,
+            StateCase::RecoveringWithCandidate,
+        ] {
+            assert!(matches!(
+                apply(
+                    live.state(),
+                    SubmissionObservation::ProxyGenerationRetired(diagnostic("expired"))
+                ),
+                Some(SubmissionRecordState::Rejected(_))
+            ));
+        }
+        for terminal in [
+            StateCase::Absent,
+            StateCase::ConfirmedByHash,
+            StateCase::ConfirmedByTree,
+            StateCase::Rejected,
+            StateCase::SubmittedWithoutHash,
+        ] {
+            assert!(apply_submission_observation(
+                terminal.state(),
+                SubmissionObservation::ProxyGenerationRetired(diagnostic("late")),
             )
             .is_err());
         }

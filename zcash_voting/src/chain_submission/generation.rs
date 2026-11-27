@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     delegation_key_fingerprint::DelegationKeyFingerprint,
     governance::BUNDLE_NOTE_SLOTS,
+    proxy::batch::{ProvedProxyBatch, ProxyDelegationBatchWire},
     storage::queries,
     types::{EncryptedShare, Network, VotingError},
     vote::VoteRecoveryBundle,
@@ -36,9 +37,28 @@ pub(crate) enum ExpectedTreeLayout {
         final_successor_van: [u8; 32],
         vote_commitments: Vec<[u8; 32]>,
     },
+    /// A 0x09 proxy batch: the last DC's successor VAN, then every DC's
+    /// delegation commitment in slot order (contract §5.2).
+    ProxyBatch {
+        final_van: [u8; 32],
+        delegation_commitments: Vec<[u8; 32]>,
+        /// The carried registration's VAN. Never a leaf of the batch, it is
+        /// the split-off leaf.
+        registration_van: Option<[u8; 32]>,
+    },
 }
 
 impl ExpectedTreeLayout {
+    /// The leaf whose presence alone proves the generation can never land.
+    pub(crate) fn split_off_leaf(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::ProxyBatch {
+                registration_van, ..
+            } => *registration_van,
+            Self::Delegation { .. } | Self::Vote { .. } | Self::VoteBatch { .. } => None,
+        }
+    }
+
     /// Returns the generation's expected tree leaves in protocol action order.
     pub(crate) fn leaves(&self) -> Vec<[u8; 32]> {
         match self {
@@ -53,7 +73,33 @@ impl ExpectedTreeLayout {
             } => std::iter::once(*final_successor_van)
                 .chain(vote_commitments.iter().copied())
                 .collect(),
+            Self::ProxyBatch {
+                final_van,
+                delegation_commitments,
+                ..
+            } => std::iter::once(*final_van)
+                .chain(delegation_commitments.iter().copied())
+                .collect(),
         }
+    }
+}
+
+/// The facts a 0x09 generation's confirmation and retirement read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProxyBatchBinding {
+    /// Each DC's slot, in batch order, where confirmation records its leaf.
+    pub(crate) dc_slots: Vec<u8>,
+    /// Each DC's VAN nullifier, in batch order.
+    pub(crate) van_nullifiers: Vec<[u8; 32]>,
+    /// The number of governance nullifiers the batch spends, zero without a
+    /// carried registration.
+    pub(crate) gov_nullifier_count: usize,
+}
+
+impl ProxyBatchBinding {
+    /// Whether the batch carries the bundle's registration.
+    pub(crate) fn carries_registration(&self) -> bool {
+        self.gov_nullifier_count != 0
     }
 }
 
@@ -67,6 +113,8 @@ pub(super) enum ChainSubmissionRequest {
     Vote(VoteCommitmentWire),
     VoteBatch(VoteCommitmentBatchWire),
     DelegateAndVoteBatch(crate::wire::DelegateAndVoteBatchWire),
+    /// One signed attempt of a 0x09 proxy batch.
+    ProxyDelegationBatch(ProxyDelegationBatchWire),
 }
 
 /// One semantic generation and the confirmation layout it must produce.
@@ -80,9 +128,15 @@ pub(crate) struct BoundGeneration {
     generation: ChainSubmissionGeneration,
     expected_layout: ExpectedTreeLayout,
     ordered_proposal_ids: Vec<u32>,
+    proxy: Option<ProxyBatchBinding>,
 }
 
 impl BoundGeneration {
+    /// The 0x09 facts of a proxy batch generation, `None` for other kinds.
+    pub(crate) fn proxy(&self) -> Option<&ProxyBatchBinding> {
+        self.proxy.as_ref()
+    }
+
     /// Returns the identity-bound semantic generation.
     pub(crate) fn generation(&self) -> &ChainSubmissionGeneration {
         &self.generation
@@ -141,6 +195,7 @@ impl DerivedChainSubmission {
                 generation,
                 expected_layout,
                 ordered_proposal_ids,
+                proxy: None,
             },
             request,
             delegation_key_fingerprint: None,
@@ -154,6 +209,13 @@ impl DerivedChainSubmission {
         fingerprint: DelegationKeyFingerprint,
     ) -> Self {
         self.delegation_key_fingerprint = Some(fingerprint);
+        self
+    }
+
+    /// Attaches 0x09 facts to a synthetic proxy batch generation.
+    #[cfg(test)]
+    pub(super) fn with_proxy(mut self, binding: ProxyBatchBinding) -> Self {
+        self.bound.proxy = Some(binding);
         self
     }
 
@@ -194,6 +256,11 @@ impl DerivedChainSubmission {
     /// for delegation.
     pub(super) fn ordered_proposal_ids(&self) -> &[u32] {
         self.bound.ordered_proposal_ids()
+    }
+
+    /// The 0x09 facts of a proxy batch generation.
+    pub(super) fn proxy(&self) -> Option<&ProxyBatchBinding> {
+        self.bound.proxy()
     }
 }
 
@@ -288,6 +355,10 @@ fn hash_identity(transcript: &mut GenerationTranscript, identity: &ChainSubmissi
                 },
             );
             transcript.bytes32("identity.ordered_batch_digest", &ordered_batch_digest);
+        }
+        ChainSubmissionTarget::ProxyDelegationBatch { batch_digest } => {
+            transcript.field("identity.kind", b"proxy_delegation_batch");
+            transcript.bytes32("identity.batch_digest", &batch_digest);
         }
     }
 }
@@ -763,6 +834,7 @@ pub(super) fn generation_for_imported_delegation(
                 delegation_van: governance_commitment,
             },
             ordered_proposal_ids: vec![],
+            proxy: None,
         },
         candidate_transaction_hash,
     })
@@ -810,6 +882,7 @@ pub(crate) fn complete_generation_for_delegation(
             delegation_van: inputs.gov_comm,
         },
         ordered_proposal_ids: vec![],
+        proxy: None,
     }))
 }
 
@@ -1033,6 +1106,7 @@ fn validated_singleton_vote(
             vote_commitment: recovery.vote_commitment,
         },
         ordered_proposal_ids: vec![proposal_id],
+        proxy: None,
     };
     Ok((bound, recovery))
 }
@@ -1182,8 +1256,222 @@ fn validated_vote_batch(
             vote_commitments,
         },
         ordered_proposal_ids: proposal_ids,
+        proxy: None,
     };
     Ok((bound, recoveries))
+}
+
+/// One proved DC with the spend-auth randomizer its slot stored.
+struct ProxyGenerationDc<'a> {
+    dc: &'a crate::proxy::batch::ProvedProxyDc,
+    alpha_v: [u8; 32],
+}
+
+/// Hashes a proxy batch generation: the identity, the anchor, the layout, the
+/// carried registration's inputs and every DC with its proof. The expiry, the
+/// signatures and the chain id are excluded, so every attempt is one
+/// generation. The identity's `batch_digest` binds the chain id.
+fn proxy_batch_generation(
+    identity: &ChainSubmissionIdentity,
+    batch: &ProvedProxyBatch,
+    registration: Option<&DelegationGenerationInputs>,
+    dcs: &[ProxyGenerationDc<'_>],
+) -> ChainSubmissionGeneration {
+    let mut transcript = GenerationTranscript::new();
+    hash_identity(&mut transcript, identity);
+    transcript.u32("proxy.anchor_height", batch.anchor_height);
+    transcript.u32(
+        "proxy.layout",
+        match batch.layout {
+            zcash_vote_delegate::DcShareLayout::Standard => 0,
+            zcash_vote_delegate::DcShareLayout::SingleShare => 1,
+        },
+    );
+    transcript.bool("proxy.carries_registration", registration.is_some());
+    if let Some(inputs) = registration {
+        hash_delegation_inputs(&mut transcript, inputs);
+    }
+    transcript.sequence("proxy.dcs", dcs, |transcript, index, entry| {
+        let prefix = format!("proxy.dcs.{index}");
+        let dc = entry.dc;
+        transcript.u32(&format!("{prefix}.dc_slot"), u32::from(dc.dc_slot));
+        transcript.u32(&format!("{prefix}.delegate_index"), dc.delegate_index);
+        transcript.u64(&format!("{prefix}.weight_ballots"), dc.weight_ballots);
+        transcript.bytes32(&format!("{prefix}.alpha_v"), &entry.alpha_v);
+        transcript.bytes32(&format!("{prefix}.van_nullifier"), &dc.van_nullifier);
+        transcript.bytes32(&format!("{prefix}.r_vpk"), &dc.r_vpk);
+        transcript.bytes32(
+            &format!("{prefix}.vote_authority_note_new"),
+            &dc.vote_authority_note_new,
+        );
+        transcript.bytes32(
+            &format!("{prefix}.delegation_commitment"),
+            &dc.delegation_commitment,
+        );
+        transcript.bytes32(
+            &format!("{prefix}.dc_slot_nullifier"),
+            &dc.dc_slot_nullifier,
+        );
+        transcript.field(&format!("{prefix}.proof"), &dc.proof);
+    });
+    ChainSubmissionGeneration::new(identity.clone(), transcript.finish())
+}
+
+/// Reconstructs one bundle's proved, signed 0x09 batch from its newest
+/// attempt, read only.
+///
+/// The batch must hash to the identity's `batch_digest` under the attempt's
+/// chain id, every D1 signature must verify under its DC's `r_vpk`, and a
+/// carried registration's SpendAuth signature must verify.
+pub(super) fn derive_proxy_batch(
+    conn: &rusqlite::Connection,
+    identity: &ChainSubmissionIdentity,
+) -> Result<DerivedChainSubmission, VotingError> {
+    use crate::proxy::batch;
+
+    let ChainSubmissionTarget::ProxyDelegationBatch { batch_digest } = identity.target() else {
+        return Err(VotingError::InvalidInput {
+            message: "proxy batch generation requires a proxy batch identity".to_string(),
+        });
+    };
+    let round_id = validate_identity_context(conn, identity)?;
+    let wallet_id = identity.wallet_id();
+    let bundle_index = identity.bundle_index();
+    let invalid = |message: String| VotingError::InvalidInput { message };
+    let proved = batch::load_proved_batch(conn, &round_id, wallet_id, bundle_index)?
+        .ok_or_else(|| invalid(format!("bundle {bundle_index} has no proved proxy batch")))?;
+    let attempt = batch::load_signed_attempt(conn, &round_id, wallet_id, bundle_index)?
+        .ok_or_else(|| {
+            invalid(format!(
+                "bundle {bundle_index}'s proxy batch has no signed attempt"
+            ))
+        })?;
+    if attempt.batch_digest != batch_digest {
+        return Err(invalid(format!(
+            "bundle {bundle_index}'s signed proxy batch belongs to another generation"
+        )));
+    }
+    let registration_van =
+        batch::registration_van(conn, &round_id, wallet_id, bundle_index, &proved)?;
+    if registration_van.is_some() != attempt.registration_signature.is_some()
+        || attempt.dc_signatures.len() != proved.dcs.len()
+    {
+        return Err(VotingError::Internal {
+            message: format!(
+                "bundle {bundle_index}'s signed proxy batch attempt does not match its proved batch"
+            ),
+        });
+    }
+    let fields = batch::batch_fields(
+        *identity.vote_round_id(),
+        &proved,
+        registration_van,
+        attempt.expiry_height,
+    );
+    let digest_error = |error: zcash_vote_delegate::DigestError| {
+        invalid(format!("cannot compute the proxy batch's D1: {error}"))
+    };
+    if zcash_vote_delegate::proxy_batch_digest(&attempt.chain_id, &fields).map_err(digest_error)?
+        != batch_digest
+    {
+        return Err(invalid(format!(
+            "bundle {bundle_index}'s proxy batch does not hash to its identity"
+        )));
+    }
+    let d1 = zcash_vote_delegate::proxy_batch_sighash(&attempt.chain_id, &fields)
+        .map_err(digest_error)?;
+    for (dc, signature) in proved.dcs.iter().zip(&attempt.dc_signatures) {
+        batch::verify_dc_signature(&dc.r_vpk, &d1, signature)?;
+    }
+    let registration = match (registration_van, attempt.registration_signature) {
+        (Some(van), Some(signature)) => {
+            let submission = crate::delegate::submission_with_conn(
+                conn,
+                wallet_id,
+                &round_id,
+                bundle_index,
+                signature,
+            )?;
+            if submission.gov_comm != van {
+                return Err(invalid(format!(
+                    "bundle {bundle_index}'s registration does not commit to the VAN its proxy batch binds"
+                )));
+            }
+            let inputs = load_delegation_inputs(conn, identity, &round_id)?.ok_or_else(|| {
+                invalid(format!(
+                    "bundle {bundle_index}'s carried registration has no complete setup"
+                ))
+            })?;
+            Some((DelegationSubmissionWire::try_from(&submission)?, inputs))
+        }
+        _ => None,
+    };
+    let slots = batch::load_planned_slots(conn, &round_id, wallet_id, bundle_index)?;
+    let dcs = proved
+        .dcs
+        .iter()
+        .map(|dc| {
+            slots
+                .iter()
+                .find(|slot| slot.dc_slot == dc.dc_slot)
+                .map(|slot| ProxyGenerationDc {
+                    dc,
+                    alpha_v: slot.alpha_v,
+                })
+                .ok_or_else(|| VotingError::Internal {
+                    message: format!("proved DC in slot {} has no planned slot", dc.dc_slot),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let generation = proxy_batch_generation(
+        identity,
+        &proved,
+        registration.as_ref().map(|(_, inputs)| inputs),
+        &dcs,
+    );
+    let final_van = proved
+        .dcs
+        .last()
+        .map(|dc| dc.vote_authority_note_new)
+        .ok_or_else(|| VotingError::Internal {
+            message: format!("bundle {bundle_index}'s proved proxy batch has no DC"),
+        })?;
+    let binding = ProxyBatchBinding {
+        dc_slots: proved.dcs.iter().map(|dc| dc.dc_slot).collect(),
+        van_nullifiers: proved.dcs.iter().map(|dc| dc.van_nullifier).collect(),
+        gov_nullifier_count: if registration.is_some() {
+            BUNDLE_NOTE_SLOTS
+        } else {
+            0
+        },
+    };
+    let request = ProxyDelegationBatchWire::from_attempt(
+        identity.vote_round_id(),
+        &proved,
+        registration.map(|(wire, _)| wire),
+        &attempt.dc_signatures,
+        attempt.expiry_height,
+    );
+    Ok(DerivedChainSubmission {
+        bound: BoundGeneration {
+            generation,
+            expected_layout: ExpectedTreeLayout::ProxyBatch {
+                final_van,
+                delegation_commitments: proved
+                    .dcs
+                    .iter()
+                    .map(|dc| dc.delegation_commitment)
+                    .collect(),
+                registration_van,
+            },
+            ordered_proposal_ids: vec![],
+            proxy: Some(binding),
+        },
+        request: ChainSubmissionRequest::ProxyDelegationBatch(request),
+        // The key header is defined for `delegate-vote` and
+        // `delegate-and-cast-vote-batch` only, not for the 0x09 route.
+        delegation_key_fingerprint: None,
+    })
 }
 
 #[cfg(test)]
@@ -1192,7 +1480,7 @@ mod tests {
     use crate::round::{RoundParams, VotingDb};
     use base64::Engine as _;
 
-    fn delegation_inputs() -> DelegationGenerationInputs {
+    pub(super) fn delegation_inputs() -> DelegationGenerationInputs {
         DelegationGenerationInputs {
             note_positions: vec![1, 0x0102_0304_0506_0708],
             note_identity_hashes: vec![[0x01; 32], [0x02; 32]],
@@ -1253,7 +1541,7 @@ mod tests {
         }
     }
 
-    fn identity(target: ChainSubmissionTarget) -> ChainSubmissionIdentity {
+    pub(super) fn identity(target: ChainSubmissionTarget) -> ChainSubmissionIdentity {
         ChainSubmissionIdentity::new("wallet-1", Network::Testnet, [1; 32], 7, target).unwrap()
     }
 
@@ -1772,3 +2060,7 @@ mod tests {
 #[cfg(test)]
 #[path = "generation/tests/combined.rs"]
 mod combined_tests;
+
+#[cfg(test)]
+#[path = "generation/tests/proxy_batch.rs"]
+mod proxy_batch_tests;

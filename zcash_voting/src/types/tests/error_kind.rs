@@ -106,3 +106,24 @@ fn an_already_broadcast_refusal_reports_the_evidence_it_found() {
     );
     assert!(!error.retryable());
 }
+
+/// A refusal to touch frozen setup names the bundle and the refused action,
+/// and is told apart from broadcast evidence: nothing need be on chain.
+#[test]
+fn a_frozen_setup_refusal_names_the_bundle_and_the_action() {
+    let error = VotingError::DelegationSetupFrozen {
+        bundle_index: 3,
+        action: "discard delegation setup".to_string(),
+    };
+
+    assert_eq!(error.kind(), VotingErrorKind::DelegationSetupFrozen);
+    assert_eq!(
+        error.to_string(),
+        "bundle 3 carries committed proxy delegation slots, so its delegation setup is frozen; \
+         refusing to discard delegation setup"
+    );
+    assert!(!error.retryable());
+    let view = error.to_view();
+    assert_eq!(view.kind, crate::VotingErrorKindView::DelegationSetupFrozen);
+    assert_eq!(view.bundle_index, Some(3));
+}

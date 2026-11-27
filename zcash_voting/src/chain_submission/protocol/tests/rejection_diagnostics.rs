@@ -14,6 +14,7 @@ async fn valid_422_is_a_deterministic_rejection_with_optional_hash() {
     let outcome = client.submit_delegation(0, &delegation()).await;
     let PostAttemptOutcome::Rejected {
         code,
+        codespace,
         kind,
         diagnostic,
         candidate_transaction_hash,
@@ -22,6 +23,7 @@ async fn valid_422_is_a_deterministic_rejection_with_optional_hash() {
         panic!("expected deterministic rejection");
     };
     assert_eq!(code, 7);
+    assert_eq!(codespace, None, "a legacy endpoint reports no codespace");
     assert_eq!(kind, ChainRejectionKind::Other);
     assert_eq!(
         diagnostic.kind(),

@@ -7,7 +7,7 @@ use crate::{
     round_planning::CastDraft,
     types::VoteCommitStageBridge,
     vote::{
-        validate_draft_votes, CommittedVote, SignedVoteBatch, VoteCommitStage,
+        validate_draft_votes, CommittedVote, SignedVoteBatch, VanWitness, VoteCommitStage,
         VoteCommitmentRecovery, VoteSigner, VoteWorkRequest,
     },
     wire::DraftVote,
@@ -36,20 +36,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
         // prove, persist recovery material, and submit only to be rejected;
         // refuse it here. Advancing or recovering work already on the wire
         // is not a cast and is unaffected.
-        if let Some(vote_end) = host.vote_end_time_seconds {
-            if host.now_seconds >= vote_end {
-                return Err(self.step_failure(
-                    RoundStepFailureKind::VoteEnded,
-                    Some(&scope.step),
-                    None,
-                    &ledger,
-                    format!(
-                        "vote ended at {vote_end} and the host clock reads {}; a new vote cannot be cast",
-                        host.now_seconds
-                    ),
-                ));
-            }
-        }
+        self.refuse_after_vote_end(scope, &ledger, "a new vote cannot be cast")?;
         let single_share = host.is_last_moment();
         let mut draft_votes = Vec::with_capacity(drafts.len());
         for draft in drafts {
@@ -73,25 +60,14 @@ impl<T: ChainTransport> RoundExecutor<T> {
         let drafts = draft_votes;
         validate_draft_votes(&drafts)
             .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
-        let hotkey_secret = scope.hotkey_secret.clone().ok_or_else(|| {
-            self.step_failure(
-                RoundStepFailureKind::InvalidInput,
-                Some(&scope.step),
-                None,
-                &ledger,
-                "casting a vote requires the round voting hotkey",
-            )
-        })?;
+        let hotkey_secret = self.bound_hotkey_secret(
+            scope,
+            bundle_index,
+            &ledger,
+            "casting a vote requires the round voting hotkey",
+        )?;
         let network = scope.network;
         let round_id = scope.round_id.clone();
-        // The bound hotkey must be the one the bundle's delegation targets;
-        // otherwise ZKP #2 would fail only after a tree sync and a witness.
-        let bound_target = VotingHotkey::from_stored_secret(hotkey_secret.as_slice(), network)
-            .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?
-            .delegation_target();
-        self.database
-            .validate_bundle_hotkey_target(&round_id, bundle_index, &bound_target)
-            .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
         // A committed but undispatched vote on this bundle for a proposal the
         // roster no longer lists can never be submitted and would otherwise
         // reserve the bundle's VAN against this cast. The retirement re-checks
@@ -115,51 +91,12 @@ impl<T: ChainTransport> RoundExecutor<T> {
                 .await;
         }
 
-        // Tree sync and witness generation block on their own HTTP runtime.
-        // Nodes are tried in order. Every failed sync drops the round's cached
-        // tree, including the last node's, so neither the next node nor the
-        // next pass inherits a partially appended or mismatched tree.
-        let node_urls = canonical_vote_tree_node_urls(&host.vote_tree_node_urls, network)
-            .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
-        // One handle serves the sync, any reset, and the witness, so another
-        // executor rebinding this wallet's transport in between cannot hand
-        // the witness a client without the round state just synced.
-        let tree = {
-            let db = Arc::clone(&self.database);
-            let transport = self.tree_transport.clone();
-            self.blocking(scope, "vote tree binding", move || {
-                crate::precompute::vote_tree_for(&db, transport)
-            })
+        let Some(witness) = self
+            .sync_van_witness(scope, bundle_index, lock, progress)
             .await?
-        };
-        let witness = {
-            let db = Arc::clone(&self.database);
-            let witness_round_id = round_id.clone();
-            let held_lock = Arc::clone(lock);
-            let operation = crate::proving_runtime::Operation::controlled(
-                format!("tree:{}:{}", self.database.sidecar_id(), scope.round_id),
-                scope.chain().clone(),
-                scope.entry_epoch(),
-            );
-            let _operation_owner = operation.owner();
-            self.blocking(scope, "vote tree sync and witness", move || {
-                operation.enter(|| {
-                    let _held_lock = held_lock;
-                    tree.sync_and_witness(&db, &witness_round_id, bundle_index, &node_urls)
-                })
-            })
-            .await
-        };
-        if scope.interrupted() {
+        else {
             return self.step_cancelled(scope, ledger);
-        }
-        let witness = witness?;
-        progress.report(RoundStepProgress::TreeSynced {
-            height: witness.anchor_height,
-        });
-        if scope.interrupted() {
-            return self.step_cancelled(scope, ledger);
-        }
+        };
 
         // Blocking orchestration submits CPU jobs to the shared pool; stages stream back.
         let (stage_tx, mut stage_rx) = tokio::sync::mpsc::unbounded_channel::<VoteCommitStage>();
@@ -255,6 +192,68 @@ impl<T: ChainTransport> RoundExecutor<T> {
         .await
     }
 
+    /// Syncs the round's vote tree and witnesses `bundle_index`'s confirmed
+    /// VAN, reporting the synced height.
+    ///
+    /// Returns `Ok(None)` when the host interrupted the step at either
+    /// boundary, so the caller ends it as cancelled.
+    pub(super) async fn sync_van_witness(
+        &self,
+        scope: &StepScope<'_>,
+        bundle_index: u32,
+        lock: &HeldRoundLock,
+        progress: &dyn RoundStepProgressReporter,
+    ) -> Result<Option<VanWitness>, RoundStepFailure> {
+        let ledger = StepLedger::default();
+        // Tree sync and witness generation block on their own HTTP runtime.
+        // Nodes are tried in order. Every failed sync drops the round's cached
+        // tree, including the last node's, so neither the next node nor the
+        // next pass inherits a partially appended or mismatched tree.
+        let node_urls =
+            canonical_vote_tree_node_urls(&scope.host.vote_tree_node_urls, scope.network)
+                .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
+        // One handle serves the sync, any reset, and the witness, so another
+        // executor rebinding this wallet's transport in between cannot hand
+        // the witness a client without the round state just synced.
+        let tree = {
+            let db = Arc::clone(&self.database);
+            let transport = self.tree_transport.clone();
+            self.blocking(scope, "vote tree binding", move || {
+                crate::precompute::vote_tree_for(&db, transport)
+            })
+            .await?
+        };
+        let witness = {
+            let db = Arc::clone(&self.database);
+            let witness_round_id = scope.round_id.clone();
+            let held_lock = Arc::clone(lock);
+            let operation = crate::proving_runtime::Operation::controlled(
+                format!("tree:{}:{}", self.database.sidecar_id(), scope.round_id),
+                scope.chain().clone(),
+                scope.entry_epoch(),
+            );
+            let _operation_owner = operation.owner();
+            self.blocking(scope, "vote tree sync and witness", move || {
+                operation.enter(|| {
+                    let _held_lock = held_lock;
+                    tree.sync_and_witness(&db, &witness_round_id, bundle_index, &node_urls)
+                })
+            })
+            .await
+        };
+        if scope.interrupted() {
+            return Ok(None);
+        }
+        let witness = witness?;
+        progress.report(RoundStepProgress::TreeSynced {
+            height: witness.anchor_height,
+        });
+        if scope.interrupted() {
+            return Ok(None);
+        }
+        Ok(Some(witness))
+    }
+
     pub(super) fn recover_committed(
         &self,
         round_id: &str,
@@ -300,7 +299,7 @@ pub(super) fn canonical_vote_tree_node_urls(
 ) -> Result<Vec<String>, VotingError> {
     if node_urls.is_empty() {
         return Err(VotingError::InvalidInput {
-            message: "casting a vote requires at least one vote-tree node URL".to_string(),
+            message: "syncing the vote tree requires at least one vote-tree node URL".to_string(),
         });
     }
     node_urls

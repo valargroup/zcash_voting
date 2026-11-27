@@ -27,7 +27,9 @@ pub(crate) use lifecycle::{intent_is_lifecycle_owned, vote_phase_is_lifecycle_ow
 #[cfg(test)]
 pub(crate) use projection::summarize_plan_work;
 pub(crate) use projection::{blocking_prerequisite, resolve_step};
-pub(crate) use snapshot::{load_round_snapshot, RoundSnapshot};
+pub(crate) use snapshot::{
+    first_unprovable_proxy_batch, load_round_snapshot, RoundSnapshot, UnprovableProxyBatch,
+};
 #[cfg(test)]
 pub(crate) use snapshot::{BundleSnapshot, VoteSnapshot};
 pub(crate) use vote_units::{group_vote_units, VoteUnitId};
@@ -106,8 +108,10 @@ pub(crate) fn classify_round(
             needs_bundle_setup: true,
             withheld_casts,
             // No bundle rows means no votes, so no intent's vote can be
-            // lifecycle-owned yet.
+            // lifecycle-owned yet, and no bundle can be fully delegated.
             lifecycle_owned_choices: Default::default(),
+            fully_delegated_bundles: Default::default(),
+            nothing_left_to_vote: false,
         });
     }
     let units = group_vote_units(snapshot, &snapshot.intents)?;

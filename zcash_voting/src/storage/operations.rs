@@ -967,9 +967,11 @@ impl VotingDb {
 
     /// Delete every durable voting row owned by the current wallet.
     ///
-    /// Round-owned state is removed through the `rounds` cascade. The same
-    /// transaction also removes round-independent PIR proof-cache rows, so a
-    /// wallet deletion cannot leave browse-only warm-up material behind.
+    /// Round-owned state, including proxy allocations and their slots, is
+    /// removed through the `rounds` cascade. The same transaction also removes
+    /// the rows that belong to no round: the PIR proof cache, so a wallet
+    /// deletion cannot leave browse-only warm-up material behind, and the
+    /// account's delegate-mode keys and signed ballots.
     pub fn clear_wallet_state(&self) -> Result<u32, VotingError> {
         let wallet_id = self.wallet_id();
         let _lease = self
@@ -1008,6 +1010,15 @@ impl VotingDb {
         .map_err(|e| VotingError::Internal {
             message: format!("failed to delete wallet PIR proof cache: {e}"),
         })?;
+        for table in ["proxy_delegate_ballots", "proxy_delegate_keys"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE wallet_id = :wallet_id"),
+                rusqlite::named_params! { ":wallet_id": &wallet_id },
+            )
+            .map_err(|e| VotingError::Internal {
+                message: format!("failed to delete wallet {table}: {e}"),
+            })?;
+        }
         tx.commit().map_err(|e| {
             VotingError::from_sqlite("failed to commit wallet voting-state cleanup", &e)
         })?;
@@ -2174,8 +2185,9 @@ impl VotingDb {
 
     /// Capture vote state, release SQLite, then build vote commitment + ZKP #2.
     ///
-    /// Loads ZKP #2 inputs (gov_comm_rand, total_note_value, address_index, ea_pk,
-    /// voting_round_id) from the DB, derives the SpendingKey from hotkey_seed
+    /// Loads ZKP #2 inputs (gov_comm_rand, the VAN weight from the
+    /// remaining-weight loader, address_index, ea_pk, voting_round_id) from the
+    /// DB, derives the SpendingKey from hotkey_seed
     /// using the stored round network after checking it against the vote signer,
     /// and generates a real Halo2 vote proof.
     ///
@@ -2250,7 +2262,7 @@ impl VotingDb {
             hotkey_seed,
             state.network,
             state.zkp2.address_index,
-            state.zkp2.total_note_value,
+            state.zkp2.van_ballots,
             &state.zkp2.gov_comm_rand,
             &voting_round_id_bytes,
             &state.zkp2.ea_pk,

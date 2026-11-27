@@ -9,10 +9,10 @@ use crate::{
     session::{classify_ballot_intents, load_ballot_intents, Decision},
     share::ShareOperationScope,
     share_policy::{
-        is_planned_share_submission_target_count, plan_share_submissions_with_preferred_servers,
-        round_immediate_share_key, share_submission_random_bytes_required, ImmediateShareKey,
-        ShareSubmissionPlan, SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER,
-        VOTE_COMMITMENT_SHARE_COUNT,
+        immediate_share_bundle, is_planned_share_submission_target_count,
+        plan_share_submissions_with_preferred_servers, round_immediate_share_key,
+        share_submission_random_bytes_required, ImmediateShareKey, ShareSubmissionPlan,
+        SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, VOTE_COMMITMENT_SHARE_COUNT,
     },
     types::{SharePayload, VotingError},
 };
@@ -308,28 +308,20 @@ fn durable_decisions(
     Ok(decisions)
 }
 
+/// The immediate share `choice_proposals` derive, on the bundle
+/// [`immediate_share_bundle`] picks from the round's VAN states.
 fn immediate_key_for_choices(
     conn: &Connection,
     round_id: &str,
     wallet_id: &str,
     choice_proposals: &[u32],
 ) -> Result<Option<ImmediateShareKey>, VotingError> {
-    let highest_bundle_index = conn
-        .query_row(
-            "SELECT MAX(bundle_index) FROM bundles
-             WHERE round_id = :round_id AND wallet_id = :wallet_id",
-            named_params! {
-                ":round_id": round_id,
-                ":wallet_id": wallet_id,
-            },
-            |row| row.get::<_, Option<i64>>(0),
-        )
-        .map_err(|e| VotingError::Internal {
-            message: format!("derive immediate helper share from bundle roster failed: {e}"),
-        })?
-        .map(|index| index as u32);
+    let bundles = crate::storage::queries::load_van_states(conn, round_id, wallet_id)?
+        .into_iter()
+        .map(|van| Ok((van.bundle_index, van.fully_delegated()?)))
+        .collect::<Result<Vec<_>, VotingError>>()?;
     Ok(round_immediate_share_key(
-        highest_bundle_index,
+        immediate_share_bundle(bundles),
         choice_proposals,
     ))
 }
@@ -360,6 +352,24 @@ fn immediate_position_for_commitment(
         }
         _ => Ok(None),
     }
+}
+
+/// The lowest bundle of the wallet's round that has a saved vote share
+/// plan, if any. A plan exists only for its vote's current generation, since
+/// retiring or recasting the vote deletes it.
+pub(crate) fn lowest_bundle_with_vote_share_plan(
+    conn: &Connection,
+    round_id: &str,
+    wallet_id: &str,
+) -> Result<Option<u32>, VotingError> {
+    conn.query_row(
+        "SELECT MIN(bundle_index) FROM helper_share_plans
+         WHERE round_id = :round_id AND wallet_id = :wallet_id",
+        named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .map(|bundle_index| bundle_index.map(|bundle_index| bundle_index as u32))
+    .map_err(|e| VotingError::from_sqlite("find a saved vote share plan", &e))
 }
 
 fn validate_round_immediate_plans(

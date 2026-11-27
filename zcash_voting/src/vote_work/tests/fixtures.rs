@@ -325,24 +325,27 @@ pub(super) fn host_with_driver_target(
                 sig: vec![0x68; 64],
                 sighash: vec![0x69; 32],
             }),
-            pir: Arc::new(
-                PirFleet::new(
-                    &["http://pir.invalid".to_string()],
-                    crate::config::PirLayout {
-                        pir_depth: u32::try_from(pir_types::COMPILED_PIR_LAYOUT.pir_depth).unwrap(),
-                        tier0_layers: u32::try_from(pir_types::COMPILED_PIR_LAYOUT.tier0_layers)
-                            .unwrap(),
-                        tier1_layers: u32::try_from(pir_types::COMPILED_PIR_LAYOUT.tier1_layers)
-                            .unwrap(),
-                        poly_len: pir_types::DEFAULT_YPIR_POLY_LEN as u32,
-                    },
-                    Arc::new(HyperTransport::new()),
-                )
-                .unwrap(),
-            ),
+            pir: unreachable_pir(),
         }),
         ..host()
     }
+}
+
+/// A PIR fleet whose one server is never reached.
+pub(super) fn unreachable_pir() -> Arc<PirFleet> {
+    Arc::new(
+        PirFleet::new(
+            &["http://pir.invalid".to_string()],
+            crate::config::PirLayout {
+                pir_depth: u32::try_from(pir_types::COMPILED_PIR_LAYOUT.pir_depth).unwrap(),
+                tier0_layers: u32::try_from(pir_types::COMPILED_PIR_LAYOUT.tier0_layers).unwrap(),
+                tier1_layers: u32::try_from(pir_types::COMPILED_PIR_LAYOUT.tier1_layers).unwrap(),
+                poly_len: pir_types::DEFAULT_YPIR_POLY_LEN as u32,
+            },
+            Arc::new(HyperTransport::new()),
+        )
+        .unwrap(),
+    )
 }
 
 /// A vote-tree transport with no reachable node: every request fails

@@ -12,11 +12,14 @@ use crate::share_tracking::CommitmentRef;
 use crate::types::VotingError;
 
 use super::lifecycle::{
-    ballot_relation, delegation_phase_holds_bundle, roster_relation, vote_phase_holds_bundle,
-    vote_phase_is_lifecycle_owned, BallotRelation, LifecyclePosition, RosterRelation,
+    ballot_relation, delegation_phase_admits_proxy_batch, delegation_phase_holds_bundle,
+    proxy_batch_holds_bundle, roster_relation, vote_phase_holds_bundle,
+    vote_phase_holds_proxy_batch, vote_phase_is_lifecycle_owned, BallotRelation, LifecyclePosition,
+    RosterRelation,
 };
 use super::snapshot::RoundSnapshot;
 use super::vote_units::{VoteUnit, VoteUnitId};
+use crate::proxy::batch::ProxyBatchProgress;
 
 /// One proposal's draft in a fresh cast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +89,15 @@ pub(crate) enum Obligation {
         tx_hash: Option<String>,
         prerequisite: Option<u32>,
     },
+    /// Plan and prove the bundle's proxy batch, which has DCs and no proof.
+    ProxyDelegate { bundle_index: u32 },
+    /// Sign, submit and confirm the bundle's proved proxy batch.
+    AdvanceProxyBatch {
+        bundle_index: u32,
+        /// The first attempt needs the voter's SpendAuth signature for the
+        /// carried registration.
+        signs_registration: bool,
+    },
     /// A confirmed vote owes these helper shares: they have no row yet.
     Deliver {
         bundle_index: u32,
@@ -120,6 +132,8 @@ impl Obligation {
         match self {
             Self::Delegate { bundle_index }
             | Self::AdvanceDelegation { bundle_index, .. }
+            | Self::ProxyDelegate { bundle_index }
+            | Self::AdvanceProxyBatch { bundle_index, .. }
             | Self::Cast { bundle_index, .. }
             | Self::Blocked { bundle_index, .. }
             | Self::ReconcileChain { bundle_index, .. }
@@ -138,7 +152,10 @@ impl Obligation {
 #[derive(Clone, Debug)]
 pub(crate) struct RoundObligations {
     pub(crate) obligations: Vec<Obligation>,
+    /// Rostered proposals with a recorded choice. Empty when
+    /// `nothing_left_to_vote`, as are the next two.
     pub(crate) choice_proposals: Vec<u32>,
+    /// Rostered proposals without a decision.
     pub(crate) open_proposals: Vec<u32>,
     /// Durable intents outside the roster the host can and must clear.
     pub(crate) unrostered_intents: Vec<u32>,
@@ -167,6 +184,11 @@ pub(crate) struct RoundObligations {
     /// measure counting the whole durable ballot has to name them separately
     /// or its total moves when the roster does.
     pub(crate) lifecycle_owned_choices: BTreeSet<u32>,
+    /// Bundles that are fully delegated (`VanState::fully_delegated`). They
+    /// plan no cast and owe no ballot.
+    pub(crate) fully_delegated_bundles: BTreeSet<u32>,
+    /// The round has bundles and every one is fully delegated.
+    pub(crate) nothing_left_to_vote: bool,
 }
 
 /// Classifies `units` against `ballot` (the roster and intents already
@@ -186,7 +208,23 @@ pub(crate) fn classify(
     let bundles: Vec<u32> = delegation.keys().copied().collect();
     let roster = ballot.roster;
     let choice_proposals = ballot.choice_proposals;
-    let open_proposals = ballot.open_proposals;
+    // See the invariants' "Fully delegated bundles" for why intents are
+    // ignored rather than refused.
+    let fully_delegated_bundles: BTreeSet<u32> = snapshot
+        .bundles
+        .iter()
+        .filter(|(_, bundle)| bundle.fully_delegated)
+        .map(|(&bundle_index, _)| bundle_index)
+        .collect();
+    let nothing_left_to_vote = !bundles.is_empty()
+        && bundles
+            .iter()
+            .all(|bundle_index| fully_delegated_bundles.contains(bundle_index));
+    let open_proposals = if nothing_left_to_vote {
+        Vec::new()
+    } else {
+        ballot.open_proposals
+    };
 
     // An unrostered intent whose vote the chain lifecycle owns cannot be
     // cleared (`clear_ballot_intent` refuses it), so it is not something the
@@ -205,6 +243,9 @@ pub(crate) fn classify(
             // so this remains a question the durable ballot answered.
             lifecycle_owned_choices.insert(proposal_id);
         }
+    }
+    if nothing_left_to_vote {
+        unrostered_intents.clear();
     }
     // Casting derives the round's single immediate helper share from the
     // complete set of choices, so helper-plan derivation rejects a roster
@@ -252,6 +293,22 @@ pub(crate) fn classify(
         }
     }
 
+    // The two-way hold between a bundle's proxy batch and its casts (see the
+    // invariants' "Proxy delegation batches"). A pending batch holds casts,
+    // and a vote that may have spent the VAN holds the batch.
+    let proxy_held_bundles: BTreeSet<u32> = snapshot
+        .proxy_batches
+        .iter()
+        .filter(|(_, status)| proxy_batch_holds_bundle(status.progress))
+        .map(|(&bundle_index, _)| bundle_index)
+        .collect();
+    let cast_spent_bundles: BTreeSet<u32> = snapshot
+        .votes
+        .iter()
+        .filter(|(_, vote)| vote_phase_holds_proxy_batch(vote.phase))
+        .map(|(&(bundle_index, _), _)| bundle_index)
+        .collect();
+
     let held_bundles: BTreeSet<u32> = snapshot
         .votes
         .iter()
@@ -275,6 +332,7 @@ pub(crate) fn classify(
         // now": no `Cast`, and no `Delegate` either, because a held bundle
         // never reaches `bundles_needing_delegation`.
         .chain(snapshot.rejection_blocked_bundles.keys().copied())
+        .chain(proxy_held_bundles.iter().copied())
         .collect();
 
     // A conflicting intent for anything the chain may have seen is an error,
@@ -391,6 +449,10 @@ pub(crate) fn classify(
                 }
             };
             if cast_due {
+                // A cast never owed, not one withheld.
+                if fully_delegated_bundles.contains(&bundle_index) {
+                    continue;
+                }
                 if held_bundles.contains(&bundle_index) {
                     withheld_casts.insert(proposal_id);
                     continue;
@@ -419,6 +481,15 @@ pub(crate) fn classify(
             match LifecyclePosition::of(Some(vote.phase)) {
                 LifecyclePosition::Confirmed => {
                     deliver(&mut obligations, bundle_index, proposal_id)?
+                }
+                LifecyclePosition::Undispatched
+                    if fully_delegated_bundles.contains(&bundle_index) =>
+                {
+                    // A fully delegated bundle dispatches no cast.
+                }
+                LifecyclePosition::Undispatched if proxy_held_bundles.contains(&bundle_index) => {
+                    // A pending proxy batch spends this VAN first.
+                    withheld_casts.insert(proposal_id);
                 }
                 LifecyclePosition::Undispatched => {
                     // A unit is dispatched whole, so it is dispatched only
@@ -558,6 +629,42 @@ pub(crate) fn classify(
         }
     }
 
+    // Proxy batches, per the invariants' "Proxy delegation batches". Every
+    // batch is proved before any is broadcast, so none lands while another
+    // could still fail to prove.
+    let every_batch_proved = snapshot
+        .proxy_batches
+        .values()
+        .all(|status| status.progress != ProxyBatchProgress::Planned);
+    for (&bundle_index, status) in &snapshot.proxy_batches {
+        let advance = |signs_registration| Obligation::AdvanceProxyBatch {
+            bundle_index,
+            signs_registration,
+        };
+        match status.progress {
+            ProxyBatchProgress::Planned => {
+                let admitted = delegation
+                    .get(&bundle_index)
+                    .is_some_and(|phase| delegation_phase_admits_proxy_batch(*phase));
+                if admitted
+                    && !cast_spent_bundles.contains(&bundle_index)
+                    && !snapshot
+                        .rejection_blocked_bundles
+                        .contains_key(&bundle_index)
+                {
+                    obligations.push(Obligation::ProxyDelegate { bundle_index });
+                }
+            }
+            ProxyBatchProgress::Proved => {
+                if every_batch_proved && !cast_spent_bundles.contains(&bundle_index) {
+                    obligations.push(advance(status.needs_registration_signature));
+                }
+            }
+            ProxyBatchProgress::InFlight { .. } => obligations.push(advance(false)),
+            ProxyBatchProgress::Landed => {}
+        }
+    }
+
     // Confirm already-submitted helper shares.
     for &(bundle_index, proposal_id, share_index, phase) in &snapshot.share_phases {
         if stale_vote_keys.contains(&(bundle_index, proposal_id)) {
@@ -620,6 +727,8 @@ pub(crate) fn classify(
             | Obligation::Confirm { prerequisite, .. } => *prerequisite = blocked_by,
             Obligation::Delegate { .. }
             | Obligation::AdvanceDelegation { .. }
+            | Obligation::ProxyDelegate { .. }
+            | Obligation::AdvanceProxyBatch { .. }
             | Obligation::Retire { .. }
             | Obligation::Blocked { .. } => {}
         }
@@ -627,13 +736,19 @@ pub(crate) fn classify(
 
     Ok(RoundObligations {
         obligations,
-        choice_proposals,
+        choice_proposals: if nothing_left_to_vote {
+            Vec::new()
+        } else {
+            choice_proposals
+        },
         open_proposals,
         unrostered_intents,
         stale_vote_keys,
         needs_bundle_setup: false,
         withheld_casts,
         lifecycle_owned_choices,
+        fully_delegated_bundles,
+        nothing_left_to_vote,
     })
 }
 

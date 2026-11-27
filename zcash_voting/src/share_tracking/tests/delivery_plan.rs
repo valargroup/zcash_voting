@@ -1623,3 +1623,76 @@ async fn share_delivery_posts_overlap() {
         crate::share_policy::SHARE_HELPER_MAX_CONCURRENT_POSTS
     );
 }
+
+/// A vote's helper plan designates the immediate share on the highest
+/// bundle that still votes. Bundle 1's landed DCs took its whole weight, so
+/// it casts nothing, and bundle 0's vote carries the round's one immediate
+/// share.
+#[test]
+fn a_lower_bundle_s_vote_carries_the_immediate_share_past_a_fully_delegated_one() {
+    let db = db_with_round_and_bundle();
+    seed_recoverable_vote_for_proposal(&db, 1, 0);
+    {
+        let conn = db.conn();
+        queries::insert_bundle(&conn, ROUND_ID, WALLET_ID, 1, &[]).unwrap();
+        conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        conn.execute(
+            "UPDATE bundles SET total_note_value = ?1
+              WHERE round_id = ?2 AND wallet_id = ?3 AND bundle_index = 1",
+            rusqlite::params![
+                (2 * crate::governance::BALLOT_DIVISOR) as i64,
+                ROUND_ID,
+                WALLET_ID
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO proxy_allocations
+                 (round_id, wallet_id, choices_json, committed_at)
+             VALUES (?1, ?2, '[{}]', 1)",
+            rusqlite::params![ROUND_ID, WALLET_ID],
+        )
+        .unwrap();
+        // Bundle 1's slot took both its ballots and its batch landed.
+        conn.execute(
+            "INSERT INTO proxy_slots
+                 (round_id, wallet_id, bundle_index, dc_slot, delegate_index,
+                  weight_ballots, layout)
+             VALUES (?1, ?2, 1, 0, 17, 2, 0)",
+            rusqlite::params![ROUND_ID, WALLET_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chain_submissions
+                 (identity_key, round_id, wallet_id, network, bundle_index, kind,
+                  ordered_batch_digest, generation_digest, state,
+                  committed_post_reservations, created_at, updated_at)
+             VALUES (zeroblob(32), ?1, ?2, 'testnet', 1, 'proxy_delegation_batch',
+                     zeroblob(32), zeroblob(32), 'confirmed', 1, 1, 1)",
+            rusqlite::params![ROUND_ID, WALLET_ID],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA ignore_check_constraints = OFF;")
+            .unwrap();
+    }
+    let van = queries::load_van_state(&db.conn(), ROUND_ID, WALLET_ID, 1).unwrap();
+    assert!(van.fully_delegated().unwrap());
+    let configured = helpers(3);
+    let fleet = HelperFleetPreflight::from_readiness(&configured, &configured).unwrap();
+    let committed = crate::vote::CommittedVote::recover(&db, ROUND_ID, 0, 1).unwrap();
+
+    let plan = committed
+        .prepare_share_delivery(&db, planning_params(&fleet))
+        .unwrap();
+
+    assert!(plan.share_plans[0].immediate);
+    assert_eq!(
+        crate::share_tracking::round_immediate_share(&db.conn(), ROUND_ID, WALLET_ID).unwrap(),
+        Some(crate::share_policy::ImmediateShareKey {
+            bundle_index: 0,
+            proposal_id: 1,
+            share_index: 0,
+        })
+    );
+}

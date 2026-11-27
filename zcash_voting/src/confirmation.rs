@@ -209,6 +209,47 @@ pub(crate) fn apply_vote_batch_confirmation_with_conn(
     advance_van_position_in_tx(conn, round_id, wallet_id, bundle_index, van_leaf_position)
 }
 
+/// Applies a 0x09 batch landing using the caller's transaction.
+///
+/// Advances the bundle's VAN to the batch's final VAN, records each DC's leaf
+/// as `(dc_slot, tree_position)`, stores the hash as the delegation's when the
+/// batch carried the registration, and retires the undispatched votes proved
+/// against the spent VAN. A missing hash means tree-only evidence. The caller
+/// must roll back on any error.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_proxy_batch_confirmation_with_conn(
+    conn: &rusqlite::Transaction<'_>,
+    wallet_id: &str,
+    round_id: &str,
+    bundle_index: u32,
+    tx_hash: Option<&str>,
+    carries_registration: bool,
+    final_van_position: u64,
+    dc_landings: &[(u8, u64)],
+) -> Result<(), VotingError> {
+    require_tree_position(final_van_position, "VAN leaf position")?;
+    for &(_, position) in dc_landings {
+        require_tree_position(position, "DC tree position")?;
+    }
+    if let Some(tx_hash) = tx_hash.filter(|_| carries_registration) {
+        require_tx_hash(tx_hash)?;
+        let (stored_hash, _) =
+            load_bundle_confirmation_fields(conn, round_id, wallet_id, bundle_index)?;
+        check_text_conflict(stored_hash.as_deref(), tx_hash, "delegation tx_hash")?;
+        queries::store_delegation_tx_hash(conn, round_id, wallet_id, bundle_index, tx_hash)?;
+    }
+    advance_van_position_in_tx(conn, round_id, wallet_id, bundle_index, final_van_position)?;
+    crate::proxy::batch::record_dc_landings(conn, round_id, wallet_id, bundle_index, dc_landings)?;
+    crate::vote::retire_undispatched_votes_outside_roster_with_conn(
+        conn,
+        wallet_id,
+        round_id,
+        bundle_index,
+        &[],
+    )?;
+    Ok(())
+}
+
 fn require_vote_recovery_json(
     conn: &rusqlite::Connection,
     round_id: &str,

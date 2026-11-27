@@ -121,6 +121,8 @@ pub enum ChainAdvanceRequest {
     VoteBatch(AdvanceVoteBatch),
     /// Advance the durable combined delegation and cast generation.
     DelegateAndVoteBatch(AdvanceVoteBatch),
+    /// Advance a bundle's signed 0x09 proxy delegation batch.
+    ProxyDelegationBatch(AdvanceProxyDelegationBatch),
 }
 
 /// Policy for one advancement episode, a finite composition of bounded passes.
@@ -358,6 +360,18 @@ pub struct AdvanceVoteBatch {
     pub ordered_proposal_ids: Vec<u32>,
 }
 
+/// Identifies one bundle's signed 0x09 proxy delegation batch. Everything
+/// else is read from the database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvanceProxyDelegationBatch {
+    /// Canonical 32-byte round identifier.
+    pub vote_round_id: [u8; 32],
+    /// The bundle whose batch is advanced.
+    pub bundle_index: u32,
+    /// The batch digest every attempt of the batch shares (contract §4.1).
+    pub batch_digest: [u8; 32],
+}
+
 /// SDK-owned durable submission lifecycle using one HTTP mechanism.
 ///
 /// Each advancement serializes work for its identity, reconstructs the
@@ -370,6 +384,8 @@ pub struct ChainSubmissionClient<T> {
     /// The store holds the private scoped database handle.
     wallet_id: String,
     network: Network,
+    /// The configured vote-chain id, which a proxy batch's D1 binds.
+    vote_chain_id: String,
     coordinator:
         ChainSubmissionCoordinator<T, SqliteChainSubmissionStore, SystemChainSubmissionClock>,
 }
@@ -445,9 +461,42 @@ impl<T: ChainTransport> ChainSubmissionClient<T> {
         Ok(Self {
             wallet_id,
             network: config.network,
-
+            vote_chain_id: config.vote_chain_id,
             coordinator,
         })
+    }
+
+    /// The configured vote-chain id, which a proxy batch's D1 binds.
+    pub(crate) fn vote_chain_id(&self) -> &str {
+        &self.vote_chain_id
+    }
+
+    /// The highest latest block height any configured endpoint reports
+    /// (contracts-v1 §8).
+    pub(crate) async fn latest_block_height(
+        &self,
+        control: &ChainSubmissionControl,
+    ) -> Result<u64, ChainSubmissionFailure> {
+        let observations = control
+            .observations
+            .clone()
+            .unwrap_or_else(crate::ObservationScope::disabled);
+        self.coordinator
+            .latest_block_height(&observations)
+            .await
+            .map_err(|failure| {
+                let (kind, message) = match failure {
+                    super::protocol::LookupFailure::Transport(error) => (
+                        ChainSubmissionFailureKind::Transport,
+                        error.message().to_string(),
+                    ),
+                    super::protocol::LookupFailure::Protocol(diagnostic) => (
+                        ChainSubmissionFailureKind::Protocol,
+                        diagnostic.message().to_string(),
+                    ),
+                };
+                ChainSubmissionFailure::without_state(kind, message)
+            })
     }
 
     /// The wallet every submission identity is bound to, captured when the
@@ -1145,6 +1194,15 @@ impl<T: ChainTransport> ChainSubmissionClient<T> {
                     inner.ordered_proposal_ids.clone(),
                 )?
             }
+            ChainAdvanceRequest::ProxyDelegationBatch(inner) => {
+                StoreAdvancementRequest::proxy_delegation_batch(self.identity(
+                    inner.vote_round_id,
+                    inner.bundle_index,
+                    ChainSubmissionTarget::ProxyDelegationBatch {
+                        batch_digest: inner.batch_digest,
+                    },
+                )?)
+            }
         };
         self.coordinator
             .advance_in_epoch(advancement, recovery, control, entry_epoch)
@@ -1210,6 +1268,10 @@ impl<T: ChainTransport> ChainSubmissionClient<T> {
         let attributed_observations = match &request {
             ChainAdvanceRequest::VoteBatch(batch)
             | ChainAdvanceRequest::DelegateAndVoteBatch(batch) => {
+                invocation_observations.bind_round_bytes(&batch.vote_round_id);
+                invocation_observations.for_bundle(batch.bundle_index)
+            }
+            ChainAdvanceRequest::ProxyDelegationBatch(batch) => {
                 invocation_observations.bind_round_bytes(&batch.vote_round_id);
                 invocation_observations.for_bundle(batch.bundle_index)
             }

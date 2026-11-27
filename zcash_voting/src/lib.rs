@@ -94,8 +94,8 @@ pub mod zkp1;
 pub mod zkp2;
 
 pub use chain_submission::{
-    AdvanceDelegation, AdvanceImportedDelegation, AdvanceVote, AdvanceVoteBatch,
-    CandidateTransactionHash, CandidateTransactionHashError, ChainAdvanceOutcome,
+    AdvanceDelegation, AdvanceImportedDelegation, AdvanceProxyDelegationBatch, AdvanceVote,
+    AdvanceVoteBatch, CandidateTransactionHash, CandidateTransactionHashError, ChainAdvanceOutcome,
     ChainAdvancePolicy, ChainAdvanceRequest, ChainHttpRequest, ChainHttpResponse,
     ChainPostDispatch, ChainRecoveryMode, ChainSubmissionClient, ChainSubmissionClientConfig,
     ChainSubmissionConfirmation, ChainSubmissionConfirmationError,

@@ -84,7 +84,10 @@ pub use crate::vote::VanWitness;
 
 mod proxy_delegator;
 mod proxy_registry;
-pub use proxy_delegator::{ProxyAllocationRequest, ProxyDelegateChoice};
+pub use proxy_delegator::{
+    ProxyAllocationPreview, ProxyAllocationRequest, ProxyAvailability, ProxyDelegateChoice,
+    ProxyDelegationError, ProxyDelegationErrorKind, ProxyPreviewDelegation,
+};
 pub use proxy_registry::{
     DelegateCheck, DelegateEntryStatus, DelegateKeyInfo, DelegateLookup, ProxyDelegateBrowse,
     ProxyDelegateListing,
@@ -317,6 +320,29 @@ pub enum NextStepKind {
     AdvanceVoteBatch,
     SubmitShares,
     ConfirmShare,
+    /// Plan and prove a bundle's proxy delegation batch.
+    ProxyDelegate,
+    /// Submit and confirm a bundle's proved proxy delegation batch.
+    AdvanceProxyBatch,
+}
+
+/// Where one bundle's proxy delegation batch stands; see
+/// [`crate::session::ProxyBatchStage`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyBatchStageView {
+    Planned,
+    Proved,
+    Dispatched,
+    Refused,
+    Landed,
+}
+
+/// One bundle's proxy delegation batch in a [`RoundPlanView`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyBatchStatusView {
+    pub bundle_index: u32,
+    pub stage: ProxyBatchStageView,
 }
 
 /// High-level work area a wallet should show or resume for a round.
@@ -495,6 +521,17 @@ pub struct CompletedVoteDisplayView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoundPlanView {
+    /// Every bundle the committed proxy allocation places DCs on, with where
+    /// its batch stands.
+    #[serde(default)]
+    pub proxy_batches: Vec<ProxyBatchStatusView>,
+    /// Bundles whose proxy DCs took their whole weight, ascending. They cast
+    /// nothing and owe no ballot.
+    #[serde(default)]
+    pub fully_delegated_bundles: Vec<u32>,
+    /// Every bundle is fully delegated, so no ballot is owed.
+    #[serde(default)]
+    pub nothing_left_to_vote: bool,
     pub round_id: String,
     pub pending_recovery: bool,
     pub blocking_recovery: bool,
@@ -581,6 +618,7 @@ pub enum VotingErrorKindView {
     PirUnavailable,
     DelegationTargetMismatch,
     DelegationAlreadyBroadcast,
+    DelegationSetupFrozen,
     /// Any category this host does not know. Serde deserializes unknown
     /// category strings into it, so a newer crate can add kinds without
     /// breaking an older host's view.
@@ -679,6 +717,12 @@ pub enum ChainDiagnosticKindView {
     StorageFailure,
     EndpointUnsupported,
     RouteAnswerReplaced,
+    /// See [`crate::ChainSubmissionDiagnosticKind::ProxyBatchPaused`].
+    ProxyBatchPaused,
+    /// See [`crate::ChainSubmissionDiagnosticKind::ProxyBatchExpired`].
+    ProxyBatchExpired,
+    /// See [`crate::ChainSubmissionDiagnosticKind::ProxyRegistrationLanded`].
+    ProxyRegistrationLanded,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1000,6 +1044,11 @@ pub enum RoundStepProgressKind {
     /// The signed combined delegation-and-cast envelope is durable. New with
     /// atomic casting; hosts must treat unknown kinds as opaque progress.
     DelegateAndVoteBatchPersisted,
+    /// A bundle's proxy delegation batch is proved and stored, unsigned.
+    ProxyBatchProved,
+    /// A new attempt of a bundle's proxy delegation batch is signed and
+    /// durable.
+    ProxyBatchSigned,
     HelperPlansPrepared,
     ChainOutcome,
     ShareOutcome,

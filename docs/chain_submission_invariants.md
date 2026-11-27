@@ -152,7 +152,9 @@ A submission identity contains:
 
 There is exactly one kind of submission identity. The configured vote-chain id
 selects where a request is dispatched, not what it means, so it binds neither
-the identity nor the generation digest and no request is built from it. Under
+the identity nor the generation digest and no request is built from it. The
+one exception is a proxy batch, whose identity's batch digest is D1 and binds
+the chain id (see "Proxy delegation batches"). Under
 the single-ledger-per-network deployment precondition, one identity therefore
 covers a wallet's round, bundle, and target across endpoint or chain-id
 configuration changes that still address that network's same ledger.
@@ -167,8 +169,10 @@ delegation row can never sit beside a confirmed successor.
 `kind` is exactly one of:
 
 - `delegation`;
-- `vote`, with one proposal; or
-- `vote_batch`, with one complete ordered batch digest.
+- `vote`, with one proposal;
+- `vote_batch`, with one complete ordered batch digest; or
+- `proxy_delegation_batch`, with one batch digest (see "Proxy delegation
+  batches").
 
 The lifecycle derives a generation digest and expected output layout from the
 locked durable bundle and vote recovery rows. The digest binds every semantic
@@ -619,9 +623,19 @@ matching the submission identity, for both acceptance and rejection. A missing,
 malformed, noncanonical, or mismatched response digest is not evidence and is
 classified as possibly dispatched without accepting the response hash.
 
-A rejection with numeric module code 2 transitions to `SubmittedWithoutHash`
-only when dispatch ambiguity actually preceded it; classification never
-inspects or retains the untrusted response log. Within one invocation the
+Every submission and every `/tx/{hash}` lookup sends
+`X-Svote-Codespace: 1` (contracts-v1 §0), and a rejection is classified on the
+pair (codespace, code): a spent nullifier is `vote` code 2, so another
+codespace's code 2, such as the SDK's, is an ordinary rejection. A deployed
+node that ignores the header answers without `codespace`, and its rejection
+is keyed on the code alone, as before; the legacy response type accepts
+`codespace` as a known field and refuses every other unknown one
+(`every_submission_and_lookup_asks_for_the_codespace`,
+`a_legacy_answer_classifies_on_its_codespace_when_it_has_one`).
+
+A rejection classified as a spent nullifier transitions to
+`SubmittedWithoutHash` only when dispatch ambiguity actually preceded it;
+classification never inspects or retains the untrusted response log. Within one invocation the
 coordinator knows whether an earlier attempt was possibly dispatched. Across
 invocations the durable row is the carrier: a `Recovering` row whose stored
 diagnostic kind is `AmbiguousDispatch`, `InvalidProtocolResponse`,
@@ -636,7 +650,11 @@ pass before anything is persisted: a match confirms the generation with its
 positions; a completed valid no-match discards its retry authorization, which
 never dispatches, and persists `SubmittedWithoutHash`; a pass that cannot
 complete or is interrupted leaves the row `Recovering` with its dispatch
-evidence, so the next pass converges. Status-only advancement has no scan and
+evidence, so the next pass converges. The no-match counts only from a replica
+whose snapshot holds the highest latest height any endpoint reports as the
+pass starts (see "Required replica height" under Sticky recovery and tree
+matching); a pass on which no replica reaches it leaves the row `Recovering`
+the same way and reports it pending. Status-only advancement has no scan and
 persists `SubmittedWithoutHash` at once. Other deterministic rejections
 surface an operational error while preserving earlier durable ambiguity. A
 definite rejection with no earlier ambiguity may retain the compatibility
@@ -865,7 +883,11 @@ Restart plans are derived from the authoritative row:
   `round_snapshot_exposes_terminal_submission_diagnostics`);
 - `Confirmed` enables dependent domain and helper work;
 - a `Rejected` row schedules no reconciliation;
-- absent rows permit fresh work if bundle causality allows it.
+- absent rows permit fresh work if bundle causality allows it. A cast's
+  fresh reservation (a vote, a vote batch or a combined batch) is also
+  refused while the bundle's proxy batch holds it: the bundle has a slot
+  and no 0x09 batch of it is confirmed
+  (`a_bundle_held_by_its_proxy_batch_reserves_no_cast`).
 
 Advancement steps for a lifecycle-owned (`SubmissionManaged`) or `Submitted`
 vote are derived from the authoritative rows alone and never depend on a
@@ -925,11 +947,29 @@ supplies both `/latest` and every leaf page for one fixed-snapshot attempt. A
 transport, HTTP, metadata, snapshot, or pagination failure discards that
 attempt's snapshot, frontier, match window, and cursor before recovery restarts
 from the next replica's `/latest`; state from two replicas is never combined.
-The first complete valid match or no-match scan ends the pass. Endpoint and
+The first complete valid match or no-match scan ends the pass, except a
+no-match below the pass's required replica height, below. Endpoint and
 cursor history remain ephemeral and are not persisted. Multiple complete
 layouts in one internally consistent snapshot are terminal ambiguity for the
 pass, not a replica fault: recovery never fails over from that evidence to a
 different snapshot.
+
+**Required replica height.** A no-match that only authorizes a same-generation retry counts from any
+replica, since the chain refuses a duplicate. A no-match read as absence
+counts only from a replica whose snapshot reaches the pass's required height,
+read as Chain height below describes: for code 2, the highest latest height
+any endpoint reports as the pass starts, which holds whatever spent the
+nullifiers. A no-match below it is treated as unfinished and the next replica
+is scanned; a match or a split-off leaf counts from any replica. When no
+replica that completed reaches the height the pass ends lagging, preferred
+over any replica's failure: the row is left `Recovering` with a
+`ReconciliationPending` diagnostic, and the pass reports the generation
+pending, never terminal
+(`no_replica_at_the_required_height_ends_the_pass_lagging`,
+`a_match_counts_from_a_replica_below_the_required_height`,
+`the_highest_reported_height_is_read_from_every_endpoint_first`,
+`nullifier_spent_pass_on_a_lagging_replica_keeps_the_vote_recovering`,
+`a_spent_nullifier_pass_on_lagging_replicas_leaves_the_batch_pending`).
 
 A no-match authorization requires successful traversal of the entire selected
 snapshot. Timeout, cancellation, malformed or incomplete pagination,
@@ -1298,6 +1338,12 @@ records; neither operation selectively clears those records from a live round.
 Round-wide reset may still clear independent unsigned setup bundles: its single
 atomic update excludes exactly the bundle indexes owned by any submission row,
 rather than letting evidence in one bundle block cleanup of every other bundle.
+A bundle that carries committed proxy delegation slots is not independent: its
+setup defines every slot's nullifier and the VAN its DCs spend, so a reset that
+would clear it refuses whole with `DelegationSetupFrozen`, as the unbroadcast
+discard, setup rebuild and bundle pruning do (see "Proxy delegation batches" in
+[`round_orchestration_invariants.md`](round_orchestration_invariants.md)). A
+proved proxy batch is broadcast evidence for every path that checks it.
 Version-17 round ids that cannot form a canonical native lifecycle identity
 have no possible in-process lifecycle holder; pruning and explicit round
 deletion skip that impossible gate and remain available.
@@ -2264,3 +2310,170 @@ Conformance:
 - `v24_adds_the_proof_key_fingerprint_and_leaves_saved_proofs_without_one`.
 - The vote-sdk `TestDelegationKey*` API tests cover the four answers above on
   both routes.
+
+## Proxy delegation batches
+
+A bundle's 0x09 proxy delegation batch has its own kind,
+`proxy_delegation_batch`, with identity target
+`ProxyDelegationBatch { batch_digest }` and identity-key discriminant 4. Its
+endpoint is `/shielded-vote/v1/proxy-delegation-batch`; the body is the
+`MsgProxyDelegationBatch` of one signed attempt
+(`constructs_exact_proxy_batch_url_and_json`). `batch_digest` is D1
+(`SVOTE_PROXY_DELEGATION_BATCH_SIGHASH_V1`) with expiry 0, which binds the
+chain id. This is the one identity that binds the configured chain id, because
+D1 does; the generation does not repeat it
+(`a_proxy_batch_key_never_collides_with_a_vote_batch_of_the_same_digest`).
+
+### Attempts and the generation
+
+A proved batch is submitted as a signed attempt: D1 over the batch and an
+`expiry_height`, signed by every DC under the `alpha_v` its slot stored. The
+attempt is written to `proxy_batch_attempts` in the transaction that signs it,
+so the expiry and every signature are durable before any POST carries them.
+The first attempt fixes `batch_digest`, the chain id and, for a batch that
+carries the registration, the registration's SpendAuth signature, verified
+under the stored randomized key and sighash. Storage triggers keep those
+three and refuse an expiry that does not rise. A new attempt is signed only
+while the bundle has no lifecycle row and the stored attempt has expired:
+the chain height reached its expiry, or the chain answered it expired. Its
+expiry is `max(height, stored expiry) + 500`, or `height + 500` for the
+first. Re-signing is a retry of the same submission: no proof is re-made and
+no device signs again
+(`the_first_attempt_binds_the_registration_and_persists_every_signature`,
+`a_chain_anchored_attempt_binds_no_registration`,
+`a_live_attempt_is_kept_until_its_expiry_passes`,
+`an_expired_answer_re_signs_past_the_stored_expiry_even_from_a_lagging_height`,
+`a_registration_batch_needs_a_valid_registration_signature`,
+`a_bundle_without_a_proved_batch_is_not_signed`,
+`an_attempt_is_not_signed_while_a_submission_may_be_on_the_wire`,
+`a_re_sign_keeps_the_chain_its_batch_was_signed_for`,
+`stored_attempts_keep_their_identity_and_only_move_their_expiry_forward`).
+
+Derivation rebuilds the request from the proved batch and the newest attempt.
+The batch must hash to the identity's digest under the attempt's chain id,
+every D1 signature must verify under its DC's `r_vpk`, and a carried
+registration's signature must verify. The generation digest binds the identity, the anchor
+height, the layout, the carried registration's complete delegation inputs
+and every DC: slot, delegate, weight, `alpha_v`, VAN nullifier, `r_vpk`,
+successor VAN, delegation commitment, slot nullifier and proof. It excludes
+the expiry, the D1 signatures, the registration's SpendAuth signature and the
+chain id, so every attempt of a batch is one generation
+(`proxy_batch_generation_matches_its_frozen_vectors`,
+`proxy_batch_generation_binds_every_dc_field_and_the_registration`,
+`derivation_rebuilds_the_signed_batch_its_layout_and_its_facts`,
+`re_signing_keeps_the_generation_and_changes_only_the_request`,
+`a_chain_anchored_batch_binds_no_registration_and_probes_no_split_off`,
+`derivation_refuses_another_batch_and_a_forged_signature`).
+
+The expected layout is the last DC's successor VAN, then every delegation
+commitment in slot order, as the chain appends them. The registration VAN is
+never a leaf of the batch. Alone in the tree it means the registration landed
+on its own, so recovery looks for it as the batch's split-off leaf.
+
+### Classification
+
+The endpoint's answer always carries `codespace` and the batch digest, so it
+has its own response type; the legacy response keeps `deny_unknown_fields`,
+with `codespace` its one optional addition (see Reservation and transport
+classification). An answer without a codespace, or without the matching
+canonical digest, is not evidence and stays possibly dispatched
+(`a_proxy_batch_answer_needs_its_codespace_and_matching_digest`). Every
+rejection is classified on the pair (codespace, code): only codespace `vote`
+names a registered error, so the same number elsewhere is "other"
+(`proxy_batch_rejections_classify_on_codespace_and_code`). A proxy batch
+always advances under exact tree, whatever the episode asked for. The ante
+checks nullifiers before the expiry and the pause, which is what makes an
+expiry answer proof of absence.
+
+| Answer | Before | Result |
+| --- | --- | --- |
+| accepted | any | `Tracking`, then the hash confirms or recovery continues |
+| `vote` 52, at POST or in a block | any | `ProxyGenerationRetired`: the row is deleted, nothing of the batch landed or can; the step re-signs (`ProxyBatchExpired`) |
+| `vote` 51, at POST | any | `Recovering` with `ProxyBatchPaused`, keeping any ambiguity; resent as below |
+| `vote` 51, in a block | any | `Recovering` with `ProxyBatchPaused`, candidate cleared; resent as below |
+| `vote` 2 | any | one tree pass: the layout confirms; the registration alone splits off (`ProxyRegistrationLanded`); otherwise the row stays `Recovering` and pending, and is resent as below |
+| other, at POST | any | `Recovering` with the rejection, keeping any ambiguity; resent as below |
+| other, in a block | any | `Recovering` with the rejection, candidate cleared; resent as below |
+| a block failure without codespace | any | the generic committed failure: `Recovering`, recovered as before |
+
+`ProxyGenerationRetired` is admitted from every live state, whatever ambiguity
+preceded, and from no terminal one
+(`a_retired_proxy_generation_is_rejected_from_every_live_state_and_never_after`,
+`transition_matrix_covers_every_state_and_observation_edge`). A refusal does
+not clear an earlier attempt's ambiguity, and every 0x09 code 2 scans, so a
+lagging answer cannot turn a landed batch into a refusal without a tree pass
+first.
+
+Coverage, over the SQLite store and real derivation:
+`an_accepted_batch_confirms_by_hash_and_lands_its_dcs`,
+`an_expired_attempt_retires_the_generation_and_its_re_sign_is_admitted`,
+`a_paused_batch_stays_recoverable_and_retries_once_the_pause_lifts`,
+`a_spent_nullifier_with_the_registration_alone_in_the_tree_splits_the_batch_off`,
+`a_spent_nullifier_with_the_batch_in_the_tree_confirms_from_the_tree`,
+`any_other_refusal_leaves_the_batch_pending_and_sends_it_again`,
+`another_rejection_after_an_ambiguous_attempt_keeps_the_batch_recoverable`,
+and `a_committed_failure_is_classified_on_its_codespace`. A 0x09 candidate
+lookup sends `X-Svote-Codespace: 1`, as every lookup does
+(`a_proxy_batch_lookup_asks_for_the_codespace`).
+
+### Recovery, landing and split-off
+
+An ambiguous submission is recovered by the exact-tree pass before any
+re-POST (`an_ambiguous_submission_is_recovered_from_the_tree_without_redispatch`).
+For a proxy batch the layout and the split-off leaf together are
+contradictory and fail the pass.
+
+Confirmation, by hash or by tree, validates the `proxy_delegation_batch`
+event: the round, the batch digest, `has_registration`, `nullifier_count`
+(the registration's governance nullifiers or none), `dc_count`, the VAN
+nullifiers in slot order, and a final VAN followed by every DC, adjacent. In
+one transaction it advances the bundle's VAN to the final VAN, records each
+DC's leaf in `proxy_dc_landings`, stores the hash as the delegation's when
+the batch carried the registration, and retires the bundle's undispatched
+votes, which were proved against the VAN the batch spent.
+
+A split-off deletes the row, records the registration's own leaf as the
+bundle's VAN, retires the undispatched votes and deletes the proved batch, so
+the same DCs are proved again against the chain anchor from their persisted
+slots. A landing and a split-off each retire the undispatched votes in their
+own transaction (`an_undispatched_vote_is_retired_when_the_batch_lands_or_splits_off`). A confirmed proxy batch, like a confirmed vote, supersedes the
+bundle's delegation.
+
+### Resending
+
+A committed delegation is final: nothing returns a batch's weight, and the
+bundle stays held from casts until its batch lands. A refused batch stays
+`Recovering`, so each `AdvanceProxyBatch` step runs one tree pass and, when
+it finds nothing, sends the stored attempt again, at the cadence that paces a
+paused batch. An expiry retires the generation and the step re-signs it, so
+one attempt is live at a time. This goes on until the batch lands or voting
+ends. A resend of a batch that already landed is answered code 2, and its tree
+pass confirms it. A deterministic rejection is resent the same way until the
+vote end. A bundle whose batch never landed is not counted that round, and
+neither are the casts it would have carried
+(`a_refused_batch_stays_pending_and_is_sent_again`).
+
+### Chain height
+
+A tree's `/latest` `tree.height` is its last change, 0 in a fresh round, so
+it is never a chain height. contracts-v1 §8 adds two heights, both decimal
+strings, and the client falls back to the Cosmos SDK route
+`/cosmos/base/tendermint/v1beta1/validatorsets/latest?pagination.limit=1`
+wherever a node does not give them, as a dormant node does not:
+
+- **The expiry height.** The signing step takes the highest latest height
+  any endpoint reports. Each endpoint is read from
+  `GET /shielded-vote/v1/height`, and from the validator-set route when that
+  answer gives no height (a 404, a missing or malformed `height`); an
+  endpoint that cannot be reached is not asked again
+  (`the_chain_height_is_the_highest_any_endpoint_reports`,
+  `a_node_without_the_height_route_falls_back_to_the_validator_set`,
+  `the_chain_height_lookup_fails_without_a_decimal_height`).
+- **The snapshot height.** A pass with a required height, code 2's, judges
+  a snapshot by `/latest`'s top-level `block_height`, the committed height it
+  was read at, which must be a decimal at or above `tree.height`, or the pass
+  fails. A snapshot without it is judged by the replica's validator-set
+  height read just before it, a lower bound on the snapshot's, best effort.
+  No other pass reads either
+  (`a_required_pass_judges_the_snapshot_by_its_block_height`,
+  `a_pass_without_a_required_height_ignores_the_snapshot_block_height`).

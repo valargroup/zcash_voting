@@ -285,6 +285,14 @@ impl<T: ChainTransport> RoundExecutor<T> {
                     })?;
                 self.chain_step_outcome(&scope, outcome, ledger, progress)
             }
+            Obligation::ProxyDelegate { bundle_index } => {
+                self.run_proxy_delegate(&scope, bundle_index, &lock, progress)
+                    .await
+            }
+            Obligation::AdvanceProxyBatch { bundle_index, .. } => {
+                self.run_advance_proxy_batch(&scope, bundle_index, &lock, progress)
+                    .await
+            }
             Obligation::Cast {
                 bundle_index,
                 drafts,

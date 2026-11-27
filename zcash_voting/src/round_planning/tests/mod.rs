@@ -1,6 +1,9 @@
 mod cast_gating;
 mod fixtures;
 mod projection;
+mod proxy_hold;
+mod proxy_remainder;
+mod proxy_submission;
 mod resume_plan;
 mod roster_lifecycle_table;
 mod share_obligations;

@@ -547,7 +547,8 @@ mod recovery;
 mod tracked_share;
 
 pub(crate) use delivery_plan::{
-    load_delivery_plans, prepare_share_delivery_plan, DeliveryPlanRequest,
+    load_delivery_plans, lowest_bundle_with_vote_share_plan, prepare_share_delivery_plan,
+    DeliveryPlanRequest,
 };
 pub(crate) use delivery_progress::{delivery_progress, DeliveryProgress};
 

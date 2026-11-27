@@ -10,7 +10,7 @@ use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
 use super::{
     coordination::{CapturedSubmissionOperation, SubmissionOperationLease},
     generation::DerivedChainSubmission,
-    protocol::ChainProtocolClient,
+    protocol::{ChainProtocolClient, LookupFailure},
     CandidateTransactionHash, ChainHttpRequest, ChainSubmissionDiagnostic,
     ChainSubmissionDiagnosticKind, ChainTransport, ChainTransportError,
 };
@@ -57,7 +57,34 @@ pub(super) enum RecoveryScanOutcome<'a> {
         final_van_position: u64,
         vote_commitment_positions: Vec<u64>,
     },
+    /// A proxy batch's carried registration landed alone at `position` and
+    /// its layout did not, so the batch never can.
+    RegistrationLanded {
+        position: u64,
+    },
     NoMatch(RecoveryRetryAuthorization<'a>),
+    /// Every replica that completed a pass was below `required_height` (see
+    /// [`RequiredReplicaHeight`]).
+    Lagging {
+        required_height: u64,
+    },
+}
+
+/// The height a replica's snapshot must reach for its complete no-match pass
+/// to count.
+///
+/// A retry-only no-match counts from any replica, since the chain refuses a
+/// duplicate. A no-match that ends a generation is evidence of absence,
+/// which a lagging replica cannot give. A pass below the required height is
+/// treated as unfinished (see [`scan_exact_layout`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RequiredReplicaHeight {
+    /// Any complete pass counts.
+    Any,
+    /// The snapshot must hold the highest height any endpoint reports as the
+    /// pass starts, so it holds whatever spent the nullifiers before a code-2
+    /// answer.
+    HighestReported,
 }
 
 /// Single-use proof that one continuously locked pass scanned a complete fixed
@@ -83,9 +110,19 @@ impl RecoveryRetryAuthorization<'_> {
     }
 }
 
+/// The tree's latest snapshot, with the committed `block_height` it was read
+/// at when the node reports one.
 #[derive(Deserialize)]
 struct LatestResponse {
     tree: Option<TreeState>,
+    #[serde(default)]
+    block_height: Option<String>,
+}
+
+/// The height of a Cosmos SDK validator-set answer.
+#[derive(Deserialize)]
+struct ValidatorSetResponse {
+    block_height: String,
 }
 
 #[derive(Deserialize)]
@@ -170,7 +207,25 @@ enum ReplicaScanOutcome {
         final_van_position: u64,
         vote_commitment_positions: Vec<u64>,
     },
-    NoMatch,
+    RegistrationLanded {
+        position: u64,
+    },
+    /// A complete pass without the layout. `replica_height` is a committed
+    /// height the snapshot holds every leaf up to: its `block_height`
+    /// (contracts-v1 §8), else the replica's height read just before it. Read
+    /// only for a required height.
+    NoMatch {
+        replica_height: Option<u64>,
+    },
+}
+
+/// What a pass looks for beside the exact layout.
+#[derive(Clone, Copy)]
+struct ScanProbe {
+    /// A leaf whose presence alone proves the generation can never land.
+    split_off_leaf: Option<[u8; 32]>,
+    /// Read the replica's height before its snapshot and the snapshot's own.
+    read_replica_height: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -179,10 +234,23 @@ struct RecoveryReplica<'a> {
     endpoint_index: usize,
 }
 
+/// Runs one bounded exact-tree pass for `derived` over the configured
+/// replicas in order, never combining two replicas' snapshots.
+///
+/// A match, a split-off leaf, or a complete no-match on a replica meeting
+/// `required` ends the pass. A no-match below `required` moves to the next
+/// replica, and if every completed replica was below it the pass ends
+/// `Lagging`. Transport and protocol failures fail over within the budget.
+/// An ambiguous layout or interruption ends the pass at once.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one pass keeps its target, required height and captured authority explicit"
+)]
 pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
     protocol: &ChainProtocolClient<T>,
     derived: &DerivedChainSubmission,
     candidate: Option<CandidateTransactionHash>,
+    required: RequiredReplicaHeight,
     operation: &'a CapturedSubmissionOperation,
     lease: &'a SubmissionOperationLease,
     interrupted: impl Fn() -> bool,
@@ -190,8 +258,24 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
 ) -> Result<RecoveryScanOutcome<'a>, RecoveryScanFailure> {
     let round = hex::encode(derived.generation().identity().vote_round_id());
     let expected = derived.expected_layout().leaves();
+    let required_height = match required {
+        RequiredReplicaHeight::Any => None,
+        RequiredReplicaHeight::HighestReported => {
+            Some(protocol.latest_block_height(observations).await.map_err(
+                |failure| match failure {
+                    LookupFailure::Transport(error) => RecoveryScanFailure::Transport(error),
+                    LookupFailure::Protocol(diagnostic) => RecoveryScanFailure::Invalid(diagnostic),
+                },
+            )?)
+        }
+    };
+    let probe = ScanProbe {
+        split_off_leaf: derived.expected_layout().split_off_leaf(),
+        read_replica_height: required_height.is_some(),
+    };
     let mut budget = RecoveryPassBudget::new();
     let mut last_failure = None;
+    let mut lagging = false;
 
     for (endpoint_index, endpoint) in protocol.endpoints().iter().enumerate() {
         if interrupted() {
@@ -205,6 +289,7 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             },
             &round,
             &expected,
+            probe,
             &mut budget,
             &interrupted,
             observations,
@@ -220,7 +305,20 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
                     vote_commitment_positions,
                 })
             }
-            Ok(ReplicaScanOutcome::NoMatch) => {
+            Ok(ReplicaScanOutcome::RegistrationLanded { position }) => {
+                return Ok(RecoveryScanOutcome::RegistrationLanded { position })
+            }
+            Ok(ReplicaScanOutcome::NoMatch { replica_height })
+                if required_height.is_some_and(|required| {
+                    replica_height.is_none_or(|replica_height| replica_height < required)
+                }) =>
+            {
+                lagging = true;
+                if budget.cannot_fail_over() {
+                    break;
+                }
+            }
+            Ok(ReplicaScanOutcome::NoMatch { .. }) => {
                 return Ok(RecoveryScanOutcome::NoMatch(RecoveryRetryAuthorization {
                     operation,
                     _lease: lease,
@@ -231,14 +329,17 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
             Err(RecoveryScanFailure::Interrupted) => return Err(RecoveryScanFailure::Interrupted),
             Err(failure @ RecoveryScanFailure::AmbiguousLayout(_)) => return Err(failure),
             Err(failure) => {
-                if budget.cannot_fail_over() {
-                    return Err(failure);
-                }
                 last_failure = Some(failure);
+                if budget.cannot_fail_over() {
+                    break;
+                }
             }
         }
     }
 
+    if let (true, Some(required_height)) = (lagging, required_height) {
+        return Ok(RecoveryScanOutcome::Lagging { required_height });
+    }
     Err(last_failure.unwrap_or_else(|| {
         RecoveryScanFailure::Invalid(invalid("tree recovery has no configured endpoint"))
     }))
@@ -246,15 +347,44 @@ pub(super) async fn scan_exact_layout<'a, T: ChainTransport>(
 
 /// Scans one replica from its own metadata response and never carries partial
 /// snapshot state to another replica.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one replica pass keeps its endpoint, target, probe and budget explicit"
+)]
 async fn scan_replica<T: ChainTransport>(
     transport: &T,
     replica: RecoveryReplica<'_>,
     round: &str,
     expected: &[[u8; 32]],
+    probe: ScanProbe,
     budget: &mut RecoveryPassBudget,
     interrupted: &impl Fn() -> bool,
     observations: &crate::ObservationScope,
 ) -> Result<ReplicaScanOutcome, RecoveryScanFailure> {
+    // A lower bound for a snapshot without its own `block_height`. Best
+    // effort, so a replica without the route still confirms and splits off.
+    let height_before_snapshot = if probe.read_replica_height {
+        let url = format!(
+            "{}/cosmos/base/tendermint/v1beta1/validatorsets/latest?pagination.limit=1",
+            replica.endpoint
+        );
+        match get_json::<_, ValidatorSetResponse>(
+            transport,
+            url,
+            replica.endpoint_index,
+            budget,
+            interrupted,
+            observations,
+        )
+        .await
+        {
+            Ok(answer) => answer.block_height.parse::<u64>().ok(),
+            Err(RecoveryScanFailure::Interrupted) => return Err(RecoveryScanFailure::Interrupted),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let latest_url = format!(
         "{}/shielded-vote/v1/commitment-tree/{round}/latest",
         replica.endpoint
@@ -276,6 +406,22 @@ async fn scan_replica<T: ChainTransport>(
             "tree recovery snapshot exceeds protocol bounds",
         )));
     }
+    let replica_height = match latest.block_height.as_deref() {
+        _ if !probe.read_replica_height => None,
+        None => height_before_snapshot,
+        Some(height) => Some(
+            height
+                .parse::<u64>()
+                .ok()
+                .filter(|height| *height >= snapshot.height)
+                .ok_or_else(|| {
+                    RecoveryScanFailure::Invalid(invalid(
+                        "tree recovery snapshot block height is not a decimal height at or \
+                         above the tree's",
+                    ))
+                })?,
+        ),
+    };
     let snapshot_root = match snapshot.root.as_deref() {
         Some(value) if !value.is_empty() => Some(decode_leaf(value, "snapshot root")?),
         None | Some("") if snapshot.next_index == 0 => None,
@@ -293,6 +439,7 @@ async fn scan_replica<T: ChainTransport>(
     let mut previous_height = None;
     let mut unpaired_nonfinal_page_leaves = None;
     let mut match_start = None;
+    let mut split_off_position = None;
 
     while next_index < snapshot.next_index {
         if interrupted() {
@@ -340,9 +487,17 @@ async fn scan_replica<T: ChainTransport>(
                 let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
                     RecoveryScanFailure::Invalid(invalid("tree recovery leaf is invalid base64"))
                 })?;
-                window.push_back(bytes.try_into().map_err(|_| {
+                let leaf: [u8; 32] = bytes.try_into().map_err(|_| {
                     RecoveryScanFailure::Invalid(invalid("tree recovery leaf has invalid length"))
-                })?);
+                })?;
+                if probe.split_off_leaf == Some(leaf)
+                    && split_off_position.replace(next_index).is_some()
+                {
+                    return Err(RecoveryScanFailure::AmbiguousLayout(invalid(
+                        "tree recovery found the split-off leaf more than once",
+                    )));
+                }
+                window.push_back(leaf);
                 if window.len() > expected.len() {
                     window.pop_front();
                 }
@@ -403,15 +558,19 @@ async fn scan_replica<T: ChainTransport>(
             "tree recovery final root contradicts the fixed snapshot",
         )));
     }
-    if let Some(start) = match_start {
-        return Ok(ReplicaScanOutcome::Match {
+    match (match_start, split_off_position) {
+        (Some(_), Some(_)) => Err(RecoveryScanFailure::AmbiguousLayout(invalid(
+            "tree recovery found both the generation's layout and its split-off leaf",
+        ))),
+        (Some(start), None) => Ok(ReplicaScanOutcome::Match {
             final_van_position: start,
             vote_commitment_positions: (1..expected.len())
                 .map(|offset| start + offset as u64)
                 .collect(),
-        });
+        }),
+        (None, Some(position)) => Ok(ReplicaScanOutcome::RegistrationLanded { position }),
+        (None, None) => Ok(ReplicaScanOutcome::NoMatch { replica_height }),
     }
-    Ok(ReplicaScanOutcome::NoMatch)
 }
 
 async fn get_json<T: ChainTransport, R: for<'de> Deserialize<'de>>(

@@ -27,17 +27,45 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
   - The voting database moves to schema version 25, which adds one nullable
     column. Existing rounds and proofs are preserved; a proof saved by an
     earlier version is sent without a fingerprint.
-- Proxy delegation (contracts v1), not yet usable. `zcash_voting::proxy`
-  adds the registry client (`proxy::registry`: registry cache, handle
-  search, signed wallet list, lookups, the pre-proving check of each chosen
-  delegate's proven entry). Host types live in `zcash_voting::wire`, and
-  `zcash_vote_delegate` holds the shared formats. No existing flow calls it.
+- Proxy delegation (contracts v1), dormant while
+  `proxy::PROXY_DELEGATION_ENABLED` is false. `zcash_voting::proxy` adds the
+  delegator calls (`availability`, `preview`, `commit`) and the registry
+  client (`proxy::registry`: registry cache, handle search, signed wallet
+  list, lookups, the pre-proving check of each chosen delegate's proven
+  entry). A commit either delegates the whole weight or
+  needs the kept share's ballot answers recorded first. Once a vote of the
+  round has a saved share plan, preview and commit refuse with
+  `AlreadyVoted` and `availability` reports it. A committed delegation is
+  final: a batch the chain refuses is sent again until it lands or voting
+  ends. Host types live in `zcash_voting::wire`, and `zcash_vote_delegate`
+  holds the shared formats.
+- New round steps `NextStep::ProxyDelegate` and `NextStep::AdvanceProxyBatch`
+  and the `proxy_delegation_batch` chain-submission kind. `RoundPlan` gains
+  `proxy_batches`, `fully_delegated_bundles` and `nothing_left_to_vote`.
+- `WalletCapabilities::proxy_delegation`, which offers `"v1"` only once the
+  gate is open.
+- The `unstable-proxy-delegation` cargo feature opens the gate for tests and
+  development builds only. It is in no default feature set.
 
 ### Changed
 
-- **Breaking:** Share steps and `ShareKey` name their commitment with
+- **Database compatibility:** schema version 26 adds the proxy delegation
+  tables. The upgrade is one-way, and earlier builds refuse the database.
+- **Breaking:** `ChainSubmissionTarget`, `ChainSubmissionDiagnosticKind`
+  and `VotingError` gain variants, and `WalletCapabilities` gains a field.
+  Share steps and `ShareKey` name their commitment with
   `share_tracking::CommitmentRef` in place of `proposal_id`. A vote step's
   JSON is unchanged.
+- Every submission and lookup sends `X-Svote-Codespace: 1`, and rejections
+  are classified on (codespace, code). A host's `ChainTransport` must forward
+  the header.
+- The chain client reads the height from `/shielded-vote/v1/height`, falling
+  back to the validator-set route.
+- The round's immediate share now goes to the highest bundle that still
+  votes, so a host no longer waits for a share that never exists.
+- Builds against voting-circuits and voting-crypto-deps from one git
+  revision of the voting-circuits ZKP4 branch, patched over the 0.15.0 and
+  0.5.0 requirements, until a voting-circuits release ships ZKP4.
 - Keep voting with the existing Ironwood V3 format independent of later
   consensus branch IDs. Eligibility uses NU6.3 activation at the stored
   snapshot height, and TX1 retains its fixed V6 / NU6.3 signing profile.

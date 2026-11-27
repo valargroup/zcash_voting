@@ -2024,6 +2024,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14cae93065090804185d3b75f0bf93b8eeda30c7a9b4a33d3bdb3988d6229e50"
+dependencies = [
+ "bitflags 2.13.1",
+ "lazy_static",
+ "num-traits",
+ "rand 0.8.7",
+ "rand_chacha 0.3.1",
+ "rand_xorshift",
+ "regex-syntax",
+ "unarray",
+]
+
+[[package]]
 name = "prost"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2185,6 +2201,15 @@ checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
  "rand 0.10.2",
+]
+
+[[package]]
+name = "rand_xorshift"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
+dependencies = [
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -3118,6 +3143,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3273,8 +3304,7 @@ dependencies = [
 [[package]]
 name = "voting-circuits"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05cb79a5279c7a6bd5fc9d43c1c96b8dc7812054fbfe51ec06807c3c6fa58b61"
+source = "git+https://github.com/valargroup/voting-circuits?rev=aa3ba600ddcd58db23d1c4e9de8c3ed2e28cdb56#aa3ba600ddcd58db23d1c4e9de8c3ed2e28cdb56"
 dependencies = [
  "blake2b_simd",
  "itertools",
@@ -3285,8 +3315,7 @@ dependencies = [
 [[package]]
 name = "voting-crypto-deps"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b141493318a70f263c2ab9c782388a32abde06a9847dd99291cb7005b500a4f"
+source = "git+https://github.com/valargroup/voting-circuits?rev=aa3ba600ddcd58db23d1c4e9de8c3ed2e28cdb56#aa3ba600ddcd58db23d1c4e9de8c3ed2e28cdb56"
 dependencies = [
  "halo2_gadgets",
  "halo2_poseidon",
@@ -4528,6 +4557,7 @@ dependencies = [
  "nonempty",
  "pir-client",
  "pir-types",
+ "proptest",
  "prost",
  "rand 0.8.7",
  "rayon",

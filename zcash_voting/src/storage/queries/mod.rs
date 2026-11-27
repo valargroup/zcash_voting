@@ -11,6 +11,7 @@ use crate::storage::{KeystoneSignatureRecord, RoundPhase, RoundState, RoundSumma
 use crate::types::{Network, NoteInfo, VotingError, VotingRoundParams, WitnessData};
 
 mod share_delegations;
+mod van_state;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) use share_delegations::record_share_delegation;
@@ -28,6 +29,13 @@ pub(crate) use share_delegations::{
     remove_attempting_server_for_generation, share_is_confirmed_for_generation,
     ShareAttemptReservation,
 };
+
+#[cfg(test)]
+pub(crate) use van_state::VanState;
+pub(crate) use van_state::{
+    load_van_state, load_van_states, load_van_tree_entries, PROXY_BATCH_SUBMISSION_KIND,
+};
+pub use van_state::{load_zkp2_inputs, Zkp2DelegationData};
 
 const NOTE_IDENTITY_HASH_BYTES: usize = 32;
 const NOTE_IDENTITY_DOMAIN: &[u8] = b"zcash-voting-note-identity-v1";
@@ -1179,7 +1187,8 @@ pub(crate) fn store_delegation_data_with_pczt_fields(
 /// voting weight.
 ///
 /// Refuses with `DelegationAlreadyBroadcast` and writes nothing when the
-/// bundle shows any broadcast evidence.
+/// bundle shows any broadcast evidence, and with `DelegationSetupFrozen` when
+/// it carries committed proxy slots (see [`frozen_setup`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn replace_unbroadcast_delegation_setup(
     conn: &Connection,
@@ -1275,6 +1284,7 @@ pub(crate) fn replace_unbroadcast_delegation_setup(
         wallet_id,
         Some(bundle_index),
         repair.is_some(),
+        "replace delegation setup",
     )?;
     store_delegation_setup_within(
         &tx,
@@ -2085,22 +2095,6 @@ pub fn load_padded_cmx(
 
 // --- ZKP #2 inputs ---
 
-/// Data from delegation that ZKP #2 needs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Zkp2DelegationData {
-    pub gov_comm_rand: Vec<u8>,
-    pub total_note_value: u64,
-    pub address_index: u32,
-    pub ea_pk: Vec<u8>,
-    pub voting_round_id: String,
-    /// Current proposal authority bitmask, decremented per submitted vote.
-    /// Bit `i` is set iff the voter has not yet cast a vote for proposal `i`.
-    /// Since proposal IDs are 1-indexed (matching on-chain IDs), bit 0 is never
-    /// cleared and acts as a structural invariant — it corresponds to the circuit's
-    /// sentinel value rejected by the non-zero gate.
-    pub proposal_authority: u64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VoteRowState {
     pub choice: i64,
@@ -2124,80 +2118,6 @@ pub(crate) struct VotePreparationState {
     pub vote: Option<VoteRowState>,
 }
 
-/// Initial authority bitmask. Bit 0 is the dead sentinel (proposal_id=0 is
-/// rejected by the circuit); bits 1–50 are the usable slots.
-const MAX_PROPOSAL_AUTHORITY: u64 = voting_circuits::MAX_PROPOSAL_AUTHORITY;
-
-/// Load all fields ZKP #2 needs from the bundles table (persisted during delegation).
-/// Computes proposal_authority from submitted votes — each submitted vote clears its
-/// proposal's bit, so the next vote's VAN reconstruction matches what's in the VC tree.
-pub fn load_zkp2_inputs(
-    conn: &Connection,
-    round_id: &str,
-    wallet_id: &str,
-    bundle_index: u32,
-) -> Result<Zkp2DelegationData, VotingError> {
-    let data = conn.query_row(
-        "SELECT b.van_comm_rand, b.total_note_value, b.address_index, r.ea_pk, r.round_id \
-         FROM bundles b JOIN rounds r ON b.round_id = r.round_id AND b.wallet_id = r.wallet_id \
-         WHERE b.round_id = :round_id AND b.wallet_id = :wallet_id AND b.bundle_index = :bundle_index",
-        named_params! { ":round_id": round_id, ":wallet_id": wallet_id, ":bundle_index": bundle_index as i64 },
-        |row| {
-            Ok(Zkp2DelegationData {
-                gov_comm_rand: row.get(0)?,
-                total_note_value: row.get::<_, i64>(1)? as u64,
-                address_index: row.get::<_, i64>(2)? as u32,
-                ea_pk: row.get(3)?,
-                voting_round_id: row.get(4)?,
-                proposal_authority: 0, // computed below
-            })
-        },
-    )
-    .map_err(|e| VotingError::InvalidInput {
-        message: format!("failed to load ZKP2 inputs for round={}, bundle={} ({})", round_id, bundle_index, e),
-    })?;
-
-    // Clear a bit for every vote of THIS bundle that has reached the chain,
-    // by either of the two facts that can witness it.
-    //
-    // A transaction hash marks a submitted vote, and the VAN is spent as soon
-    // as that transaction lands, so the bit must clear then. But a hash is
-    // route-specific: the schema requires `confirmation_source = 'tree'` to
-    // carry none, so a vote confirmed by an exact-tree scan has none and never
-    // will. Testing the hash alone left such a vote's bit set, the next vote on
-    // the bundle rebuilt its VAN as though that proposal had never voted, and
-    // the chain rejected the stale nullifier as already spent — permanently,
-    // since no later pass could supply a hash that does not exist.
-    //
-    // Either fact is sufficient and neither is redundant: the hash covers a
-    // vote still in flight, the position covers one confirmed without a hash.
-    let mut authority = MAX_PROPOSAL_AUTHORITY;
-    let mut stmt = conn
-        .prepare("SELECT proposal_id FROM votes WHERE round_id = :round_id AND wallet_id = :wallet_id AND bundle_index = :bundle_index AND (tx_hash IS NOT NULL OR vc_tree_position IS NOT NULL)")
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to prepare proposal_authority query: {}", e),
-        })?;
-    let rows = stmt
-        .query_map(
-            named_params! { ":round_id": round_id, ":wallet_id": wallet_id, ":bundle_index": bundle_index as i64 },
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to query submitted votes: {}", e),
-        })?;
-    for row in rows {
-        let pid = row.map_err(|e| VotingError::Internal {
-            message: format!("failed to read proposal_id: {}", e),
-        })? as u64;
-        authority &= !(1u64 << pid);
-    }
-
-    Ok(Zkp2DelegationData {
-        proposal_authority: authority,
-        ..data
-    })
-}
-
 /// Load the read-only snapshot used before preparing or committing a vote.
 ///
 /// Returns network, ZKP2 delegation inputs (including live `proposal_authority`),
@@ -2210,7 +2130,10 @@ pub fn load_zkp2_inputs(
 /// # Errors
 ///
 /// - [`VotingError::InvalidInput`] if the round/bundle is missing, the VAN leaf
-///   position is unset, or the position exceeds the legacy `u32` circuit input.
+///   position is unset, or the position exceeds the legacy `u32` circuit input;
+///   if the bundle's proxy batch holds it from casts
+///   ([`batch_holds_casts`](crate::proxy::batch::batch_holds_casts)); or if the
+///   bundle is fully delegated ([`load_zkp2_inputs`]).
 /// - [`VotingError::Internal`] on SQL failures loading ballot intent or vote state.
 pub(crate) fn load_vote_preparation_state(
     conn: &Connection,
@@ -2220,6 +2143,14 @@ pub(crate) fn load_vote_preparation_state(
     proposal_id: u32,
 ) -> Result<VotePreparationState, VotingError> {
     let network = load_round_network(conn, round_id, wallet_id)?;
+    if crate::proxy::batch::batch_holds_casts(conn, round_id, wallet_id, bundle_index)? {
+        return Err(VotingError::InvalidInput {
+            message: format!(
+                "the proxy batch holds bundle {bundle_index} of round={round_id} from casts until \
+                 it lands, so no vote is saved from its VAN"
+            ),
+        });
+    }
     let zkp2 = load_zkp2_inputs(conn, round_id, wallet_id, bundle_index)?;
     let van_position = load_optional_van_position_u64(conn, round_id, wallet_id, bundle_index)?
         .map(|position| {
@@ -2409,138 +2340,6 @@ pub(crate) fn load_optional_van_position_u64(
                 "stored van_leaf_position for round={round_id}, bundle={bundle_index} must be non-negative, got {position}"
             ),
         })
-}
-
-/// One confirmed VAN position that must be retained during vote-tree sync.
-pub(crate) struct VanTreeEntry {
-    pub bundle_index: u32,
-    pub position: u32,
-    /// Present only while the delegation VAN is still the bundle's current VAN.
-    pub expected_delegation_van: Option<pallas::Base>,
-}
-
-/// Loads confirmed VAN positions and expected delegation VANs that remain
-/// current.
-///
-/// A submitted vote replaces the delegation VAN with a successor commitment,
-/// so only bundles without a submitted vote can be checked against `gov_comm`.
-pub(crate) fn load_van_tree_entries(
-    conn: &Connection,
-    round_id: &str,
-    wallet_id: &str,
-) -> Result<Vec<VanTreeEntry>, VotingError> {
-    let mut stmt = conn
-        .prepare(
-            // A bundle whose vote may already be on chain no longer holds its
-            // delegation VAN at that leaf: casting spends it. `tx_hash` alone
-            // is too weak a signal for that — a vote whose POST was dispatched
-            // but never classified has none, yet may have spent the VAN. The
-            // reservation is the authoritative fact: a committed
-            // `chain_submissions` row means a POST was released, which the
-            // submission lifecycle treats as possibly dispatched.
-            //
-            // Reading only `tx_hash` deadlocked recovery. The stale expectation
-            // failed tree sync, tree sync failing aborted the cast that would
-            // have classified the vote, and so `tx_hash` stayed null and the
-            // next pass failed identically.
-            //
-            // A terminally `rejected` row is the one exception, and it is
-            // excluded for the same reason the rest are counted: what retires
-            // the expectation is a POST that may have spent the VAN, and a
-            // definite rejection spent nothing. `Rejected` is safe to read
-            // that way because it is terminal — no observation transitions out
-            // of it, and `reserve_recovery_retry` accepts only `Recovering` —
-            // so the row can never acquire an outstanding POST after the fact.
-            // Its own row is never deleted, so without this it would retire
-            // the expectation for the rest of the round and silently skip both
-            // the leaf-content and the leaf-presence check.
-            //
-            // A `recovering` row carrying `chain_rejected` is deliberately NOT
-            // excluded, even though its last classified outcome also spent
-            // nothing. Exact-tree recovery reaches any `Recovering` row
-            // regardless of diagnostic, and on a no-match it reserves a retry
-            // and releases a POST while leaving both `state` and
-            // `diagnostic_kind` untouched. Between that reservation and the
-            // response being classified, the row is indistinguishable from a
-            // quiescent rejection, so excluding it would restore a delegation
-            // VAN the retry may already have spent — failing tree sync against
-            // the successor leaf, which aborts the cast that would classify
-            // the retry, which is the self-sustaining deadlock this predicate
-            // exists to break. Distinguishing the two needs the retry dispatch
-            // journaled against the reservation counter, which the row does
-            // not record today.
-            "SELECT b.bundle_index, b.van_leaf_position, b.gov_comm,
-                    (EXISTS (
-                        SELECT 1 FROM votes v
-                        WHERE v.round_id = b.round_id
-                          AND v.wallet_id = b.wallet_id
-                          AND v.bundle_index = b.bundle_index
-                          AND v.tx_hash IS NOT NULL
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM chain_submissions cs
-                        WHERE cs.round_id = b.round_id
-                          AND cs.wallet_id = b.wallet_id
-                          AND cs.bundle_index = b.bundle_index
-                          AND cs.kind IN ('vote', 'vote_batch', 'delegate_and_cast_vote_batch')
-                          AND cs.state != 'rejected'
-                    ))
-             FROM bundles b
-             WHERE b.round_id = :round_id
-               AND b.wallet_id = :wallet_id
-               AND b.van_leaf_position IS NOT NULL
-             ORDER BY b.bundle_index",
-        )
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to prepare VAN tree entries query: {e}"),
-        })?;
-    let rows = stmt
-        .query_map(
-            named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, Option<Vec<u8>>>(2)?,
-                    row.get::<_, i64>(3)? != 0,
-                ))
-            },
-        )
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to query VAN tree entries: {e}"),
-        })?;
-
-    rows.map(|row| {
-        let (bundle_index, position, commitment, has_submitted_vote) =
-            row.map_err(|e| VotingError::Internal {
-                message: format!("failed to read VAN tree entry: {e}"),
-            })?;
-        let bundle_index = u32::try_from(bundle_index).map_err(|_| VotingError::Internal {
-            message: "stored VAN bundle index does not fit in u32".to_string(),
-        })?;
-        let position = u32::try_from(position).map_err(|_| VotingError::Internal {
-            message: format!("stored VAN position for bundle {bundle_index} does not fit in u32"),
-        })?;
-        let expected_delegation_van = if has_submitted_vote {
-            None
-        } else {
-            let commitment = commitment.ok_or_else(|| VotingError::Internal {
-                message: format!(
-                    "confirmed delegation bundle {bundle_index} is missing its VAN commitment"
-                ),
-            })?;
-            Some(field_from_bytes(
-                &commitment,
-                &format!("bundle {bundle_index} VAN commitment"),
-            )?)
-        };
-        Ok(VanTreeEntry {
-            bundle_index,
-            position,
-            expected_delegation_van,
-        })
-    })
-    .collect()
 }
 
 // --- Delegation proof result fields ---
@@ -3584,6 +3383,29 @@ pub fn delete_bundles_from(
             "prune bundles",
         ));
     }
+    let frozen = frozen_by_proxy_slots(&tx)?;
+    let first_frozen: Option<i64> = tx
+        .query_row(
+            &format!(
+                "SELECT bundle_index FROM bundles
+                  WHERE round_id = :round_id AND wallet_id = :wallet_id
+                    AND bundle_index >= :from_index AND {frozen}
+                  ORDER BY bundle_index LIMIT 1"
+            ),
+            named_params! {
+                ":round_id": round_id,
+                ":wallet_id": wallet_id,
+                ":from_index": from_index as i64,
+            },
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to check for frozen delegation setup: {e}"),
+        })?;
+    if let Some(bundle_index) = first_frozen {
+        return Err(frozen_setup(bundle_index as u32, "prune bundles"));
+    }
 
     let rows = tx
         .execute(
@@ -4198,32 +4020,16 @@ pub fn get_keystone_signatures(
 /// `note_positions_blob` keeps their voting fields outside this cleanup.
 /// Bundles with a successful proof retain the setup fields required to sign
 /// that proof after a session restart.
+///
+/// Refuses with [`VotingError::DelegationSetupFrozen`], clearing nothing, when
+/// a bundle the reset would clear carries committed proxy slots (see
+/// [`frozen_setup`]).
 pub fn clear_unsigned_delegation_setup_fields(
     conn: &Connection,
     round_id: &str,
     wallet_id: &str,
 ) -> Result<(), VotingError> {
-    conn.execute(
-        "UPDATE bundles
-         SET van_comm_rand = NULL,
-             dummy_nullifiers = NULL,
-             rho_signed = NULL,
-             padded_note_data = NULL,
-             nf_signed = NULL,
-             cmx_new = NULL,
-             alpha = NULL,
-             rseed_signed = NULL,
-             rseed_output = NULL,
-             gov_comm = NULL,
-             total_note_value = NULL,
-             address_index = NULL,
-             rk = NULL,
-             gov_nullifiers_blob = NULL,
-             padded_note_secrets = NULL,
-             delegation_pczt = NULL,
-             pczt_sighash = NULL,
-             tx1_effects = NULL
-         WHERE round_id = :round_id
+    let clearable = "round_id = :round_id
            AND wallet_id = :wallet_id
            AND note_positions_blob IS NOT NULL
            AND delegation_tx_hash IS NULL
@@ -4246,13 +4052,95 @@ pub fn clear_unsigned_delegation_setup_fields(
                 WHERE submission.round_id = bundles.round_id
                   AND submission.wallet_id = bundles.wallet_id
                   AND submission.bundle_index = bundles.bundle_index
-           )",
+           )";
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|error| {
+        VotingError::from_sqlite("failed to begin unsigned setup reset", &error)
+    })?;
+    let frozen = frozen_by_proxy_slots(&tx)?;
+    let first_frozen: Option<i64> = tx
+        .query_row(
+            &format!(
+                "SELECT bundle_index FROM bundles WHERE {clearable} AND {frozen}
+                  ORDER BY bundle_index LIMIT 1"
+            ),
+            named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to check for frozen delegation setup: {e}"),
+        })?;
+    if let Some(bundle_index) = first_frozen {
+        return Err(frozen_setup(
+            bundle_index as u32,
+            "clear unsigned delegation setup",
+        ));
+    }
+    tx.execute(
+        &format!(
+            "UPDATE bundles
+             SET van_comm_rand = NULL,
+                 dummy_nullifiers = NULL,
+                 rho_signed = NULL,
+                 padded_note_data = NULL,
+                 nf_signed = NULL,
+                 cmx_new = NULL,
+                 alpha = NULL,
+                 rseed_signed = NULL,
+                 rseed_output = NULL,
+                 gov_comm = NULL,
+                 total_note_value = NULL,
+                 address_index = NULL,
+                 rk = NULL,
+                 gov_nullifiers_blob = NULL,
+                 padded_note_secrets = NULL,
+                 delegation_pczt = NULL,
+                 pczt_sighash = NULL,
+                 tx1_effects = NULL
+             WHERE {clearable} AND NOT {frozen}"
+        ),
         named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
     )
     .map_err(|e| VotingError::Internal {
         message: format!("failed to clear unsigned delegation setup fields: {e}"),
     })?;
+    tx.commit().map_err(|error| {
+        VotingError::from_sqlite("failed to commit unsigned setup reset", &error)
+    })?;
     Ok(())
+}
+
+// --- Proxy delegation setup freeze ---
+
+/// SQL true for the `bundles` row whose setup a committed proxy allocation
+/// froze, or constant false on a sidecar without `proxy_slots`.
+///
+/// Embedded in every statement that clears or replaces setup, so a commit
+/// between a caller's check and its write cannot lose the setup.
+fn frozen_by_proxy_slots(conn: &Connection) -> Result<&'static str, VotingError> {
+    if present_tables(conn)?
+        .iter()
+        .any(|name| name == "proxy_slots")
+    {
+        Ok("EXISTS (SELECT 1 FROM proxy_slots slot
+                     WHERE slot.round_id = bundles.round_id
+                       AND slot.wallet_id = bundles.wallet_id
+                       AND slot.bundle_index = bundles.bundle_index)")
+    } else {
+        Ok("0")
+    }
+}
+
+/// The refusal for a call that would clear, replace or prune the delegation
+/// setup of `bundle_index`, which carries committed proxy slots.
+///
+/// Each slot's nullifier and VAN chain derive from that setup and the
+/// allocation is final, so the setup is frozen from the commit on.
+pub(crate) fn frozen_setup(bundle_index: u32, action: &str) -> VotingError {
+    VotingError::DelegationSetupFrozen {
+        bundle_index,
+        action: action.to_string(),
+    }
 }
 
 /// Whether a bundle already holds the delegation setup that binds it to a
@@ -4303,6 +4191,10 @@ pub enum DelegationBroadcastEvidence {
     Vote,
     /// A helper share was delivered for this bundle.
     ShareDelegation,
+    /// A proxy delegation batch was proved on this bundle's delegation. Its
+    /// DCs spend the delegation's VAN, and only the stored setup reproduces
+    /// them for exact-tree recovery.
+    ProxyBatch,
 }
 
 impl DelegationBroadcastEvidence {
@@ -4313,6 +4205,7 @@ impl DelegationBroadcastEvidence {
             Self::ChainSubmission => "a chain submission",
             Self::Vote => "a vote",
             Self::ShareDelegation => "a delivered helper share",
+            Self::ProxyBatch => "a proved proxy delegation batch",
         }
     }
 }
@@ -4414,7 +4307,7 @@ fn first_broadcast_evidence(
     scope: BundleScope,
 ) -> Result<Option<(u32, DelegationBroadcastEvidence)>, VotingError> {
     let bundle_filter = scope.filter();
-    let checks: [(&str, &str, DelegationBroadcastEvidence); 5] = [
+    let checks: [(&str, &str, DelegationBroadcastEvidence); 6] = [
         (
             "bundles",
             "SELECT bundle_index FROM bundles
@@ -4446,6 +4339,12 @@ fn first_broadcast_evidence(
             "SELECT bundle_index FROM share_delegations
               WHERE round_id = :round_id AND wallet_id = :wallet_id",
             DelegationBroadcastEvidence::ShareDelegation,
+        ),
+        (
+            "proxy_batches",
+            "SELECT bundle_index FROM proxy_batches
+              WHERE round_id = :round_id AND wallet_id = :wallet_id",
+            DelegationBroadcastEvidence::ProxyBatch,
         ),
     ];
 
@@ -4503,7 +4402,9 @@ fn first_broadcast_evidence(
 ///
 /// Every broadcast guard is repeated in the statement itself, not just checked
 /// beforehand, so a submission that starts between the check and the write
-/// cannot lose its setup. Returns the number of bundles cleared.
+/// cannot lose its setup. A bundle in scope that carries committed proxy slots
+/// refuses the whole call with `DelegationSetupFrozen` (see [`frozen_setup`]).
+/// Returns the number of bundles cleared.
 pub(crate) fn discard_unbroadcast_delegation_setup(
     conn: &Connection,
     round_id: &str,
@@ -4516,8 +4417,14 @@ pub(crate) fn discard_unbroadcast_delegation_setup(
             &error,
         )
     })?;
-    let cleared =
-        discard_unbroadcast_delegation_setup_within(&tx, round_id, wallet_id, bundle_index, false)?;
+    let cleared = discard_unbroadcast_delegation_setup_within(
+        &tx,
+        round_id,
+        wallet_id,
+        bundle_index,
+        false,
+        "discard delegation setup",
+    )?;
     tx.commit().map_err(|error| {
         VotingError::from_sqlite(
             "failed to commit delegation setup discard transaction",
@@ -4538,6 +4445,7 @@ fn discard_unbroadcast_delegation_setup_within(
     wallet_id: &str,
     bundle_index: Option<u32>,
     preserve_note_witnesses: bool,
+    action: &str,
 ) -> Result<u32, VotingError> {
     // The outer filter runs against four different tables, so it stays
     // unqualified; the subquery below is the one that reads `bundles`.
@@ -4549,15 +4457,9 @@ fn discard_unbroadcast_delegation_setup_within(
         Some(_) => "AND bundles.bundle_index = :bundle_index",
         None => "",
     };
-    // The guard is one expression, reused by every statement below, so no
-    // deletion can be written with a weaker condition than the others.
-    let unbroadcast_guard = format!(
-        "round_id = :round_id
-           AND wallet_id = :wallet_id
-           {bundle_filter}
-           AND bundle_index IN (
-               SELECT bundles.bundle_index FROM bundles
-                WHERE bundles.round_id = :round_id
+    // The bundles in scope that nothing says may be on chain.
+    let unbroadcast_bundles = format!(
+        "bundles.round_id = :round_id
                   AND bundles.wallet_id = :wallet_id
                   AND bundles.delegation_tx_hash IS NULL
                   AND bundles.van_leaf_position IS NULL
@@ -4579,7 +4481,51 @@ fn discard_unbroadcast_delegation_setup_within(
                        WHERE share.round_id = bundles.round_id
                          AND share.wallet_id = bundles.wallet_id
                          AND share.bundle_index = bundles.bundle_index
-                  )
+                  )"
+    );
+    // A frozen bundle refuses the whole call before anything is written.
+    let frozen = frozen_by_proxy_slots(tx)?;
+    let first_frozen: Option<i64> = {
+        let sql = format!(
+            "SELECT bundles.bundle_index FROM bundles
+              WHERE {unbroadcast_bundles} AND {frozen}
+              ORDER BY bundles.bundle_index LIMIT 1"
+        );
+        let mut statement = tx.prepare(&sql).map_err(|e| VotingError::Internal {
+            message: format!("failed to prepare frozen setup check: {e}"),
+        })?;
+        match bundle_index {
+            Some(index) => statement.query_row(
+                named_params! {
+                    ":round_id": round_id,
+                    ":wallet_id": wallet_id,
+                    ":bundle_index": index,
+                },
+                |row| row.get(0),
+            ),
+            None => statement.query_row(
+                named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
+                |row| row.get(0),
+            ),
+        }
+        .optional()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to check for frozen delegation setup: {e}"),
+        })?
+    };
+    if let Some(frozen_bundle) = first_frozen {
+        return Err(frozen_setup(frozen_bundle as u32, action));
+    }
+    // The guard is one expression, reused by every statement below, so no
+    // deletion can be written with a weaker condition than the others.
+    let unbroadcast_guard = format!(
+        "round_id = :round_id
+           AND wallet_id = :wallet_id
+           {bundle_filter}
+           AND bundle_index IN (
+               SELECT bundles.bundle_index FROM bundles
+                WHERE {unbroadcast_bundles}
+                  AND NOT {frozen}
            )"
     );
 

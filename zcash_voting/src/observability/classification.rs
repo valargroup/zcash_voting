@@ -47,7 +47,9 @@ pub(crate) fn step_attribution(step: &crate::session::NextStep) -> super::Observ
     let (bundle, proposal, share) = match *step {
         NextStep::Delegate { bundle_index }
         | NextStep::AdvanceDelegation { bundle_index }
-        | NextStep::AdvanceImportedDelegation { bundle_index } => (bundle_index, None, None),
+        | NextStep::AdvanceImportedDelegation { bundle_index }
+        | NextStep::ProxyDelegate { bundle_index }
+        | NextStep::AdvanceProxyBatch { bundle_index } => (bundle_index, None, None),
         NextStep::CastVote {
             bundle_index,
             proposal_id,
@@ -155,6 +157,7 @@ pub(crate) fn voting_error_kind(error: &crate::VotingError) -> &'static str {
         crate::VotingErrorKind::PirUnavailable => "PirUnavailable",
         crate::VotingErrorKind::DelegationTargetMismatch => "DelegationTargetMismatch",
         crate::VotingErrorKind::DelegationAlreadyBroadcast => "DelegationAlreadyBroadcast",
+        crate::VotingErrorKind::DelegationSetupFrozen => "DelegationSetupFrozen",
     }
 }
 

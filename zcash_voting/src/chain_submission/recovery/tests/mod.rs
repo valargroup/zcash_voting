@@ -153,6 +153,25 @@ async fn scan_results_with_interruption(
     candidate: Option<CandidateTransactionHash>,
     interrupted: impl Fn() -> bool,
 ) -> Result<(RecoveryScanOutcome<'static>, Vec<String>), RecoveryScanFailure> {
+    scan_results_requiring(
+        endpoints,
+        responses,
+        candidate,
+        RequiredReplicaHeight::Any,
+        interrupted,
+    )
+    .await
+}
+
+/// [`scan_results_with_interruption`] whose no-match must come from a replica
+/// that meets `required`.
+async fn scan_results_requiring(
+    endpoints: Vec<String>,
+    responses: Vec<Result<ChainHttpResponse, ChainTransportError>>,
+    candidate: Option<CandidateTransactionHash>,
+    required: RequiredReplicaHeight,
+    interrupted: impl Fn() -> bool,
+) -> Result<(RecoveryScanOutcome<'static>, Vec<String>), RecoveryScanFailure> {
     // The test-owned operation and lease are leaked so the returned
     // authorization can be inspected without weakening its production lifetime.
     let derived = Box::leak(Box::new(derived()));
@@ -173,6 +192,7 @@ async fn scan_results_with_interruption(
         &protocol,
         derived,
         candidate,
+        required,
         operation,
         lease,
         interrupted,

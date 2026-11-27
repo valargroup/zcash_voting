@@ -951,7 +951,7 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
         for index in 0..2 {
             let data =
                 queries::load_zkp2_inputs(&conn, &params.vote_round_id, WALLET, index).unwrap();
@@ -1465,7 +1465,7 @@ mod tests {
             hotkey.stored_secret(),
             Network::Regtest,
             state.address_index,
-            state.total_note_value,
+            state.van_ballots,
             &state.gov_comm_rand,
             &round_id_bytes,
             drafts[0].proposal_id,
@@ -1476,7 +1476,7 @@ mod tests {
             hotkey.stored_secret(),
             Network::Regtest,
             state.address_index,
-            state.total_note_value,
+            state.van_ballots,
             &state.gov_comm_rand,
             &round_id_bytes,
             drafts[1].proposal_id,

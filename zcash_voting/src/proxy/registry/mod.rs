@@ -24,6 +24,7 @@ mod wallet_list;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use thiserror::Error;
 
+pub(in crate::proxy) use listing::identity_provider;
 pub use pre_proving::{check_delegates, confirm_proof_requests, ConfirmContext, ConfirmedDelegate};
 pub use proofs::{
     DelegateEntryError, ProvenDelegateEntry, ProvenRecord, ProvenValue, RegistryProofRequest,

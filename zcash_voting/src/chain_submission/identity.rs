@@ -25,6 +25,11 @@ pub enum ChainSubmissionTarget {
     DelegateAndVoteBatch {
         ordered_batch_digest: [u8; 32],
     },
+    /// One bundle's 0x09 proxy delegation batch. `batch_digest` is D1 with
+    /// expiry 0 (contract §4.1), shared by every signed attempt.
+    ProxyDelegationBatch {
+        batch_digest: [u8; 32],
+    },
 }
 
 impl ChainSubmissionTarget {
@@ -65,7 +70,8 @@ impl ChainSubmissionIdentity {
     /// only one vote ledger per network, so one identity covers endpoint or
     /// chain-id changes only while they continue to address that same ledger.
     /// Reusing a voting database with an independent ledger under the same
-    /// network is unsupported.
+    /// network is unsupported. A proxy batch's identity is the exception, since
+    /// its D1 `batch_digest` binds the chain id.
     ///
     /// Generation derivation later verifies this identity against the locked
     /// round and recovery inputs before reservation or dispatch.
@@ -167,6 +173,10 @@ pub(crate) fn submission_identity_key(identity: &ChainSubmissionIdentity) -> Vec
                 2
             });
             key.extend_from_slice(&ordered_batch_digest);
+        }
+        ChainSubmissionTarget::ProxyDelegationBatch { batch_digest } => {
+            key.push(4);
+            key.extend_from_slice(&batch_digest);
         }
     }
     key
@@ -302,6 +312,27 @@ mod tests {
 
         assert_ne!(delegation, vote);
         assert_ne!(vote, batch);
+    }
+
+    #[test]
+    fn a_proxy_batch_key_never_collides_with_a_vote_batch_of_the_same_digest() {
+        let digest = [9; 32];
+        let keys = [
+            ChainSubmissionTarget::VoteBatch {
+                ordered_batch_digest: digest,
+            },
+            ChainSubmissionTarget::DelegateAndVoteBatch {
+                ordered_batch_digest: digest,
+            },
+            ChainSubmissionTarget::ProxyDelegationBatch {
+                batch_digest: digest,
+            },
+        ]
+        .map(|target| submission_identity_key(&identity(target)));
+
+        assert_ne!(keys[0], keys[2]);
+        assert_ne!(keys[1], keys[2]);
+        assert_eq!(keys[2][keys[2].len() - 33], 4);
     }
 
     #[test]
