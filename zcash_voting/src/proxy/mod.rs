@@ -29,6 +29,8 @@
 //! proven entry before step 1 commits. The client
 //! API calls [`availability`], [`preview`], [`commit`], [`progress`] and
 //! [`status`] take and return the [`crate::wire`] types.
+//! [`delegate`] is the other side: a delegate's own device registers its key,
+//! signs one ballot per round and retires.
 
 mod ballot_pages;
 pub(crate) mod batch;

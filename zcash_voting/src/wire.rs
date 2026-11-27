@@ -95,7 +95,12 @@ pub use proxy_registry::{
 };
 
 mod proxy_delegate;
-pub use proxy_delegate::ProxyDelegateProvider;
+pub use proxy_delegate::{
+    BallotPreflight, BallotSubmitResult, DelegateAttestation, DelegateAttestationSignature,
+    DelegateBallotBlock, DelegateEntryView, DelegateModeStatus, DelegateRegisterResult,
+    DelegateRetireResult, DelegateRound, DelegateVerifierError, DelegateVerifierRefusal,
+    ProxyDelegateProvider,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegationSubmissionWire {
