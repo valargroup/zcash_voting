@@ -168,6 +168,13 @@ pub(crate) fn bound_executor<T: ChainTransport>(
             hotkey_secret: Some(zeroize::Zeroizing::new(HOTKEY_SECRET.to_vec())),
         })
         .unwrap()
+        .with_wall_clock(epoch_wall_clock())
+}
+
+/// A device clock pinned at the Unix epoch. The fixtures' host clocks are
+/// synthetic, and this clock never says their votes ended.
+pub(crate) fn epoch_wall_clock() -> crate::vote_work::WallClock {
+    Arc::new(|| std::time::Duration::ZERO)
 }
 
 /// A choice of `delegate_index` for `percent_bps`: `delegate<index>` on X,

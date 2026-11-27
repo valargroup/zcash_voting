@@ -107,6 +107,7 @@ mod locking;
 mod obligation_dispatch;
 mod proxy_delegate;
 mod proxy_remainder;
+mod proxy_shares;
 mod proxy_submission;
 mod share_steps;
 mod step_ledger;

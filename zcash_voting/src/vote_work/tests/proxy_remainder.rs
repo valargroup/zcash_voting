@@ -1,6 +1,6 @@
 //! A round driven after its proxy batch lands with the bundle's whole weight
 //! delegated (plan CF-2): the driver never stops for a ballot, casts nothing
-//! whatever the intents say, and sends no vote share. The planning
+//! whatever the intents say, and sends only the DCs' shares. The planning
 //! rules are in `round_planning/tests/proxy_remainder.rs` and the VAN's
 //! arithmetic in `storage/tests/remaining_weight.rs`.
 
@@ -19,7 +19,7 @@ use crate::{
             batch_digest, bound_executor, delegate_choice, proved_batch_for, scripted_chain_config,
             FixtureAnchor, ProvedBatchFixture,
         },
-        DcShareLayout,
+        DcShareLayout, POOL_PROPOSAL_ID,
     },
     round_drive::{NoopRoundDriveReporter, RoundDriver, RoundHostSourceBridge, RoundQuiescence},
     session::{Decision, NextStep, ProxyBatchStage, RoundPlan},
@@ -197,24 +197,41 @@ fn casts(plan: &RoundPlan) -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// The driver never stops for a ballot, recorded choices plan no cast, and
-/// nothing but the batch reaches the chain, and nothing reaches a helper.
+/// The DC's shares are delivered, the driver never stops for a ballot,
+/// recorded choices plan no cast, and nothing but the batch and its DC shares
+/// reaches the chain or a helper.
 #[tokio::test]
 async fn delegating_everything_never_asks_for_a_ballot_or_casts() {
     let round = landed_round(delegate_everything()).await;
     assert!(round.plan().nothing_left_to_vote);
     assert!(
-        matches!(round.drive().await, RoundQuiescence::NoWorkLeft),
-        "the run does not stop for a ballot"
+        matches!(
+            round.drive().await,
+            RoundQuiescence::BackgroundShareWorkOnly { .. }
+        ),
+        "the run does not stop for a ballot, and leaves the DC's shares to tracking"
     );
+    let dc_shares = round.helpers.proposals.lock().unwrap().len();
+    assert!(dc_shares > 0, "the DC's shares were delivered");
 
     let plan = round.decide();
     assert_eq!(casts(&plan), Vec::new(), "the intents are ignored");
-    assert!(matches!(round.drive().await, RoundQuiescence::NoWorkLeft));
+    assert!(matches!(
+        round.drive().await,
+        RoundQuiescence::BackgroundShareWorkOnly { .. }
+    ));
 
     assert_eq!(round.chain.posts(), 1, "the batch is the round's only POST");
+    let proposals = round.helpers.proposals.lock().unwrap();
+    assert_eq!(
+        proposals.len(),
+        dc_shares,
+        "no share is sent after the ballot"
+    );
     assert!(
-        round.helpers.proposals.lock().unwrap().is_empty(),
-        "no share is sent"
+        proposals
+            .iter()
+            .all(|proposal| *proposal == POOL_PROPOSAL_ID),
+        "every share sent is a DC share: {proposals:?}"
     );
 }

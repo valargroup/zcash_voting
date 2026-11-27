@@ -523,6 +523,13 @@ pub struct ShareTrackingParams<'a> {
     pub vote_end_time_seconds: Option<u64>,
     /// Timing thresholds used for polling, retry, and cutoff decisions.
     pub policy: ShareTimingPolicy,
+    /// The round voting hotkey's stored secret, which a handed-off DC
+    /// share is derived from again to be resent.
+    ///
+    /// Without it the pass still polls and confirms DC shares but never
+    /// resends one. Vote shares are rebuilt from their stored recovery
+    /// material and need no secret.
+    pub round_hotkey_seed: Option<&'a [u8]>,
     #[cfg(test)]
     pub(crate) random_bytes: &'a (dyn Fn(usize) -> Vec<u8> + Send + Sync),
 }
@@ -534,6 +541,43 @@ pub(crate) fn os_random_bytes(len: usize) -> Vec<u8> {
     let mut bytes = vec![0u8; len];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     bytes
+}
+
+/// Plans `share_count` shares across `fleet`'s ranked helpers, preferring
+/// its ready ones (see `plan_share_submissions_with_preferred_servers`).
+/// It draws the `submit_at` bytes and then the server order bytes from
+/// [`os_random_bytes`], each exactly as many as the plan needs.
+pub(crate) fn plan_shares_with_os_entropy(
+    share_count: usize,
+    fleet: &HelperFleetPreflight,
+    now_seconds: u64,
+    vote_end_time_seconds: u64,
+    last_moment_buffer_seconds: Option<u64>,
+    single_share: bool,
+    immediate_share_index: Option<u32>,
+) -> Result<Vec<ShareSubmissionPlan>, VotingError> {
+    let required = crate::share_policy::share_submission_random_bytes_required(
+        share_count,
+        fleet.ranked_server_urls().len(),
+        now_seconds,
+        vote_end_time_seconds,
+        last_moment_buffer_seconds,
+        single_share,
+    );
+    let submit_at_random_bytes = os_random_bytes(required.submit_at_random_bytes);
+    let server_random_bytes = os_random_bytes(required.server_random_bytes);
+    crate::share_policy::plan_share_submissions_with_preferred_servers(
+        share_count,
+        fleet.ranked_server_urls(),
+        fleet.ready_server_count(),
+        now_seconds,
+        vote_end_time_seconds,
+        last_moment_buffer_seconds,
+        single_share,
+        immediate_share_index,
+        &submit_at_random_bytes,
+        &server_random_bytes,
+    )
 }
 
 mod configured_fleet;
@@ -552,15 +596,18 @@ pub(crate) use delivery_plan::{
 };
 pub(crate) use delivery_progress::{delivery_progress, DeliveryProgress};
 
-use configured_fleet::ConfiguredHelperFleet;
+pub(crate) use configured_fleet::ConfiguredHelperFleet;
 #[cfg(test)]
 use confirmation::{finish_expired_polls, poll_share_helpers_with_budget};
-use confirmation::{poll_share_helpers, ShareStatusOutcome};
+pub(crate) use confirmation::{poll_share_helpers, ShareStatusOutcome};
 pub(crate) use immediate_designation::round_immediate_share;
-pub(crate) use initial_delivery::submit_committed_share_to_helpers;
 #[cfg(test)]
 use initial_delivery::submit_share_to_helpers;
-use initial_delivery::{ShareAttemptJournal, VoteShareJournal};
+use initial_delivery::VoteShareJournal;
+pub(crate) use initial_delivery::{
+    candidate_delivery_state, dispatch_share_to_canonical_helpers,
+    submit_committed_share_to_helpers, ShareAttemptJournal, ShareFanOut,
+};
 use recovery::{
     resubmit_to_next_helper, ResubmissionCandidates, ResubmissionSchedule, ResubmitOutcome,
     ResubmitRequest,
@@ -644,9 +691,18 @@ pub(crate) async fn observe_confirm_pending_share(
                 )
                 .await
             }
-            CommitmentRef::Proxy { .. } => Err(VotingError::InvalidInput {
-                message: "this build tracks no delegation commitment shares".to_string(),
-            }),
+            CommitmentRef::Proxy { dc_slot } => {
+                crate::proxy::shares::confirm_dc_share(
+                    db,
+                    &scope,
+                    params,
+                    dc_slot,
+                    configured_fleet.urls(),
+                    client,
+                    cancel,
+                )
+                .await
+            }
         }
     }
     .await;
@@ -848,7 +904,8 @@ async fn poll_and_confirm_share(
     }
 }
 
-/// Runs one confirm-or-retry pass over a round's unconfirmed shares.
+/// Runs one confirm-or-retry pass over a round's unconfirmed shares: its
+/// vote shares, then the handed-off shares of its landed DCs.
 ///
 /// For each unconfirmed share, in persisted order:
 ///
@@ -1036,7 +1093,9 @@ async fn walk_pending_shares(
     };
 
     let pending_shares = share::unconfirmed_for_scope(db, scope, params.round_id)?;
-    report.unconfirmed_at_entry = Some(u32::try_from(pending_shares.len()).unwrap_or(u32::MAX));
+    let pending_dc_shares = crate::proxy::shares::tracked_dc_shares(db, scope, params.round_id)?;
+    report.unconfirmed_at_entry =
+        Some(u32::try_from(pending_shares.len() + pending_dc_shares.len()).unwrap_or(u32::MAX));
 
     for loaded_share in pending_shares {
         let tracked = VoteShareJournal::tracking(db, scope, params.round_id, loaded_share);
@@ -1044,12 +1103,28 @@ async fn walk_pending_shares(
             break;
         }
     }
+    if !report.cancelled {
+        for (tracked, _) in &pending_dc_shares {
+            if !track_share(&pass, tracked, report).await? {
+                break;
+            }
+        }
+    }
 
     // Recompute from storage so explicit confirmations made by another task
     // during this pass do not remain in the next-delay calculation.
     let current_time = params.now_seconds.saturating_add(elapsed_seconds());
+    let vote_shares = share::unconfirmed_for_scope(db, scope, params.round_id)?;
+    let dc_shares = crate::proxy::shares::tracked_dc_shares(db, scope, params.round_id)?;
     report.next_delay_seconds = next_tracking_delay_seconds(
-        &share::unconfirmed_for_scope(db, scope, params.round_id)?,
+        vote_shares
+            .iter()
+            .map(|share| share as &dyn ShareSchedule)
+            .chain(
+                dc_shares
+                    .iter()
+                    .map(|(_, share)| share as &dyn ShareSchedule),
+            ),
         current_time,
         params.policy,
     );
@@ -1199,23 +1274,26 @@ async fn track_share<S: TrackedShare>(
     } else {
         ResubmissionSchedule::PreserveScheduledSubmitAt(share.submit_at())
     };
-    let share_wire_json =
-        match tracked.resend_payload(schedule.submit_at(), &client.observation_scope())? {
-            ResendPayload::Ready(share_wire_json) => share_wire_json,
-            ResendPayload::AwaitingVcPosition => return Ok(true),
-            ResendPayload::Unrecoverable => {
+    let share_wire_json = match tracked.resend_payload(
+        schedule.submit_at(),
+        params.round_hotkey_seed,
+        &client.observation_scope(),
+    )? {
+        ResendPayload::Ready(share_wire_json) => share_wire_json,
+        ResendPayload::Unavailable | ResendPayload::AwaitingVcPosition => return Ok(true),
+        ResendPayload::Unrecoverable => {
+            report.unrecoverable.push(key);
+            return Ok(true);
+        }
+        // The same generation makes the mismatch persistent; a replaced
+        // or deleted share is left to the operation that changed it.
+        ResendPayload::NullifierMismatch => {
+            if tracked.stored_confirmation()?.is_some() {
                 report.unrecoverable.push(key);
-                return Ok(true);
             }
-            // The same generation makes the mismatch persistent; a replaced
-            // or deleted share is left to the operation that changed it.
-            ResendPayload::NullifierMismatch => {
-                if tracked.stored_confirmation()?.is_some() {
-                    report.unrecoverable.push(key);
-                }
-                return Ok(true);
-            }
-        };
+            return Ok(true);
+        }
+    };
     loop {
         let resubmission = resubmit_to_next_helper(
             tracked,

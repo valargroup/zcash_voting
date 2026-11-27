@@ -206,7 +206,8 @@ pub(crate) trait ShareAttemptJournal: Sync {
 
     /// Durably records how the POST to `server_url` ended; `false` once the
     /// generation was replaced. `reset_submit_at` records an overdue resend's
-    /// `submit_at = 0` as the share's schedule.
+    /// `submit_at = 0` as the share's schedule where it can change: a vote
+    /// share's can, a DC share's is fixed at planning (`DcShareJournal`).
     fn resolve_attempt(
         &self,
         server_url: &str,

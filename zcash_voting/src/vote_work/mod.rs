@@ -10,6 +10,7 @@ mod cast_vote;
 mod delegate_and_vote_batch;
 mod delegation_steps;
 mod proxy_delegate;
+mod proxy_shares;
 pub(crate) mod round_lock;
 mod share_confirmation;
 mod step_control;
@@ -141,6 +142,13 @@ impl RoundHostContext {
     /// Vote end used for helper planning; falls back to `now` without timing.
     pub fn planning_vote_end_seconds(&self) -> u64 {
         self.vote_end_time_seconds.unwrap_or(self.now_seconds)
+    }
+
+    /// Whether `now_seconds` has reached the authenticated vote end. False
+    /// without timing.
+    pub(crate) fn vote_ended(&self) -> bool {
+        self.vote_end_time_seconds
+            .is_some_and(|vote_end| self.now_seconds >= vote_end)
     }
 }
 
@@ -336,6 +344,21 @@ pub struct RoundExecutor<T> {
     helper_client: HelperClient,
     tree_transport: Option<Arc<dyn vote_commitment_tree_client::transport::Transport>>,
     binding: Option<RoundBinding>,
+    /// The device clock a DC share pass checks the vote end against, beside
+    /// the host's sample.
+    wall_clock: WallClock,
+}
+
+/// The device's wall clock, as time since the Unix epoch.
+pub(crate) type WallClock = Arc<dyn Fn() -> std::time::Duration + Send + Sync>;
+
+/// The system clock, or the epoch if it reads before 1970.
+fn system_wall_clock() -> WallClock {
+    Arc::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+    })
 }
 
 impl RoundExecutor<HyperTransport> {
@@ -357,6 +380,7 @@ impl RoundExecutor<HyperTransport> {
 
             tree_transport: None,
             binding: None,
+            wall_clock: system_wall_clock(),
         })
     }
 }
@@ -391,6 +415,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
 
             tree_transport: None,
             binding: None,
+            wall_clock: system_wall_clock(),
         })
     }
 
@@ -453,6 +478,13 @@ impl<T: ChainTransport> RoundExecutor<T> {
         }
         self.binding = Some(binding);
         Ok(self)
+    }
+
+    /// Uses `clock` as the device's wall clock instead of the system's, for
+    /// hermetic tests whose host clocks are synthetic.
+    pub(crate) fn with_wall_clock(mut self, clock: WallClock) -> Self {
+        self.wall_clock = clock;
+        self
     }
 
     /// Uses `transport` for vote-tree sync instead of the SDK direct client.

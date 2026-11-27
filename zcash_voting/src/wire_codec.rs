@@ -303,14 +303,25 @@ impl VoteShareWire {
     fn validate(&self) -> Result<(), VotingError> {
         validate_vote_round_id_hex(&self.vote_round_id)?;
         validate_canonical_field_b64_32(&self.shares_hash, "shares_hash")?;
-        validate_proposal_id(self.proposal_id)?;
-        if self.vote_decision >= MAX_VOTE_OPTIONS {
-            return Err(VotingError::InvalidInput {
-                message: format!(
-                    "vote_decision must be in [0, {MAX_VOTE_OPTIONS}), got {}",
-                    self.vote_decision
-                ),
-            });
+        if self.proposal_id == crate::proxy::POOL_PROPOSAL_ID {
+            // A delegation commitment's share names its delegate, at least 1,
+            // with no option bound, as the helper checks it (contract §11.8).
+            if self.vote_decision == 0 {
+                return Err(VotingError::InvalidInput {
+                    message: "a pool share's vote_decision names a delegate, at least 1"
+                        .to_string(),
+                });
+            }
+        } else {
+            validate_proposal_id(self.proposal_id)?;
+            if self.vote_decision >= MAX_VOTE_OPTIONS {
+                return Err(VotingError::InvalidInput {
+                    message: format!(
+                        "vote_decision must be in [0, {MAX_VOTE_OPTIONS}), got {}",
+                        self.vote_decision
+                    ),
+                });
+            }
         }
         validate_encrypted_shares(std::slice::from_ref(&self.encrypted_share))?;
         validate_share_index(self.share_index)?;

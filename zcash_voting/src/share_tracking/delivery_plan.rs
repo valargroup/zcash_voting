@@ -10,15 +10,15 @@ use crate::{
     share::ShareOperationScope,
     share_policy::{
         immediate_share_bundle, is_planned_share_submission_target_count,
-        plan_share_submissions_with_preferred_servers, round_immediate_share_key,
-        share_submission_random_bytes_required, ImmediateShareKey, ShareSubmissionPlan,
+        round_immediate_share_key, ImmediateShareKey, ShareSubmissionPlan,
         SHARE_HELPER_MAX_INITIAL_SHARES_PER_SERVER, VOTE_COMMITMENT_SHARE_COUNT,
     },
     types::{SharePayload, VotingError},
 };
 
 use super::{
-    os_random_bytes, ShareDeliveryPlan, ShareDeliveryPlanningParams, SharePlacementGuarantee,
+    plan_shares_with_os_entropy, ShareDeliveryPlan, ShareDeliveryPlanningParams,
+    SharePlacementGuarantee,
 };
 
 const PLAN_FORMAT_VERSION: u32 = 1;
@@ -96,27 +96,14 @@ pub(crate) fn prepare_share_delivery_plan(
         return Ok(existing);
     }
 
-    let required = share_submission_random_bytes_required(
+    let planned = plan_shares_with_os_entropy(
         payloads.len(),
-        params.fleet.ranked_server_urls().len(),
-        params.now_seconds,
-        params.vote_end_time_seconds,
-        params.last_moment_buffer_seconds,
-        payloads.len() == 1,
-    );
-    let submit_at_random_bytes = os_random_bytes(required.submit_at_random_bytes);
-    let server_random_bytes = os_random_bytes(required.server_random_bytes);
-    let planned = plan_share_submissions_with_preferred_servers(
-        payloads.len(),
-        params.fleet.ranked_server_urls(),
-        params.fleet.ready_server_count(),
+        params.fleet,
         params.now_seconds,
         params.vote_end_time_seconds,
         params.last_moment_buffer_seconds,
         payloads.len() == 1,
         immediate_position,
-        &submit_at_random_bytes,
-        &server_random_bytes,
     )?;
 
     let has_legacy_rows: bool = tx

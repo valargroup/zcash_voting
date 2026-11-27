@@ -25,6 +25,7 @@ use crate::{
 pub use allocation_lifecycle::{
     commit, commit_allocation, load_allocation, preview, preview_allocation,
 };
+pub(crate) use allocation_store::load_allocation as load_allocation_on;
 pub(crate) use slot_positions::assign_dc_slots;
 
 /// One bundle's weight, in ballots of 12,500,000 zatoshi.

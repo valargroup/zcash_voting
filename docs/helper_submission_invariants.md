@@ -334,7 +334,8 @@ Regression coverage:
    emits only domain share index 0, and the planner rejects `single_share =
    true` unless the committed vote contains exactly one payload. The SDK
    derives this mode from the committed payload count; the host cannot pass a
-   contradictory mode flag.
+   contradictory mode flag. A delegation commitment's mode comes from its
+   committed layout instead (see "Delegation commitment shares").
 2. Share indexes identify the post-ZKP-2 shuffled shares. Share index 0 does
    not imply a particular denomination or value.
 3. At most one share is designated as the round's immediate share. It is share
@@ -1765,7 +1766,9 @@ Regression tests: `cancellation_aborts_bounded_in_flight_status_polls`,
 
 ### Durable record semantics
 
-1. The persisted key is wallet, round, bundle, proposal, and share index.
+1. The persisted key is wallet, round, bundle, proposal, and share index. A
+   delegation commitment's share is keyed by its slot instead; see
+   "Delegation commitment shares".
 2. The share nullifier is derived from persisted recovery material rather than
    accepted from a wallet caller. The recovery material's embedded proposal
    MUST match the proposal in that persisted key. Re-recording the key with a
@@ -2320,3 +2323,165 @@ Conformance: `helper_receipts_retry_with_fresh_tokens_and_existing_backoff`,
 `legacy_helper_transport_keeps_generic_timeout_handling`,
 `exhausted_helper_receipts_clear_fresh_reservation_without_acceptance`, and
 `helper_receipt_preserves_prior_ambiguity_after_reopen`.
+
+## Delegation commitment shares
+
+A proxy delegation's delegation commitment (DC) is a vote commitment for
+proposal 0, so its shares travel in the ordinary `VoteShareWire` with
+`proposal_id = 0` and `vote_decision = d`, the delegate; a helper's reveal
+adds them to delegate `d`'s pool (contract §11.8). `VoteShareWire` accepts
+that one branch: for proposal 0 the decision is a delegate index of at least
+1 with no option bound, and every other proposal keeps its range and option
+bound (`a_pool_share_names_a_delegate_with_no_option_bound`). Every rule
+above applies to DC shares unchanged except where this section says
+otherwise; `zcash_voting::proxy::shares` implements them.
+
+**Identity.** A share's durable key names its commitment: `ShareKey` carries
+`CommitmentRef::Vote { proposal_id }` or `CommitmentRef::Proxy { dc_slot }`,
+since one bundle's DCs all reveal into proposal 0. The per-share operation
+lock keys on it too. A DC's plan is `proxy_share_plans` and its delivery
+state `proxy_dc_shares`, keyed by wallet, round, bundle and slot, not
+`helper_share_plans` and `share_delegations`: a vote's rows are bound to its
+ballot intent and recovery JSON, and a DC has neither
+(`share_step_views_round_trip_both_commitments`,
+`share_key_views_name_the_commitment`).
+
+**Planning.** A DC is planned once its batch landed, and only then. Its plan
+is made by the proxy share planner, keyed by `(round, wallet, bundle,
+dc_slot)`, never by the votes table's planner. The planner passes
+`single_share = (layout == 1)` from the layout the DC's slot committed and
+never infers it from a payload count: a single-share DC plans share 0 alone
+with `submit_at = 0`, and a standard DC plans all 16 shares on the
+standard `submit_at` schedule, which is 0 for every share inside the
+last-moment window. Each DC share goes to the same placement target as a
+vote share. No DC share is ever the round's immediate share: DC planning never calls `derive_immediate_share` or
+`validate_round_immediate_plans`, never reads or writes
+`round_immediate_share`, and marks no plan `immediate` (PRV-3). The plan and
+every share's row (nullifier, target, `submit_at`) are written in one
+immediate transaction before the DC's first POST, and a plan another writer
+stored first wins
+(`a_single_share_dc_plans_share_zero_alone_at_once_like_a_vote_share`,
+`a_standard_dc_plans_sixteen_shares_on_the_standard_schedule`,
+`a_standard_dc_planned_inside_the_window_submits_every_share_at_once`,
+`a_dc_is_planned_before_its_first_post_and_delivered_into_its_delegate_s_pool`,
+`no_dc_share_is_the_round_s_immediate_share`).
+
+**Secrets.** A DC's share secrets are never stored. Every delivery derives
+the DC's seed from the round hotkey and the slot's stored delegate, weight
+and layout and the spent VAN's stored nullifier (contract §11.1), expands it
+with the circuit's builder (contract §10), and refuses a derivation whose DC
+differs from the landed one or whose reveal nullifiers differ from the stored
+rows. Delivery and every resend of a DC share therefore need the hotkey:
+the round step holds it, and background tracking holds it when the host
+passes `ShareTrackingParams::round_hotkey_seed`
+(`a_landed_dc_s_payloads_reveal_into_its_delegate_s_pool`,
+`shares_are_derived_again_identically_after_a_restart`,
+`another_hotkey_does_not_derive_the_landed_dc`,
+`a_single_share_dc_derives_share_zero_alone`).
+
+**Delivery.** Each share not handed off runs the same fan-out executor as a
+vote share (`dispatch_share_to_canonical_helpers`), journaling into
+`proxy_dc_shares` through its own `ShareAttemptJournal`: planned helpers
+first, then the rest of the configured fleet, each reserved in
+`attempting_urls` before its POST and resolved accepted, outcome-unknown or
+cleared after it, under the same deadline, POST ceiling, stale-generation and
+cancellation rules. A share the untried helpers leave short is reconciled in
+the same pass: one duplicate-safe re-POST to each configured helper whose
+attempt in an earlier pass has an unknown outcome, interrupted ones first. A
+`duplicate` or `queued` answer is a definite acceptance; an interrupted
+helper that does not accept becomes explicitly ambiguous; an ambiguous one
+is unchanged. A helper whose answer was lost in this pass waits for the next
+(`a_share_short_of_its_target_is_owed_again_until_handed_off`,
+`an_ambiguous_helper_is_reconciled_by_a_duplicate_safe_re_post`).
+
+**The helper's answers to a pool share** (contract §11.8). A pool share's
+answers are read as a vote share's are, with no code of their own:
+
+| Answer | Meaning | DC handling |
+| --- | --- | --- |
+| 422 `delegate_not_found` | `d = 0` or `d ≥ next_index` | an ordinary definite failure of that helper: the attempt is cleared, so the fan-out moves on to the next helper and nothing is left ambiguous; in reconciliation it is a failed re-post like any other |
+| 422 `proxy_delegation_disabled` | the round has no proxy flag | the same |
+| 503 `leaf_not_found` | the DC is not yet in that helper's tree | an unknown outcome, as any 5xx is: the helper is reconciled by a later pass's duplicate-safe re-post |
+
+Nothing about a refusal is stored, and one helper's refusal never decides a
+DC, so a lagging or lying helper cannot drop a delegation the chain
+accepted. A pass that leaves a share short with an unknown outcome at a
+configured helper is `Pending`; one that leaves it short otherwise, with
+definite failures or unknown outcomes only at helpers that left the fleet, is
+`HelperDeliveryIncomplete`, and a later pass asks every helper again on the
+host's schedule. Delivery stops at the authenticated vote end: round planning
+owes no DC delivery once the host clock reaches it, and a pass that
+reaches it, after the helper preflight or between waves and re-posts,
+plans and starts no new POST and is `Pending`. The pass reaches it once
+either clock says so, timed from its start on the monotonic clock: the
+host's whole-second sample, read as up to 999 ms behind its clock, or the
+device's wall clock read as the pass starts, which also counts any time
+between the host's sample and the pass. A POST already in flight keeps its
+outcome
+(`a_pass_whose_preflight_crosses_the_vote_end_posts_nothing`,
+`a_post_in_flight_at_the_vote_end_keeps_its_outcome_and_starts_no_other`,
+`a_whole_second_host_sample_is_read_as_late_as_it_may_be`,
+`a_delay_before_the_pass_is_counted_by_the_device_clock`).
+A DC whose share no helper took by then is never handed off, so once the
+round closes the status view shows it not counted (see Status)
+(`a_refusing_helper_is_replaced_and_the_share_handed_off`,
+`a_share_short_of_its_target_is_owed_again_until_handed_off`,
+`a_dc_every_helper_refuses_is_not_counted_after_close`,
+`a_refused_re_post_keeps_the_earlier_unknown_outcome`,
+`a_dc_not_yet_in_the_helpers_trees_is_retried_later`).
+
+**Hand-off and completion** (LIV-2). A DC share is handed off once its reveal
+is confirmed, or once a delivery pass recorded that its reachable target
+holds it; a DC is handed off once every planned share is. The pass judges the
+share by its reachable target: the effective target a vote share's placement
+keeps (see Configuration and migration),
+`effective_share_submission_target_count` of the stored target and the
+current fleet's size, and at least one. It counts only configured helpers toward it, as a vote share's
+placement does, and records `proxy_dc_shares.handed_off_at` once that many
+hold the share, including a share placed on its full target, since round
+planning, which owes the share, has no fleet to judge it by. A raw count of
+`sent_to_urls` never hands a share off: helpers removed from the fleet may
+fill it, so a share whose verdict was never recorded goes to the configured
+fleet (`helpers_removed_from_the_fleet_do_not_hand_a_share_off`). The record
+is written once, so the hand-off stands if the fleet grows back
+(`a_fleet_that_shrinks_below_the_plan_s_target_hands_the_share_off`,
+`a_removed_helper_does_not_count_toward_a_shrunk_fleet_s_target`). Delivery
+completes at hand-off, whatever the schedule. A handed-off share then awaits
+its reveal as an accepted vote share does: round planning lists it as a
+`ConfirmShare` that `RoundQuiescence::BackgroundShareWorkOnly` hands to
+background tracking, and sets `has_unconfirmed_shares`, so the host starts
+tracking (see Tracking). Share 0 of a DC planned with `submit_at = 0` is no
+exception
+(`a_single_share_dc_sends_share_zero_at_once_and_tracking_confirms_its_reveal`,
+`a_handed_off_dc_s_unconfirmed_shares_are_left_to_background_tracking`).
+
+**Status.** The delegator's status view (`proxy::status`, `proxy::progress`)
+reads hand-off and completion from these rows and writes nothing; the
+`proxy::delegator::status` module states its stage rules. A DC shows handed
+off once every planned share is, and still does after the round closes,
+whatever reveals tracking confirmed (contracts-v1 §15.1). A reveal only
+decides the job's completion: the job's progress reports a share 0 planned
+with `submit_at = 0` and whether background tracking confirmed every such
+reveal (`a_dc_s_stage_follows_its_batch_then_its_shares`,
+`once_the_round_closes_only_a_handed_off_dc_is_counted`,
+`the_status_view_follows_each_delegation_from_preparing_to_handed_off`,
+`a_dc_planned_at_once_is_handed_off_before_its_reveal_which_completes_the_job`).
+
+**Tracking.** Background tracking (`track_pending_shares`) owns a handed-off
+DC share as it owns a vote share some helper accepted. Each pass walks the
+round's unconfirmed vote shares, then every handed-off, unconfirmed share of
+its landed DCs, through the same routine: the same status-check and overdue
+timing, configured-helper quorum, resubmission order, journaling, cutoff and
+cancellation ("Recovery invariants"). A resend derives the share again from
+the hotkey, as delivery does. A landed DC that cannot be read or that the
+hotkey does not derive makes the share unrecoverable, as missing recovery
+material does, and a mismatched nullifier is handled as a vote share's is. A DC share keeps its planned
+`submit_at` after an overdue resend, which changes no timing, since an
+overdue share stays overdue. Without the hotkey a pass still polls and
+confirms DC shares but never resends one. The next-pass delay counts
+handed-off DC shares, and `pending_rounds_for_accounts` lists a round that
+holds one
+(`an_overdue_handed_off_dc_share_is_resent_at_once_and_confirmed_later`,
+`without_the_hotkey_tracking_confirms_dc_shares_but_never_resends_one`,
+`tracking_continues_while_a_handed_off_dc_share_is_unconfirmed`). A host that
+confirms a DC share itself calls `confirm_pending_share` with its `ShareKey`.

@@ -529,6 +529,9 @@ pub enum NextStep {
     /// fleet, contacts only current helpers, validates the whole batch before
     /// network I/O, journals every attempt and outcome, and resumes only the
     /// remaining definite-delivery deficits.
+    ///
+    /// For a delegation commitment (`CommitmentRef::Proxy`) the SDK alone
+    /// plans and delivers the shares once the DC's batch landed.
     SubmitShares {
         bundle_index: u32,
         /// The commitment whose share is owed.
@@ -538,6 +541,9 @@ pub enum NextStep {
     },
     /// Confirm one submitted helper share, or deliver it again from its
     /// durable plan when no helper has reached it.
+    ///
+    /// A delegation commitment's share is listed once handed off, and is
+    /// background work like a share a helper accepted.
     ConfirmShare {
         bundle_index: u32,
         /// The commitment the share belongs to.
@@ -781,6 +787,7 @@ pub struct RoundPlan {
     pub blocking_share_work: bool,
     /// True when any helper-share row is still unconfirmed, whether or not a
     /// helper has accepted it or may hold it after an outcome-unknown attempt.
+    /// A DC share counts once handed off, when background tracking owns it.
     ///
     /// Hosts schedule background share tracking from this rather than holding
     /// share rows themselves; `blocking_share_work` is the stricter subset

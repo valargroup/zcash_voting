@@ -1,7 +1,8 @@
 //! The `AdvanceProxyBatch` step: an attempt is signed and durable before its
 //! POST, an expired one is re-signed with no new proof or device signature,
 //! the hold lifts only when the batch lands, a refused batch stays pending
-//! and is sent again, and a lifted registration splits the batch off.
+//! and is sent again, and a lifted registration splits the batch off. The
+//! status view shows a refused batch as submitting until the round closes.
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -18,13 +19,18 @@ use crate::{
     delegation_pipeline::{DelegationDriver, DelegationSigner, KeystoneSignatureSource},
     phases::DelegationPhase,
     pir::PirFleet,
-    proxy::tests::submission_fixtures::{
-        batch_digest, bound_executor, proved_batch, scripted_chain_config, FixtureAnchor,
-        ProvedBatchFixture, HOTKEY_SECRET, NETWORK, ROUND_ID, WALLET_ID,
+    proxy::{
+        progress, status,
+        tests::submission_fixtures::{
+            batch_digest, bound_executor, proved_batch, scripted_chain_config, FixtureAnchor,
+            ProvedBatchFixture, HOTKEY_SECRET, NETWORK, ROUND_ID, WALLET_ID,
+        },
+        DelegateBallotList, ProxyRoundPhase,
     },
     round::VotingDb,
     session::{Decision, NextStep, ProxyBatchStage},
     types::DelegationProgressReporter,
+    wire::{ProxyDelegationProgress, ProxyDelegationStage},
     BallotIntent, ChainSubmissionControl, DelegationStepInputs, HelperClient, HelperHealth,
     HyperTransport, RoundExecutor, RoundHostContext, RoundStepDisposition, RoundStepFailureKind,
     RoundStepProgress, VotingError, VotingHotkey,
@@ -212,6 +218,34 @@ fn plans_cast_on_bundle_0(executor: &RoundExecutor<Arc<ScriptedChain>>) -> bool 
     })
 }
 
+/// The delegation job's progress, with no ballot published.
+fn job(round: &Round) -> ProxyDelegationProgress {
+    progress(round.db(), ROUND_ID, &no_ballots(), ProxyRoundPhase::Active)
+        .unwrap()
+        .unwrap()
+}
+
+/// The round's complete ballot list, with no ballot in it.
+fn no_ballots() -> DelegateBallotList {
+    let mut ballots = DelegateBallotList::new(ROUND_ID).unwrap();
+    ballots.add_page(b"{}").unwrap();
+    ballots
+}
+
+/// Each delegation's `(delegate, ballots, stage)` in the status view.
+fn delegation_stages(
+    round: &Round,
+    phase: ProxyRoundPhase,
+) -> Vec<(u32, u64, ProxyDelegationStage)> {
+    status(round.db(), ROUND_ID, &no_ballots(), phase)
+        .unwrap()
+        .unwrap()
+        .delegations
+        .into_iter()
+        .map(|view| (view.delegate_index, view.ballots, view.stage))
+        .collect()
+}
+
 /// Records a choice for the round's one proposal.
 fn choose<T: crate::ChainTransport>(executor: &RoundExecutor<T>) {
     executor
@@ -345,9 +379,11 @@ async fn a_new_attempt_after_the_vote_end_is_refused() {
 }
 
 /// A refused batch, paused or not, stays pending on the wire and is sent
-/// again until it lands.
+/// again until it lands. Its DCs show as submitting while the round runs,
+/// and as not counted once it closes.
 #[tokio::test]
 async fn a_refused_batch_stays_pending_and_is_sent_again() {
+    use ProxyDelegationStage::{NotCounted, Submitting};
     for code in [51, 5] {
         let round = round(FixtureAnchor::Chain);
         round.chain.expect("GET", "/v1/height", chain_height(1_000));
@@ -362,8 +398,21 @@ async fn a_refused_batch_stays_pending_and_is_sent_again() {
             "{code}"
         );
 
+        let refused = job(&round);
+        assert!(
+            refused.broadcast_started && refused.refused_by_chain,
+            "{code}"
+        );
         assert_eq!(round.stage(), ProxyBatchStage::Refused);
         assert!(round.executor.plan().unwrap().next_steps.contains(&STEP));
+        assert_eq!(
+            delegation_stages(&round, ProxyRoundPhase::Active),
+            [(17, 23, Submitting), (5, 17, Submitting)]
+        );
+        assert_eq!(
+            delegation_stages(&round, ProxyRoundPhase::Closed),
+            [(17, 23, NotCounted), (5, 17, NotCounted)]
+        );
 
         expect_tree_pass(&round.chain, &[unrelated_leaf(1)]);
         round
@@ -380,6 +429,7 @@ async fn a_refused_batch_stays_pending_and_is_sent_again() {
         round.chain.assert_drained();
         assert_eq!(round.chain.posts(), 2);
         assert_eq!(round.stage(), ProxyBatchStage::Landed);
+        assert!(!job(&round).refused_by_chain);
     }
 }
 

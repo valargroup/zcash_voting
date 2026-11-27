@@ -773,7 +773,8 @@ struct PendingShareRound {
     session_json: Option<String>,
 }
 
-/// Lists rounds with at least one unconfirmed helper share, newest first.
+/// Lists rounds with at least one unconfirmed helper share background
+/// tracking owns, a vote's or a handed-off DC's, newest first.
 ///
 /// Scoped to whatever wallet `db` is already scoped to; the persisted
 /// `session_json` carries caller-owned round timing without exposing the

@@ -53,9 +53,12 @@ pub(crate) trait TrackedShare: ShareAttemptJournal {
     fn mark_confirmed(&self) -> Result<bool, VotingError>;
 
     /// The share's helper request rebuilt for a resend with `submit_at`.
+    /// `round_hotkey_seed` is the pass's round hotkey, which only a DC
+    /// share is derived from.
     fn resend_payload(
         &self,
         submit_at: u64,
+        round_hotkey_seed: Option<&[u8]>,
         observations: &crate::ObservationScope,
     ) -> Result<ResendPayload, VotingError>;
 }
@@ -64,6 +67,9 @@ pub(crate) trait TrackedShare: ShareAttemptJournal {
 pub(crate) enum ResendPayload {
     /// The request body.
     Ready(String),
+    /// The pass holds no round hotkey to derive a DC share from, so it
+    /// only polls the share.
+    Unavailable,
     /// The vote is submitted, but its real VC tree position is not recorded.
     AwaitingVcPosition,
     /// The stored material is missing or cannot rebuild the share.
@@ -135,6 +141,7 @@ impl TrackedShare for VoteShareJournal<'_> {
     fn resend_payload(
         &self,
         submit_at: u64,
+        _round_hotkey_seed: Option<&[u8]>,
         observations: &crate::ObservationScope,
     ) -> Result<ResendPayload, VotingError> {
         let bundle = match vote_recovery::helper_recovery_material_for_wallet(

@@ -560,6 +560,7 @@ fn params<'a>(
         now_seconds,
         vote_end_time_seconds: Some(VOTE_END),
         policy: ShareTimingPolicy::default(),
+        round_hotkey_seed: None,
         random_bytes,
     }
 }

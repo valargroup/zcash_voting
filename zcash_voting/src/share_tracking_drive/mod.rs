@@ -44,6 +44,8 @@ pub use quiescence::ShareTrackingQuiescence;
 
 use std::time::{Duration, Instant};
 
+use zeroize::Zeroizing;
+
 use crate::{
     helper::client::HelperClient,
     round::VotingDb,
@@ -152,6 +154,8 @@ pub struct ShareTrackingDriver<'a> {
     client: &'a HelperClient,
     round_id: &'a str,
     policy: ShareTrackingDrivePolicy,
+    /// See [`ShareTrackingParams::round_hotkey_seed`]. Zeroized on drop.
+    round_hotkey_seed: Option<Zeroizing<Vec<u8>>>,
 }
 
 impl<'a> ShareTrackingDriver<'a> {
@@ -162,11 +166,21 @@ impl<'a> ShareTrackingDriver<'a> {
             client,
             round_id,
             policy: ShareTrackingDrivePolicy::default(),
+            round_hotkey_seed: None,
         }
     }
 
     pub fn with_policy(mut self, policy: ShareTrackingDrivePolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Lets each pass resend handed-off DC shares, derived again from the
+    /// round voting hotkey's stored secret `seed`. Without one, DC shares
+    /// are polled and confirmed but never resent
+    /// ([`ShareTrackingParams::round_hotkey_seed`]).
+    pub fn with_round_hotkey_seed(mut self, seed: Option<Zeroizing<Vec<u8>>>) -> Self {
+        self.round_hotkey_seed = seed;
         self
     }
 
@@ -219,6 +233,7 @@ impl<'a> ShareTrackingDriver<'a> {
             client: &client,
             round_id: self.round_id,
             policy: self.policy.clone(),
+            round_hotkey_seed: self.round_hotkey_seed.clone(),
         };
         let started_at = Instant::now();
         let result = driver
@@ -470,6 +485,7 @@ impl<'a> ShareTrackingDriver<'a> {
             now_seconds: host_context.now_seconds,
             vote_end_time_seconds: host_context.vote_end_time_seconds,
             policy: self.policy.timing,
+            round_hotkey_seed: self.round_hotkey_seed.as_deref().map(Vec::as_slice),
             #[cfg(test)]
             random_bytes: &crate::share_tracking::os_random_bytes,
         };
