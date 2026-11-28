@@ -30,9 +30,11 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - Proxy delegation (contracts v1), dormant while
   `proxy::PROXY_DELEGATION_ENABLED` is false. `zcash_voting::proxy` adds the
   delegator calls (`availability`, `preview`, `commit`, `status`,
-  `progress`) and the registry client (`proxy::registry`: registry cache, handle
+  `progress`), the registry client (`proxy::registry`: registry cache, handle
   search, signed wallet list, lookups, the pre-proving check of each chosen
-  delegate's proven entry). A commit either delegates the whole weight or
+  delegate's proven entry) and the delegate-mode APIs (`proxy::delegate`:
+  one delegate key per device, attestation, register and Retire ops, one
+  signed ballot per round). A commit either delegates the whole weight or
   needs the kept share's ballot answers recorded first. Once a vote of the
   round has a saved share plan, preview and commit refuse with
   `AlreadyVoted` and `availability` reports it. A committed delegation is

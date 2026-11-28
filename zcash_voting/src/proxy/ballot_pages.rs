@@ -1,6 +1,7 @@
 //! One page of `GET /shielded-vote/v1/delegate-ballots/{round_id}` (contract
-//! §8 `DelegateBallots`), as [`DelegateBallotList`](super::DelegateBallotList)
-//! reads it.
+//! §8 `DelegateBallots`). [`DelegateBallotList`](super::DelegateBallotList)
+//! and [`parse_delegate_ballots_page`](super::delegate::parse_delegate_ballots_page)
+//! share this parser, so both trust a page on the same rules.
 
 use serde::Deserialize;
 
@@ -28,6 +29,15 @@ pub struct DelegateBallotPage {
     pub ballots: Vec<ChainDelegateBallot>,
     /// The `start_after` of the next page, or `None` on the last page.
     pub next_start_after: Option<u32>,
+}
+
+impl DelegateBallotPage {
+    /// Delegate `delegate_index`'s ballot, if this page lists it.
+    pub fn ballot_of(&self, delegate_index: u32) -> Option<&ChainDelegateBallot> {
+        self.ballots
+            .iter()
+            .find(|ballot| ballot.delegate_index == delegate_index)
+    }
 }
 
 /// Parses the page of `vote_round_id`'s list fetched with `start_after`, or

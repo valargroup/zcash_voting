@@ -16,6 +16,7 @@ pub use availability::{
     PROXY_DELEGATION_CHAIN_VERSION, PROXY_DELEGATION_WALLET_VERSION,
 };
 pub use ballots::DelegateBallotList;
+pub(super) use status::ballot_view;
 pub use status::{progress, status, ProxyRoundPhase};
 
 #[cfg(test)]
