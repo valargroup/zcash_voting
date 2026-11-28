@@ -222,16 +222,7 @@ impl LandedRound {
     }
 
     async fn run(&self, step: NextStep) -> crate::RoundStepOutcome {
-        self.executor
-            .advance_step_in_epoch(
-                step,
-                &self.host,
-                &ChainSubmissionControl::new(1),
-                1,
-                &RecordingProgress::default(),
-            )
-            .await
-            .unwrap()
+        self.run_in(step, &self.host).await
     }
 
     /// Runs `step` with `fleet` as the host's configured helpers.

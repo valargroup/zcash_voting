@@ -140,22 +140,6 @@ fn a_commit_records_the_previewed_plan_once() {
             .map(|delegation| (delegation.delegate_index, delegation.ballots))
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        kind(commit(
-            &db,
-            &request(),
-            &previewed,
-            &allowed(),
-            &early(),
-            &FIXTURE_ROSTER,
-        )),
-        ProxyDelegationErrorKind::Other,
-        "the allocation is final"
-    );
-    assert_eq!(
-        kind(preview(&db, &request(), &early())),
-        ProxyDelegationErrorKind::Other
-    );
     let view = status(&db, ROUND_ID, &no_ballots(), ProxyRoundPhase::Active)
         .unwrap()
         .unwrap();

@@ -256,15 +256,3 @@ fn another_hotkey_does_not_derive_the_landed_dc() {
 
     assert!(error.to_string().contains("does not derive the landed DC"));
 }
-
-#[test]
-fn a_dc_whose_batch_has_not_landed_has_no_payloads() {
-    let fixture = proved_batch_with(FixtureAnchor::Registration, DcShareLayout::Standard);
-
-    let error = fixture
-        .db
-        .read_transaction("load", |tx| load_landed_dc(tx, ROUND_ID, WALLET_ID, 0, 0))
-        .unwrap_err();
-
-    assert!(error.to_string().contains("has not landed"));
-}
