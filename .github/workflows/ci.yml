@@ -54,14 +54,15 @@ jobs:
           tool: cargo-nextest@0.9.138
       - name: Test default Zakura stack with fixtures
         run: |
-          cargo nextest run -P ci -p zcash_voting -p zcash-voting-wallet-example \
+          cargo nextest run -P ci -p zcash_voting -p zcash_vote_delegate \
+            -p zcash-voting-wallet-example \
             --features test-fixtures \
             --partition count:${{ matrix.partition }}/2 \
             --locked
       - name: Test documentation
         if: matrix.partition == 1
         run: |
-          cargo test -p zcash_voting -p zcash-voting-wallet-example --doc \
+          cargo test -p zcash_voting -p zcash_vote_delegate -p zcash-voting-wallet-example --doc \
             --features test-fixtures \
             --locked
 
@@ -151,7 +152,8 @@ jobs:
       - name: Test LRZ wallet stack
         # The wallet example verifies direct `zcash_voting/lrz` selection.
         run: |
-          cargo nextest run -P ci -p zcash_voting -p zcash-voting-wallet-example \
+          cargo nextest run -P ci -p zcash_voting -p zcash_vote_delegate \
+            -p zcash-voting-wallet-example \
             --all-targets --no-default-features \
             --features lrz \
             --locked
@@ -177,6 +179,14 @@ jobs:
 
           if cargo check -p zcash_voting --all-features --locked; then
             echo "zcash_voting backends must remain mutually exclusive"
+            exit 1
+          fi
+
+          # The shared proxy delegation crate is backend-neutral (contracts-v1
+          # section 14): neither backend's crypto stack may enter its graph.
+          if cargo tree -p zcash_vote_delegate -e normal --prefix none --locked \
+            | grep -Eq '^(voting-crypto-deps|voting-circuits|zakura-[a-z0-9-]+|pasta_curves|halo2_[a-z]+|orchard|sinsemilla) v'; then
+            echo "A voting backend entered the zcash_vote_delegate graph"
             exit 1
           fi
       - name: Check external git consumers
@@ -265,6 +275,7 @@ jobs:
       - name: Package voting crates
         run: |
           cargo package -p vote-commitment-tree --locked
+          cargo package -p zcash_vote_delegate --locked
           # The client and primary crate depend on the new VCT versions.
           # Validate their release file sets before those dependencies publish.
           cargo package -p vote-commitment-tree-client --list
@@ -279,11 +290,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check packages at MSRV
         run: |
-          cargo check -p zcash_voting -p zcash-voting-wallet-example \
+          cargo check -p zcash_voting -p zcash_vote_delegate -p zcash-voting-wallet-example \
             --all-targets --features test-fixtures \
             --locked
-          cargo check -p zcash_voting -p zcash-voting-wallet-example --all-targets \
-            --no-default-features --features lrz \
+          cargo check -p zcash_voting -p zcash_vote_delegate -p zcash-voting-wallet-example \
+            --all-targets --no-default-features --features lrz \
             --locked
           cargo check -p vote-commitment-tree -p vote-commitment-tree-client \
             --all-targets --features vote-commitment-tree-client/cli \

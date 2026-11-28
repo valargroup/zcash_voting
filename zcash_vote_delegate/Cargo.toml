@@ -1,0 +1,26 @@
+[package]
+name = "zcash_vote_delegate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Backend-neutral proxy delegation formats for Zcash shielded voting: registry digests, canonical handles, the delegate key, the registry entry decoder, marker text, lookalike checks, the wallet list, and the shared golden vectors."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/valargroup/zcash_voting"
+
+# Backend-neutral by contract (proxy delegation contracts-v1, section 14): no
+# `zakura` or `lrz` features and no voting-crypto-deps, so this crate is built
+# once and never enters either backend's crypto graph.
+[dependencies]
+base64 = "0.22"
+bech32 = "0.11"
+blake2b_simd = "1"
+curve25519-dalek = { version = "4.1", default-features = false }
+ed25519-zebra = { version = "4.2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-normalization = "0.1"
+zeroize = "1"
+
+[dev-dependencies]
+hex = "0.4"
+sha2 = "0.10"
