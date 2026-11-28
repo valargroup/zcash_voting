@@ -24,11 +24,13 @@ use rusqlite::TransactionBehavior;
 use super::DelegateBallotList;
 use crate::{
     proxy::{
-        batch::{proxy_batch_statuses_on, ProxyBatchProgress, ProxyBatchStatus},
+        batch::{proxy_batch_statuses_on, ProxyBatchStatus},
+        in_transaction,
         planner::load_allocation_on,
         shares::{landed_dc_shares_on, DcDeliveryProgress, LandedDcShares},
         CommittedAllocation, ProxySlot,
     },
+    session::ProxyBatchStage,
     storage::{queries, VotingDb},
     types::VotingError,
     wire::{
@@ -83,7 +85,7 @@ pub fn progress(
         .filter_map(LandedDcShares::immediate_share)
         .map(|share| share.confirmed)
         .collect();
-    let batch = |wanted: fn(ProxyBatchProgress) -> bool| {
+    let batch = |wanted: fn(ProxyBatchStage) -> bool| {
         round.batches.values().any(|status| wanted(status.progress))
     };
     Ok(Some(ProxyDelegationProgress {
@@ -91,15 +93,13 @@ pub fn progress(
         broadcast_started: batch(|progress| {
             matches!(
                 progress,
-                ProxyBatchProgress::InFlight { .. } | ProxyBatchProgress::Landed
+                ProxyBatchStage::Dispatched | ProxyBatchStage::Refused | ProxyBatchStage::Landed
             )
         }),
         planned_immediate: !reveals.is_empty(),
         immediate_reveal_confirmed: !reveals.is_empty()
             && reveals.iter().all(|confirmed| *confirmed),
-        refused_by_chain: batch(|progress| {
-            progress == ProxyBatchProgress::InFlight { refused: true }
-        }),
+        refused_by_chain: batch(|progress| progress == ProxyBatchStage::Refused),
     }))
 }
 
@@ -152,32 +152,35 @@ impl RoundDelegations {
             ));
         }
         let wallet_id = db.wallet_id();
-        let mut conn = db.conn();
-        let context = "load proxy delegation status";
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|error| VotingError::from_sqlite(context, &error))?;
-        let Some(allocation) = load_allocation_on(&tx, round_id, &wallet_id)? else {
-            return Ok(None);
-        };
-        let batches = proxy_batch_statuses_on(&tx, &wallet_id, round_id)?;
-        let landed = landed_dc_shares_on(&tx, &wallet_id, round_id)?;
-        let registered_ballots = queries::load_van_states(&tx, round_id, &wallet_id)?
-            .iter()
-            .try_fold(0u64, |total, van| {
-                let ballots = van.registered_ballots()?;
-                total
-                    .checked_add(ballots)
-                    .ok_or_else(|| VotingError::Internal {
-                        message: "the round's bundles hold more than u64 ballots".to_owned(),
-                    })
-            })?;
-        Ok(Some(Self {
-            allocation,
-            batches,
-            landed,
-            registered_ballots,
-        }))
+        in_transaction(
+            db,
+            TransactionBehavior::Deferred,
+            "load proxy delegation status",
+            |tx| {
+                let Some(allocation) = load_allocation_on(tx, round_id, &wallet_id)? else {
+                    return Ok(None);
+                };
+                let batches = proxy_batch_statuses_on(tx, &wallet_id, round_id)?;
+                let landed = landed_dc_shares_on(tx, &wallet_id, round_id)?;
+                let registered_ballots = queries::load_van_states(tx, round_id, &wallet_id)?
+                    .iter()
+                    .try_fold(0u64, |total, van| {
+                        let ballots = van.registered_ballots()?;
+                        total
+                            .checked_add(ballots)
+                            .ok_or_else(|| VotingError::Internal {
+                                message: "the round's bundles hold more than u64 ballots"
+                                    .to_owned(),
+                            })
+                    })?;
+                Ok(Some(Self {
+                    allocation,
+                    batches,
+                    landed,
+                    registered_ballots,
+                }))
+            },
+        )
     }
 
     /// One view per chosen delegate, in request order.
@@ -187,8 +190,7 @@ impl RoundDelegations {
         phase: ProxyRoundPhase,
     ) -> Vec<ProxyDelegationView> {
         self.allocation
-            .request()
-            .choices
+            .choices()
             .iter()
             .map(|choice| {
                 let slots: Vec<&ProxySlot> = self
@@ -202,7 +204,17 @@ impl RoundDelegations {
                     provider: choice.provider,
                     handle: choice.handle.clone(),
                     ballots: slots.iter().map(|slot| slot.weight_ballots).sum(),
-                    stage: delegation_stage(slots.iter().map(|slot| self.dc_stage(slot, phase))),
+                    stage: delegation_stage(slots.iter().map(|slot| {
+                        let batch = self
+                            .batches
+                            .get(&slot.bundle_index)
+                            .map_or(ProxyBatchStage::Planned, |status| status.progress);
+                        let delivery = self
+                            .landed
+                            .get(&(slot.bundle_index, slot.dc_slot))
+                            .map(LandedDcShares::progress);
+                        dc_stage(batch, delivery, phase)
+                    })),
                     ballot: ballot_view(ballots.options(choice.delegate_index), phase),
                 }
             })
@@ -227,36 +239,20 @@ impl RoundDelegations {
                 ))
             })
     }
-
-    /// How far `bundle_index`'s batch has come.
-    fn batch(&self, bundle_index: u32) -> ProxyBatchProgress {
-        self.batches
-            .get(&bundle_index)
-            .map_or(ProxyBatchProgress::Planned, |status| status.progress)
-    }
-
-    /// `slot`'s DC's stage.
-    fn dc_stage(&self, slot: &ProxySlot, phase: ProxyRoundPhase) -> ProxyDelegationStage {
-        let delivery = self
-            .landed
-            .get(&(slot.bundle_index, slot.dc_slot))
-            .map(LandedDcShares::progress);
-        dc_stage(self.batch(slot.bundle_index), delivery, phase)
-    }
 }
 
 /// One DC's stage (see the module docs).
 pub(crate) fn dc_stage(
-    batch: ProxyBatchProgress,
+    batch: ProxyBatchStage,
     delivery: Option<DcDeliveryProgress>,
     phase: ProxyRoundPhase,
 ) -> ProxyDelegationStage {
     use ProxyDelegationStage as Stage;
     let active = phase == ProxyRoundPhase::Active;
     match batch {
-        ProxyBatchProgress::Planned | ProxyBatchProgress::Proved if active => Stage::Preparing,
-        ProxyBatchProgress::InFlight { .. } if active => Stage::Submitting,
-        ProxyBatchProgress::Landed => match delivery {
+        ProxyBatchStage::Planned | ProxyBatchStage::Proved if active => Stage::Preparing,
+        ProxyBatchStage::Dispatched | ProxyBatchStage::Refused if active => Stage::Submitting,
+        ProxyBatchStage::Landed => match delivery {
             Some(DcDeliveryProgress::Complete) => Stage::HandedOff,
             _ if active => Stage::Included,
             _ => Stage::NotCounted,

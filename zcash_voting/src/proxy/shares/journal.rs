@@ -89,20 +89,18 @@ pub(super) fn load_dc_shares(
     bundle_index: u32,
     dc_slot: u8,
 ) -> Result<Option<Vec<DcShareRecord>>, VotingError> {
-    if load_dc_share_plans(conn, round_id, wallet_id, bundle_index, dc_slot)?.is_none() {
-        return Ok(None);
-    }
+    // A plan and its share rows are written together and leave together, so
+    // a DC has share rows exactly when it is planned.
     let mut statement = conn
-        .prepare(
-            "SELECT share_index, nullifier, target_count, submit_at, sent_to_urls,
-                    ambiguous_urls, attempting_urls, confirmed, handed_off_at, created_at
+        .prepare(&format!(
+            "SELECT {SHARE_COLUMNS}
                FROM proxy_dc_shares
               WHERE round_id = :round_id AND wallet_id = :wallet_id
                 AND bundle_index = :bundle_index AND dc_slot = :dc_slot
-              ORDER BY share_index",
-        )
+              ORDER BY share_index"
+        ))
         .map_err(|error| VotingError::from_sqlite("prepare DC share query", &error))?;
-    let rows = statement
+    let records = statement
         .query_map(
             named_params! {
                 ":round_id": round_id,
@@ -110,14 +108,13 @@ pub(super) fn load_dc_shares(
                 ":bundle_index": i64::from(bundle_index),
                 ":dc_slot": i64::from(dc_slot),
             },
-            share_row,
+            |row| Ok(share_record(row, "load DC shares", bundle_index, dc_slot)),
         )
         .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-        .map_err(|error| VotingError::from_sqlite("load DC shares", &error))?;
-    rows.into_iter()
-        .map(|row| row.into_record(bundle_index, dc_slot))
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .map_err(|error| VotingError::from_sqlite("load DC shares", &error))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((!records.is_empty()).then_some(records))
 }
 
 /// One stored share of the DC in `bundle_index`'s slot `dc_slot`.
@@ -130,12 +127,13 @@ pub(super) fn load_dc_share(
     share_index: u32,
 ) -> Result<Option<DcShareRecord>, VotingError> {
     conn.query_row(
-        "SELECT share_index, nullifier, target_count, submit_at, sent_to_urls,
-                ambiguous_urls, attempting_urls, confirmed, handed_off_at, created_at
-           FROM proxy_dc_shares
-          WHERE round_id = :round_id AND wallet_id = :wallet_id
-            AND bundle_index = :bundle_index AND dc_slot = :dc_slot
-            AND share_index = :share_index",
+        &format!(
+            "SELECT {SHARE_COLUMNS}
+               FROM proxy_dc_shares
+              WHERE round_id = :round_id AND wallet_id = :wallet_id
+                AND bundle_index = :bundle_index AND dc_slot = :dc_slot
+                AND share_index = :share_index"
+        ),
         named_params! {
             ":round_id": round_id,
             ":wallet_id": wallet_id,
@@ -143,33 +141,26 @@ pub(super) fn load_dc_share(
             ":dc_slot": i64::from(dc_slot),
             ":share_index": i64::from(share_index),
         },
-        share_row,
+        |row| Ok(share_record(row, "load DC share", bundle_index, dc_slot)),
     )
     .optional()
     .map_err(|error| VotingError::from_sqlite("load DC share", &error))?
-    .map(|row| row.into_record(bundle_index, dc_slot))
     .transpose()
 }
 
-/// A DC's stored plan row.
-pub(super) struct DcSharePlanRow {
-    /// The canonical fleet the plan was made against.
-    pub(super) configured_server_urls: Vec<String>,
-    /// One plan per planned share, in share order.
-    pub(super) plans: Vec<ShareSubmissionPlan>,
-}
-
-/// The DC's stored plan row, or `None` before it is planned.
+/// The DC's stored share plans, one per planned share in share order, or
+/// `None` before it is planned. The fleet stored beside them is never read
+/// back.
 pub(super) fn load_dc_share_plans(
     conn: &Connection,
     round_id: &str,
     wallet_id: &str,
     bundle_index: u32,
     dc_slot: u8,
-) -> Result<Option<DcSharePlanRow>, VotingError> {
-    let stored: Option<(String, String)> = conn
+) -> Result<Option<Vec<ShareSubmissionPlan>>, VotingError> {
+    let stored: Option<String> = conn
         .query_row(
-            "SELECT configured_server_urls_json, share_plans_json FROM proxy_share_plans
+            "SELECT share_plans_json FROM proxy_share_plans
               WHERE round_id = :round_id AND wallet_id = :wallet_id
                 AND bundle_index = :bundle_index AND dc_slot = :dc_slot",
             named_params! {
@@ -178,57 +169,38 @@ pub(super) fn load_dc_share_plans(
                 ":bundle_index": i64::from(bundle_index),
                 ":dc_slot": i64::from(dc_slot),
             },
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )
         .optional()
         .map_err(|error| VotingError::from_sqlite("load DC share plan", &error))?;
     stored
-        .map(|(fleet, plans)| {
-            let corrupt = |error: serde_json::Error| VotingError::Internal {
+        .map(|plans| {
+            serde_json::from_str(&plans).map_err(|error| VotingError::Internal {
                 message: format!(
                     "the stored share plan of the DC in slot {dc_slot} of bundle {bundle_index} \
                      is unreadable: {error}"
                 ),
-            };
-            Ok(DcSharePlanRow {
-                configured_server_urls: serde_json::from_str(&fleet).map_err(corrupt)?,
-                plans: serde_json::from_str(&plans).map_err(corrupt)?,
             })
         })
         .transpose()
 }
 
-/// A DC's plan as first written.
-pub(super) struct NewDcSharePlan<'a> {
-    pub(super) round_id: &'a str,
-    pub(super) wallet_id: &'a str,
-    pub(super) bundle_index: u32,
-    pub(super) dc_slot: u8,
-    /// The canonical fleet the plan was made against.
-    pub(super) configured_server_urls: &'a [String],
-    /// One plan per delivered share.
-    pub(super) plans: &'a [ShareSubmissionPlan],
-    /// Each delivered share's index and reveal nullifier, as `plans`.
-    pub(super) shares: &'a [(u32, [u8; 32])],
-    /// When the plan is made.
-    pub(super) now: u64,
-}
-
-/// Writes `plan` and its share rows inside the caller's write transaction.
+/// Writes a DC's plan as first made, made against the canonical fleet
+/// `configured_server_urls` at `now`, and its share rows, each delivered
+/// share's index and reveal nullifier in `plans` order, inside the caller's
+/// write transaction.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn insert_dc_share_plan(
     conn: &Connection,
-    plan: &NewDcSharePlan<'_>,
+    round_id: &str,
+    wallet_id: &str,
+    bundle_index: u32,
+    dc_slot: u8,
+    configured_server_urls: &[String],
+    plans: &[ShareSubmissionPlan],
+    shares: &[(u32, [u8; 32])],
+    now: u64,
 ) -> Result<(), VotingError> {
-    let NewDcSharePlan {
-        round_id,
-        wallet_id,
-        bundle_index,
-        dc_slot,
-        configured_server_urls,
-        plans,
-        shares,
-        now,
-    } = *plan;
     if plans.len() != shares.len() {
         return Err(VotingError::Internal {
             message: format!(
@@ -424,22 +396,6 @@ impl ShareAttemptJournal for DcShareJournal<'_> {
         ShareKey::proxy(self.bundle_index, self.dc_slot, self.share_index)
     }
 
-    fn delivery_state(
-        &self,
-        candidates: &[String],
-    ) -> Result<Option<ShareDeliveryState>, VotingError> {
-        let Some(record) = self.record()? else {
-            return Ok(None);
-        };
-        crate::share_tracking::candidate_delivery_state(
-            record.sent_to_urls,
-            record.ambiguous_urls,
-            record.attempting_urls,
-            candidates,
-        )
-        .map(Some)
-    }
-
     fn begin_attempt(
         &self,
         server_url: &str,
@@ -524,63 +480,43 @@ impl ShareAttemptJournal for DcShareJournal<'_> {
     }
 }
 
-/// One `proxy_dc_shares` row as SQLite returns it.
-struct ShareRow {
-    share_index: i64,
-    nullifier: Vec<u8>,
-    target_count: i64,
-    submit_at: i64,
-    sent_to_urls: String,
-    ambiguous_urls: String,
-    attempting_urls: String,
-    confirmed: bool,
-    handed_off_at: Option<i64>,
-    created_at: i64,
-}
+/// The `proxy_dc_shares` columns [`share_record`] reads, in its order.
+const SHARE_COLUMNS: &str = "share_index, nullifier, target_count, submit_at, sent_to_urls, \
+                             ambiguous_urls, attempting_urls, confirmed, handed_off_at, created_at";
 
-/// Reads one `proxy_dc_shares` row selected in [`ShareRow`]'s column order.
-fn share_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ShareRow> {
-    Ok(ShareRow {
-        share_index: row.get(0)?,
-        nullifier: row.get(1)?,
-        target_count: row.get(2)?,
-        submit_at: row.get(3)?,
-        sent_to_urls: row.get(4)?,
-        ambiguous_urls: row.get(5)?,
-        attempting_urls: row.get(6)?,
-        confirmed: row.get(7)?,
-        handed_off_at: row.get(8)?,
-        created_at: row.get(9)?,
+/// One row selected as [`SHARE_COLUMNS`] as a record, refusing values the
+/// schema cannot hold. A column SQLite cannot read fails as `context`.
+fn share_record(
+    row: &rusqlite::Row<'_>,
+    context: &str,
+    bundle_index: u32,
+    dc_slot: u8,
+) -> Result<DcShareRecord, VotingError> {
+    let sqlite = |error: rusqlite::Error| VotingError::from_sqlite(context, &error);
+    let corrupt = |what: &str| VotingError::Internal {
+        message: format!(
+            "a stored share of the DC in slot {dc_slot} of bundle {bundle_index} has {what}"
+        ),
+    };
+    let int = |column: usize| row.get::<_, i64>(column).map_err(sqlite);
+    let urls = |column: usize| {
+        serde_json::from_str::<Vec<String>>(&row.get::<_, String>(column).map_err(sqlite)?)
+            .map_err(|_| corrupt("unreadable helpers"))
+    };
+    Ok(DcShareRecord {
+        share_index: u32::try_from(int(0)?).map_err(|_| corrupt("an invalid share index"))?,
+        nullifier: crate::proxy::blob_array(
+            "nullifier",
+            row.get::<_, Vec<u8>>(1).map_err(sqlite)?,
+            corrupt,
+        )?,
+        target_count: u32::try_from(int(2)?).map_err(|_| corrupt("an invalid target"))?,
+        submit_at: u64::try_from(int(3)?).map_err(|_| corrupt("a negative submit_at"))?,
+        sent_to_urls: urls(4)?,
+        ambiguous_urls: urls(5)?,
+        attempting_urls: urls(6)?,
+        confirmed: row.get(7).map_err(sqlite)?,
+        handed_off_to_reachable_target: row.get::<_, Option<i64>>(8).map_err(sqlite)?.is_some(),
+        created_at: u64::try_from(int(9)?).map_err(|_| corrupt("a negative created_at"))?,
     })
-}
-
-impl ShareRow {
-    /// The row as a record, refusing values the schema cannot hold.
-    fn into_record(self, bundle_index: u32, dc_slot: u8) -> Result<DcShareRecord, VotingError> {
-        let corrupt = |what: &str| VotingError::Internal {
-            message: format!(
-                "a stored share of the DC in slot {dc_slot} of bundle {bundle_index} has {what}"
-            ),
-        };
-        let urls = |json: &str| {
-            serde_json::from_str::<Vec<String>>(json).map_err(|_| corrupt("unreadable helpers"))
-        };
-        Ok(DcShareRecord {
-            share_index: u32::try_from(self.share_index)
-                .map_err(|_| corrupt("an invalid share index"))?,
-            nullifier: <[u8; 32]>::try_from(self.nullifier.as_slice())
-                .map_err(|_| corrupt("a nullifier that is not 32 bytes"))?,
-            target_count: u32::try_from(self.target_count)
-                .map_err(|_| corrupt("an invalid target"))?,
-            submit_at: u64::try_from(self.submit_at)
-                .map_err(|_| corrupt("a negative submit_at"))?,
-            sent_to_urls: urls(&self.sent_to_urls)?,
-            ambiguous_urls: urls(&self.ambiguous_urls)?,
-            attempting_urls: urls(&self.attempting_urls)?,
-            confirmed: self.confirmed,
-            handed_off_to_reachable_target: self.handed_off_at.is_some(),
-            created_at: u64::try_from(self.created_at)
-                .map_err(|_| corrupt("a negative created_at"))?,
-        })
-    }
 }

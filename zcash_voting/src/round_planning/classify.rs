@@ -677,7 +677,7 @@ pub(crate) fn classify(
         let landed = snapshot
             .proxy_batches
             .get(&bundle_index)
-            .is_some_and(|status| status.progress == ProxyBatchProgress::Landed);
+            .is_some_and(|status| status.progress == ProxyBatchStage::Landed);
         if !landed {
             continue;
         }

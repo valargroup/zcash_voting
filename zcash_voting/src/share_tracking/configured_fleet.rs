@@ -44,7 +44,7 @@ impl ConfiguredHelperFleet {
     }
 
     /// The `urls` this fleet holds, in their order.
-    pub(super) fn filter(&self, urls: &[String]) -> Vec<String> {
+    pub(crate) fn filter(&self, urls: &[String]) -> Vec<String> {
         urls.iter()
             .filter(|url| self.contains(url))
             .cloned()

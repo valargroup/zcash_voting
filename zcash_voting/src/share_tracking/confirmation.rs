@@ -18,7 +18,7 @@ use super::{
 
 /// Configured-fleet evidence observed while polling one share.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ShareStatusOutcome {
+pub(super) enum ShareStatusOutcome {
     /// The required distinct configured helpers reported confirmation.
     ConfiguredHelperQuorumObserved,
     /// Polling ended without the required configured-helper quorum.
@@ -73,7 +73,7 @@ pub(super) async fn finish_expired_polls(
 /// cancellation, or budget expiry aborts every outstanding request. Helpers
 /// still in flight at budget expiry are degraded so later passes prefer other
 /// configured endpoints.
-pub(crate) async fn poll_share_helpers(
+pub(super) async fn poll_share_helpers(
     client: &HelperClient,
     round_id: &str,
     share_id: &str,

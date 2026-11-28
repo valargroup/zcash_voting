@@ -5,11 +5,10 @@
 
 use super::fixtures::*;
 use crate::phases::DelegationPhase;
-use crate::proxy::batch::ProxyBatchProgress;
 use crate::proxy::shares::DcShareRecord;
 use crate::proxy::DcShareLayout;
 use crate::round_planning::{classify_round, plan_from_snapshot, resolve_step, Obligation};
-use crate::session::{NextStep, RoundPlanAction};
+use crate::session::{NextStep, ProxyBatchStage, RoundPlanAction};
 use crate::share_tracking::CommitmentRef;
 
 /// A planned DC share that `accepted` configured helpers definitely hold,
@@ -56,7 +55,7 @@ fn dc_steps(steps: &[NextStep]) -> Vec<(&'static str, u32, u8, u32)> {
 fn a_landed_dc_owes_every_share_its_layout_delivers() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Landed)
+        .proxy_batch(0, ProxyBatchStage::Landed)
         .landed_dc(0, 3, DcShareLayout::Standard, None)
         .landed_dc(0, 5, DcShareLayout::SingleShare, None)
         .build();
@@ -90,10 +89,7 @@ fn a_landed_dc_owes_every_share_its_layout_delivers() {
 
 #[test]
 fn dc_shares_are_owed_only_once_their_batch_landed() {
-    for progress in [
-        ProxyBatchProgress::Proved,
-        ProxyBatchProgress::InFlight { refused: false },
-    ] {
+    for progress in [ProxyBatchStage::Proved, ProxyBatchStage::Dispatched] {
         let snapshot = snapshot()
             .bundle(0, DelegationPhase::Confirmed)
             .proxy_batch(0, progress)
@@ -126,7 +122,7 @@ fn only_shares_not_handed_off_are_owed() {
     };
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Landed)
+        .proxy_batch(0, ProxyBatchStage::Landed)
         .landed_dc(0, 2, DcShareLayout::Standard, Some(shares))
         .build();
 
@@ -153,7 +149,7 @@ fn no_dc_owes_delivery_once_the_vote_ended() {
     let handed_off: Vec<_> = (0..16).map(|index| share(index, 2, 0)).collect();
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Landed)
+        .proxy_batch(0, ProxyBatchStage::Landed)
         .landed_dc(0, 0, DcShareLayout::SingleShare, None)
         .landed_dc(0, 1, DcShareLayout::Standard, Some(short))
         .landed_dc(0, 2, DcShareLayout::Standard, Some(handed_off))
@@ -184,7 +180,7 @@ fn a_handed_off_dc_s_unconfirmed_shares_are_left_to_background_tracking() {
         shares[0].confirmed = true;
         let tracked = snapshot()
             .bundle(0, DelegationPhase::Confirmed)
-            .proxy_batch(0, ProxyBatchProgress::Landed)
+            .proxy_batch(0, ProxyBatchStage::Landed)
             .landed_dc(0, 1, DcShareLayout::Standard, Some(shares.clone()))
             .build();
 
@@ -215,7 +211,7 @@ fn a_handed_off_dc_s_unconfirmed_shares_are_left_to_background_tracking() {
         }
         let revealed = snapshot()
             .bundle(0, DelegationPhase::Confirmed)
-            .proxy_batch(0, ProxyBatchProgress::Landed)
+            .proxy_batch(0, ProxyBatchStage::Landed)
             .landed_dc(0, 1, DcShareLayout::Standard, Some(shares))
             .build();
         let plan = plan_from_snapshot(&revealed, &[1]).unwrap();
@@ -228,7 +224,7 @@ fn a_handed_off_dc_s_unconfirmed_shares_are_left_to_background_tracking() {
 fn no_dc_share_is_the_round_s_immediate_share() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Landed)
+        .proxy_batch(0, ProxyBatchStage::Landed)
         .landed_dc(0, 0, DcShareLayout::SingleShare, Some(vec![share(0, 2, 0)]))
         .build();
 
@@ -242,7 +238,7 @@ fn no_dc_share_is_the_round_s_immediate_share() {
 fn dc_share_steps_rank_ahead_of_every_proposal_s_shares_slot_by_slot() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Landed)
+        .proxy_batch(0, ProxyBatchStage::Landed)
         .landed_dc(0, 4, DcShareLayout::SingleShare, None)
         .landed_dc(0, 2, DcShareLayout::SingleShare, None)
         .build();

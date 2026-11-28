@@ -67,11 +67,10 @@ pub(crate) trait TrackedShare: ShareAttemptJournal {
 pub(crate) enum ResendPayload {
     /// The request body.
     Ready(String),
-    /// The pass holds no round hotkey to derive a DC share from, so it
-    /// only polls the share.
+    /// The share can't be rebuilt yet: a vote's real VC tree position is not
+    /// recorded, or the pass holds no round hotkey to derive a DC share
+    /// from. The pass only polls the share.
     Unavailable,
-    /// The vote is submitted, but its real VC tree position is not recorded.
-    AwaitingVcPosition,
     /// The stored material is missing or cannot rebuild the share.
     Unrecoverable,
     /// The stored material rebuilds a share with another nullifier.
@@ -153,7 +152,7 @@ impl TrackedShare for VoteShareJournal<'_> {
         )? {
             vote_recovery::HelperRecoveryMaterial::Ready(bundle) => bundle,
             vote_recovery::HelperRecoveryMaterial::AwaitingVcPosition => {
-                return Ok(ResendPayload::AwaitingVcPosition);
+                return Ok(ResendPayload::Unavailable);
             }
             vote_recovery::HelperRecoveryMaterial::Missing => {
                 return Ok(ResendPayload::Unrecoverable);

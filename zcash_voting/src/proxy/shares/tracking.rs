@@ -1,18 +1,101 @@
 //! Background tracking of a landed DC's handed-off shares, as a vote
-//! share's are tracked once a helper accepted it (`share_tracking`).
+//! share's are tracked once a helper accepted it (`share_tracking`), and
+//! confirming one share's reveal through the configured helper quorum.
 
 use super::{
     delivered_share_indexes,
-    journal::{landed_dc_shares_on, mark_dc_share_confirmed, DcShareJournal},
+    journal::{landed_dc_shares_on, load_dc_share, mark_dc_share_confirmed, DcShareJournal},
     payloads::{derive_dc_share_payloads, load_landed_dc},
     DcShareRecord,
 };
 use crate::{
     share::ShareOperationScope,
-    share_tracking::{ResendPayload, ShareAttemptJournal, TrackedShare},
+    share_policy::ShareSchedule,
+    share_tracking::{
+        ResendPayload, ShareAttemptJournal, ShareConfirmationParams, StoredShare, TrackedShare,
+    },
     storage::VotingDb,
     types::VotingError,
 };
+
+impl ShareSchedule for DcShareRecord {
+    fn submit_at(&self) -> u64 {
+        self.submit_at
+    }
+
+    fn created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    fn is_confirmed(&self) -> bool {
+        self.confirmed
+    }
+}
+
+impl StoredShare for DcShareRecord {
+    fn reveal_nullifier(&self) -> &[u8] {
+        &self.nullifier
+    }
+
+    fn target_count(&self) -> u32 {
+        self.target_count
+    }
+
+    fn sent_to_urls(&self) -> &[String] {
+        &self.sent_to_urls
+    }
+
+    fn ambiguous_urls(&self) -> &[String] {
+        &self.ambiguous_urls
+    }
+
+    fn attempting_urls(&self) -> &[String] {
+        &self.attempting_urls
+    }
+}
+
+/// The journal of `params.share`, a share of the DC in `dc_slot` of its
+/// bundle, bound to the nullifier it is stored with, for
+/// [`confirm_pending_share`](crate::share_tracking::confirm_pending_share).
+///
+/// # Errors
+///
+/// [`VotingError::InvalidInput`] when the DC has no stored share at
+/// `params.share.share_index`; storage errors unchanged.
+pub(crate) fn stored_dc_share<'a>(
+    db: &'a VotingDb,
+    scope: &'a ShareOperationScope,
+    params: &ShareConfirmationParams<'a>,
+    dc_slot: u8,
+) -> Result<DcShareJournal<'a>, VotingError> {
+    let share = params.share;
+    let record = db
+        .read_transaction("load DC share", |tx| {
+            load_dc_share(
+                tx,
+                params.round_id,
+                scope.wallet_id(),
+                share.bundle_index,
+                dc_slot,
+                share.share_index,
+            )
+        })?
+        .ok_or_else(|| VotingError::InvalidInput {
+            message: format!(
+                "helper share not found: round={}, bundle={}, dc_slot={dc_slot}, share={}",
+                params.round_id, share.bundle_index, share.share_index
+            ),
+        })?;
+    Ok(DcShareJournal {
+        db,
+        scope,
+        round_id: params.round_id,
+        bundle_index: share.bundle_index,
+        dc_slot,
+        share_index: share.share_index,
+        nullifier: record.nullifier,
+    })
+}
 
 /// The handed-off, unconfirmed shares of `round_id`'s landed DCs, each with
 /// its journal: the DC shares background tracking owns. A share not yet
@@ -49,10 +132,6 @@ impl TrackedShare for DcShareJournal<'_> {
 
     fn reload(&self) -> Result<Option<DcShareRecord>, VotingError> {
         self.record()
-    }
-
-    fn stored_confirmation(&self) -> Result<Option<bool>, VotingError> {
-        Ok(self.record()?.map(|record| record.confirmed))
     }
 
     fn mark_confirmed(&self) -> Result<bool, VotingError> {

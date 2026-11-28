@@ -4,24 +4,24 @@
 
 use crate::{
     proxy::{
-        batch::ProxyBatchProgress,
         delegator::{dc_stage, delegation_stage},
         shares::DcDeliveryProgress,
         ProxyRoundPhase,
     },
+    session::ProxyBatchStage,
     wire::ProxyDelegationStage,
 };
 
 use ProxyDelegationStage::{HandedOff, Included, NotCounted, Preparing, Submitting};
 
 /// Every batch progress, each with the delivery a DC of it can have.
-fn every_dc() -> Vec<(ProxyBatchProgress, Option<DcDeliveryProgress>)> {
+fn every_dc() -> Vec<(ProxyBatchStage, Option<DcDeliveryProgress>)> {
     let mut dcs = vec![
-        (ProxyBatchProgress::Planned, None),
-        (ProxyBatchProgress::Proved, None),
-        (ProxyBatchProgress::InFlight { refused: false }, None),
-        (ProxyBatchProgress::InFlight { refused: true }, None),
-        (ProxyBatchProgress::Landed, None),
+        (ProxyBatchStage::Planned, None),
+        (ProxyBatchStage::Proved, None),
+        (ProxyBatchStage::Dispatched, None),
+        (ProxyBatchStage::Refused, None),
+        (ProxyBatchStage::Landed, None),
     ];
     dcs.extend(
         [
@@ -29,7 +29,7 @@ fn every_dc() -> Vec<(ProxyBatchProgress, Option<DcDeliveryProgress>)> {
             DcDeliveryProgress::Delivering,
             DcDeliveryProgress::Complete,
         ]
-        .map(|delivery| (ProxyBatchProgress::Landed, Some(delivery))),
+        .map(|delivery| (ProxyBatchStage::Landed, Some(delivery))),
     );
     dcs
 }

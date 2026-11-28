@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-use super::registry::encoding;
+use super::registry::base64_array;
 use crate::types::MAX_PROPOSAL_ID;
 
 /// The page size hosts ask for and the most ballots a page may carry. The
@@ -54,7 +54,7 @@ pub(crate) fn parse_ballot_page(
     let mut last_index = start_after;
     let mut ballots = Vec::with_capacity(page.ballots.len());
     for ballot in page.ballots {
-        if encoding::base64_array::<32>(&ballot.vote_round_id) != Some(*vote_round_id) {
+        if base64_array::<32>(&ballot.vote_round_id) != Some(*vote_round_id) {
             return Err(format!(
                 "delegate {}'s ballot is for another round",
                 ballot.delegate_index

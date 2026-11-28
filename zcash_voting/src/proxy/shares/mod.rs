@@ -6,14 +6,12 @@
 //! the round hotkey on every pass (`payloads`), fanned out and journaled as a
 //! vote share's are (`delivery`, `journal`). Once handed off, a share is
 //! tracked in the background as a vote share is (`tracking`), which
-//! confirms its reveal (`confirmation`) and resends it when no helper
-//! reveals it.
+//! confirms its reveal and resends it when no helper reveals it.
 //!
 //! The planning, secrets, delivery, hand-off and completion rules
 //! are specified in `docs/helper_submission_invariants.md`, "Delegation
 //! commitment shares".
 
-mod confirmation;
 mod delivery;
 mod journal;
 mod payloads;
@@ -24,14 +22,13 @@ use zcash_vote_delegate::DcShareLayout;
 
 use crate::{share_policy::VOTE_COMMITMENT_SHARE_COUNT, share_tracking::ConfiguredHelperFleet};
 
-pub(crate) use confirmation::confirm_dc_share;
 pub(crate) use delivery::{deliver_dc_shares, DcDeliveryRequest};
 pub(crate) use journal::landed_dc_shares_on;
 #[cfg(test)]
 pub(crate) use payloads::{derive_dc_share_payloads, load_landed_dc};
 #[cfg(test)]
 pub(crate) use plan::plan_dc_shares;
-pub(crate) use tracking::tracked_dc_shares;
+pub(crate) use tracking::{stored_dc_share, tracked_dc_shares};
 
 /// One planned share of a landed DC and its helper delivery state.
 #[derive(Clone, Debug, PartialEq, Eq)]

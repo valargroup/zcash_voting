@@ -599,14 +599,14 @@ pub(crate) use delivery_progress::{delivery_progress, DeliveryProgress};
 pub(crate) use configured_fleet::ConfiguredHelperFleet;
 #[cfg(test)]
 use confirmation::{finish_expired_polls, poll_share_helpers_with_budget};
-pub(crate) use confirmation::{poll_share_helpers, ShareStatusOutcome};
+use confirmation::{poll_share_helpers, ShareStatusOutcome};
 pub(crate) use immediate_designation::round_immediate_share;
 #[cfg(test)]
 use initial_delivery::submit_share_to_helpers;
 use initial_delivery::VoteShareJournal;
 pub(crate) use initial_delivery::{
-    candidate_delivery_state, dispatch_share_to_canonical_helpers,
-    submit_committed_share_to_helpers, ShareAttemptJournal, ShareFanOut,
+    dispatch_share_to_canonical_helpers, submit_committed_share_to_helpers, ShareAttemptJournal,
+    ShareFanOut,
 };
 use recovery::{
     resubmit_to_next_helper, ResubmissionCandidates, ResubmissionSchedule, ResubmitOutcome,
@@ -692,14 +692,14 @@ pub(crate) async fn observe_confirm_pending_share(
                 .await
             }
             CommitmentRef::Proxy { dc_slot } => {
-                crate::proxy::shares::confirm_dc_share(
-                    db,
+                let tracked = crate::proxy::shares::stored_dc_share(db, &scope, params, dc_slot)?;
+                confirm_stored_share(
                     &scope,
                     params,
-                    dc_slot,
                     configured_fleet.urls(),
                     client,
                     cancel,
+                    &tracked,
                 )
                 .await
             }
@@ -1280,7 +1280,7 @@ async fn track_share<S: TrackedShare>(
         &client.observation_scope(),
     )? {
         ResendPayload::Ready(share_wire_json) => share_wire_json,
-        ResendPayload::Unavailable | ResendPayload::AwaitingVcPosition => return Ok(true),
+        ResendPayload::Unavailable => return Ok(true),
         ResendPayload::Unrecoverable => {
             report.unrecoverable.push(key);
             return Ok(true);

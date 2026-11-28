@@ -12,6 +12,7 @@
 use rusqlite::{named_params, Connection, OptionalExtension};
 use voting_circuits::proxy_delegation::build_proxy_delegation_proof;
 use zcash_vote_delegate::{DcSeedInputs, DcShareLayout};
+use zeroize::Zeroizing;
 
 use super::delivered_share_indexes;
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
     hotkey::{spending_key_from_hotkey_seed, VOTING_HOTKEY_ACCOUNT_INDEX},
     proxy::{
         batch::{canonical_base, decode_round_id, election_key, share_layout},
-        ProxyRoundKey, POOL_PROPOSAL_ID,
+        blob_array, proxy_round_key, POOL_PROPOSAL_ID,
     },
     share::compute_nullifier,
     storage::queries,
@@ -163,10 +164,7 @@ pub(crate) fn load_landed_dc(
     let corrupt = |what: &str| VotingError::Internal {
         message: format!("landed DC in slot {dc_slot} of bundle {bundle_index} stores {what}"),
     };
-    let bytes32 = |name: &str, bytes: Vec<u8>| {
-        <[u8; 32]>::try_from(bytes.as_slice())
-            .map_err(|_| corrupt(&format!("a {name} that is not 32 bytes")))
-    };
+    let bytes32 = |name: &str, bytes: Vec<u8>| blob_array(name, bytes, corrupt);
     Ok(LandedDc {
         round_id: decode_round_id(round_id)?,
         network: queries::load_round_network(conn, round_id, wallet_id)?,
@@ -205,14 +203,15 @@ pub(crate) fn derive_dc_share_payloads(
 ) -> Result<DcSharePayloads, VotingError> {
     let spending_key =
         spending_key_from_hotkey_seed(hotkey_seed, dc.network, VOTING_HOTKEY_ACCOUNT_INDEX)?;
-    let dc_seed =
-        ProxyRoundKey::from_hotkey_secret(spending_key.to_bytes(), dc.network, &dc.round_id)
-            .dc_seed(&DcSeedInputs {
-                van_nullifier: dc.van_nullifier,
-                delegate_index: dc.delegate_index,
-                weight_ballots: dc.weight_ballots,
-                layout: dc.layout,
-            });
+    let dc_seed = Zeroizing::new(zcash_vote_delegate::dc_seed(
+        &proxy_round_key(spending_key.to_bytes(), dc.network, &dc.round_id),
+        &DcSeedInputs {
+            van_nullifier: dc.van_nullifier,
+            delegate_index: dc.delegate_index,
+            weight_ballots: dc.weight_ballots,
+            layout: dc.layout,
+        },
+    ));
     let alpha_v = Option::from(pallas::Scalar::from_repr(dc.alpha_v)).ok_or_else(|| {
         VotingError::Internal {
             message: format!("slot {} stores a non-canonical randomizer", dc.dc_slot),
@@ -232,7 +231,7 @@ pub(crate) fn derive_dc_share_payloads(
         dc.delegate_index,
         dc.weight_ballots,
         dc.dc_slot,
-        *dc_seed.expose_secret(),
+        *dc_seed,
         share_layout(dc.layout),
     )
     .map_err(|error| VotingError::InvalidInput {

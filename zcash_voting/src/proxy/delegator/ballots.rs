@@ -5,6 +5,8 @@
 
 use std::collections::BTreeMap;
 
+use hex::FromHex as _;
+
 use crate::{
     proxy::ballot_pages::parse_ballot_page, types::validate_vote_round_id_hex,
     wire::ProxyDelegationError,
@@ -25,14 +27,9 @@ impl DelegateBallotList {
     /// An empty list for `round_id`, whose first page is fetched with
     /// `start_after = 0`.
     pub fn new(round_id: &str) -> Result<Self, ProxyDelegationError> {
-        validate_vote_round_id_hex(round_id)
-            .map_err(|error| ProxyDelegationError::other(error.to_string()))?;
-        let round_id = hex::decode(round_id)
-            .ok()
-            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-            .ok_or_else(|| {
-                ProxyDelegationError::other(format!("round id {round_id} is not 32 bytes"))
-            })?;
+        validate_vote_round_id_hex(round_id)?;
+        let round_id =
+            <[u8; 32]>::from_hex(round_id).expect("a valid round id is 64 lowercase hex digits");
         Ok(Self {
             round_id,
             ballots: BTreeMap::new(),

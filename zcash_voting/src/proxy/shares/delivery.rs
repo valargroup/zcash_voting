@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use super::{
     journal::{load_dc_shares, record_dc_share_hand_offs, DcShareJournal},
     payloads::{derive_dc_share_payloads, load_landed_dc, LandedDc},
-    plan::{check_nullifiers, load_dc_share_plan, prepare_dc_share_plan, DcSharePlanning},
+    plan::{check_nullifiers, prepare_dc_share_plan, stored_plan},
     DcDeliveryProgress, DcShareRecord, LandedDcShares,
 };
 use crate::{
@@ -83,10 +83,6 @@ pub(crate) async fn deliver_dc_shares(
         .map(|vote_end| time_left_to_vote_end(vote_end, request.now_seconds, request.wall_clock));
     let vote_ended = || time_left.is_some_and(|time_left| started_at.elapsed() >= time_left);
     let stop = || cancel() || vote_ended();
-    let pass_end = || PassEnd {
-        cancelled: cancel(),
-        vote_ended: vote_ended(),
-    };
     let scope = ShareOperationScope::capture(db);
     let configured = ConfiguredHelperFleet::new(request.configured_server_urls)?;
     let dc = db.read_transaction("load landed proxy DC", |tx| {
@@ -99,17 +95,25 @@ pub(crate) async fn deliver_dc_shares(
         )
     })?;
     let derived = derive_dc_share_payloads(&dc, request.hotkey_seed)?;
-    let stored = match load_dc_share_plan(db, &scope, request.round_id, &dc)? {
-        Some(stored) => {
-            check_nullifiers(&stored, &dc, &derived.nullifiers)?;
-            stored
-        }
+    let stored = db.read_transaction("load DC share plan", |tx| {
+        stored_plan(tx, request.round_id, scope.wallet_id(), &dc)
+    })?;
+    let stored = match stored {
+        Some(stored) => stored,
         None => {
             let fleet = client.preflight_fleet(configured.urls()).await?;
             // The probe may have waited on unreachable helpers; plan nothing
             // for a step the host has since left or a vote that has ended.
             if stop() {
-                return current_pass(db, &scope, request, &dc, &configured, pass_end());
+                return current_pass(
+                    db,
+                    &scope,
+                    request,
+                    &dc,
+                    &configured,
+                    cancel(),
+                    vote_ended(),
+                );
             }
             prepare_dc_share_plan(
                 db,
@@ -117,17 +121,14 @@ pub(crate) async fn deliver_dc_shares(
                 request.round_id,
                 &dc,
                 &derived.nullifiers,
-                DcSharePlanning {
-                    fleet: &fleet,
-                    now_seconds: request.now_seconds,
-                    vote_end_time_seconds: request
-                        .vote_end_time_seconds
-                        .unwrap_or(request.now_seconds),
-                    last_moment_buffer_seconds: request.last_moment_buffer_seconds,
-                },
+                &fleet,
+                request.now_seconds,
+                request.vote_end_time_seconds.unwrap_or(request.now_seconds),
+                request.last_moment_buffer_seconds,
             )?
         }
     };
+    check_nullifiers(&stored, &dc, &derived.nullifiers)?;
 
     let deliveries = stored
         .shares
@@ -140,15 +141,13 @@ pub(crate) async fn deliver_dc_shares(
                 db,
                 &scope,
                 client,
-                ShareDelivery {
-                    round_id: request.round_id,
-                    dc: &dc,
-                    share,
-                    plan,
-                    payload,
-                    configured: &configured,
-                    now_seconds: request.now_seconds,
-                },
+                request.round_id,
+                &dc,
+                share,
+                plan,
+                payload,
+                &configured,
+                request.now_seconds,
                 &stop,
             )
         });
@@ -156,7 +155,15 @@ pub(crate) async fn deliver_dc_shares(
         delivered?;
     }
     record_hand_offs(db, &scope, request, &dc, &configured)?;
-    current_pass(db, &scope, request, &dc, &configured, pass_end())
+    current_pass(
+        db,
+        &scope,
+        request,
+        &dc,
+        &configured,
+        cancel(),
+        vote_ended(),
+    )
 }
 
 /// How long after the pass starts it may still start a POST for a vote
@@ -173,43 +180,23 @@ fn time_left_to_vote_end(vote_end: u64, host_now: u64, wall_clock: Duration) -> 
         .min(vote_end.saturating_sub(wall_clock))
 }
 
-/// What a pass observed as it ended.
-#[derive(Clone, Copy)]
-struct PassEnd {
-    cancelled: bool,
-    vote_ended: bool,
-}
-
-/// One share's delivery inputs.
-#[derive(Clone, Copy)]
-struct ShareDelivery<'a> {
-    round_id: &'a str,
-    dc: &'a LandedDc,
-    share: &'a DcShareRecord,
-    plan: &'a ShareSubmissionPlan,
-    payload: &'a SharePayload,
-    configured: &'a ConfiguredHelperFleet,
-    now_seconds: u64,
-}
-
-/// Fans one share out to the configured helpers, planned helpers first,
-/// then reconciles it when it still falls short.
+/// Fans `share` of `dc`, with its `plan` and `payload`, out to the
+/// `configured` helpers, planned helpers first, then reconciles it when it
+/// still falls short.
+#[allow(clippy::too_many_arguments)]
 async fn deliver_share(
     db: &VotingDb,
     scope: &ShareOperationScope,
     client: &HelperClient,
-    delivery: ShareDelivery<'_>,
+    round_id: &str,
+    dc: &LandedDc,
+    share: &DcShareRecord,
+    plan: &ShareSubmissionPlan,
+    payload: &SharePayload,
+    configured: &ConfiguredHelperFleet,
+    now_seconds: u64,
     cancel: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<(), VotingError> {
-    let ShareDelivery {
-        round_id,
-        dc,
-        share,
-        plan,
-        payload,
-        configured,
-        now_seconds,
-    } = delivery;
     let share_wire_json = payload.to_wire_json(Some(dc.tree_position), share.submit_at)?;
     let planned: Vec<String> = canonical_helper_url_list(&plan.target_servers)?
         .into_iter()
@@ -254,64 +241,42 @@ async fn deliver_share(
         &journal,
         scope,
         client,
-        Reconciliation {
-            round_id,
-            share_wire_json: &share_wire_json,
-            target_count,
-            earlier: share,
-            configured,
-            now_seconds,
-        },
+        round_id,
+        &share_wire_json,
+        target_count,
+        share,
+        configured,
+        now_seconds,
         cancel,
     )
     .await
 }
 
-/// One share's reconciliation inputs.
-#[derive(Clone, Copy)]
-struct Reconciliation<'a> {
-    round_id: &'a str,
-    share_wire_json: &'a str,
-    /// The share's effective target under the configured fleet.
-    target_count: usize,
-    /// The share as the pass began.
-    earlier: &'a DcShareRecord,
-    configured: &'a ConfiguredHelperFleet,
-    now_seconds: u64,
-}
-
 /// Re-posts one share, duplicate-safe and once each, to the configured
-/// helpers whose attempt had an unknown outcome when the pass
-/// began, interrupted ones first, until `target_count` configured helpers
-/// hold it.
+/// helpers whose attempt had an unknown outcome when the pass began
+/// (`earlier`, the share as the pass began), interrupted ones first, until
+/// `target_count`, the share's effective target under the configured fleet,
+/// configured helpers hold it.
 ///
 /// An interrupted helper that does not accept becomes explicitly ambiguous.
 /// An ambiguous one is unchanged, since a failed re-post says nothing about
 /// the original. The share is read again before every POST, so a confirmed
 /// or replaced share is not posted again.
+#[allow(clippy::too_many_arguments)]
 async fn reconcile_share(
     journal: &DcShareJournal<'_>,
     scope: &ShareOperationScope,
     client: &HelperClient,
-    reconciliation: Reconciliation<'_>,
+    round_id: &str,
+    share_wire_json: &str,
+    target_count: usize,
+    earlier: &DcShareRecord,
+    configured: &ConfiguredHelperFleet,
+    now_seconds: u64,
     cancel: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<(), VotingError> {
-    let Reconciliation {
-        round_id,
-        share_wire_json,
-        target_count,
-        earlier,
-        configured,
-        now_seconds,
-    } = reconciliation;
-    let configured_only = |urls: &[String]| {
-        urls.iter()
-            .filter(|url| configured.contains(url))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    let interrupted = configured_only(&earlier.attempting_urls);
-    let ambiguous = configured_only(&earlier.ambiguous_urls);
+    let interrupted = configured.filter(&earlier.attempting_urls);
+    let ambiguous = configured.filter(&earlier.ambiguous_urls);
     if interrupted.is_empty() && ambiguous.is_empty() {
         return Ok(());
     }
@@ -340,7 +305,7 @@ async fn reconcile_share(
         let Some(current) = journal.record()? else {
             return Err(stale());
         };
-        if current.confirmed || configured_only(&current.sent_to_urls).len() >= target_count {
+        if current.confirmed || configured.filter(&current.sent_to_urls).len() >= target_count {
             break;
         }
         if current.sent_to_urls.contains(server_url) {
@@ -394,8 +359,7 @@ fn record_hand_offs(
                 .filter(|url| configured.contains(url))
                 .count();
             let reachable_target =
-                effective_share_submission_target_count(share.target_count, configured.len())
-                    .max(1);
+                effective_share_submission_target_count(share.target_count, configured.len());
             configured_holders >= reachable_target
         })
         .map(|share| (share.share_index, share.nullifier))
@@ -414,15 +378,16 @@ fn record_hand_offs(
     )
 }
 
-/// The DC's delivery as durable state now describes it, plus what the pass
-/// observed.
+/// The DC's delivery as durable state now describes it, plus whether the
+/// pass ended `cancelled` or with the vote ended.
 fn current_pass(
     db: &VotingDb,
     scope: &ShareOperationScope,
     request: DcDeliveryRequest<'_>,
     dc: &LandedDc,
     configured: &ConfiguredHelperFleet,
-    end: PassEnd,
+    cancelled: bool,
+    vote_ended: bool,
 ) -> Result<DcDeliveryPass, VotingError> {
     let shares = db.read_transaction("load DC shares", |tx| {
         load_dc_shares(
@@ -448,7 +413,7 @@ fn current_pass(
     Ok(DcDeliveryPass {
         progress: landed.progress(),
         outcome_unknown,
-        cancelled: end.cancelled,
-        vote_ended: end.vote_ended,
+        cancelled,
+        vote_ended,
     })
 }
