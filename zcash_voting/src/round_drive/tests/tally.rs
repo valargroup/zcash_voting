@@ -116,6 +116,8 @@ impl BatchObligations<'_> {
             needs_bundle_setup: false,
             withheld_casts: self.withheld.iter().copied().collect(),
             lifecycle_owned_choices: self.lifecycle_owned.iter().copied().collect(),
+            fully_delegated_bundles: Default::default(),
+            nothing_left_to_vote: false,
         }
     }
 }
@@ -178,6 +180,8 @@ fn a_retire_is_not_work_the_tally_reports_as_owed() {
         needs_bundle_setup: false,
         withheld_casts: Default::default(),
         lifecycle_owned_choices: Default::default(),
+        fully_delegated_bundles: Default::default(),
+        nothing_left_to_vote: false,
     };
 
     let tally = VoteProgressBaseline::for_run(&obligations).tally(&obligations);

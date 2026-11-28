@@ -32,20 +32,27 @@ pub(super) fn bundle_index(step: &NextStep) -> u32 {
         | NextStep::AdvanceVote { bundle_index, .. }
         | NextStep::AdvanceVoteBatch { bundle_index, .. }
         | NextStep::SubmitShares { bundle_index, .. }
-        | NextStep::ConfirmShare { bundle_index, .. } => *bundle_index,
+        | NextStep::ConfirmShare { bundle_index, .. }
+        | NextStep::ProxyDelegate { bundle_index }
+        | NextStep::AdvanceProxyBatch { bundle_index } => *bundle_index,
         // A step variant added without a bundle would be a planning change
         // this driver cannot schedule; the match is exhaustive so that shows
         // up as a compile error rather than a misrouted lock.
     }
 }
 
-/// Whether running this step asks the host for delegation signing material.
+/// Whether running this step may ask the host for delegation signing
+/// material.
 ///
 /// An imported capability advances without a signer, so it is not included.
+/// A proxy batch asks only for its first attempt's registration signature.
 pub(super) fn needs_delegation_signer(step: &NextStep) -> bool {
     matches!(
         step,
-        NextStep::Delegate { .. } | NextStep::CastVote { .. } | NextStep::AdvanceDelegation { .. }
+        NextStep::Delegate { .. }
+            | NextStep::CastVote { .. }
+            | NextStep::AdvanceDelegation { .. }
+            | NextStep::AdvanceProxyBatch { .. }
     )
 }
 

@@ -5,8 +5,9 @@
 //! must never reinterpret an attempt as a different vote or delegation.
 //!
 //! This module exposes the durable data model, host-owned HTTP transport seam,
-//! and bounded delegation, singleton-vote, and atomic vote-batch lifecycle
-//! client. Persistence and coordination remain internal SDK mechanisms.
+//! and bounded delegation, singleton-vote, atomic vote-batch and proxy
+//! delegation batch lifecycle client. Persistence and coordination remain
+//! internal SDK mechanisms.
 //!
 //! # Removed legacy mutation APIs
 //!
@@ -150,12 +151,12 @@ mod store;
 mod transport;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use client::{
-    AdvanceDelegation, AdvanceImportedDelegation, AdvanceVote, AdvanceVoteBatch,
-    ChainAdvanceOutcome, ChainAdvancePolicy, ChainAdvanceRequest, ChainRecoveryMode,
-    ChainSubmissionClient, ChainSubmissionClientConfig, ChainSubmissionControl,
+    AdvanceDelegation, AdvanceImportedDelegation, AdvanceProxyDelegationBatch, AdvanceVote,
+    AdvanceVoteBatch, ChainAdvanceOutcome, ChainAdvancePolicy, ChainAdvanceRequest,
+    ChainRecoveryMode, ChainSubmissionClient, ChainSubmissionClientConfig, ChainSubmissionControl,
     DEFAULT_CHAIN_MAXIMUM_POST_ATTEMPTS, DEFAULT_CHAIN_RETRY_BACKOFFS,
     DEFAULT_CHAIN_TRACKING_WINDOW,
 };

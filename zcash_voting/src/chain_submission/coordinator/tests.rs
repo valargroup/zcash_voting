@@ -599,7 +599,9 @@ async fn nullifier_spent_recovery_retry_after_unresolved_dispatch_is_terminal() 
         br#"{"code":2,"log":"must not be retained"}"#.to_vec(),
     )));
     // Code 2 is checked against the tree once more before the generation
-    // ends hashless; the pass finds no layout.
+    // ends hashless; the pass, on a replica at the highest reported height,
+    // finds no layout.
+    queue_code_two_heights(&transport, 200);
     for response in tree_responses(&[[8; 32]]) {
         transport.queue(Ok(response));
     }
@@ -625,7 +627,7 @@ async fn nullifier_spent_recovery_retry_after_unresolved_dispatch_is_terminal() 
     assert!(store.projection(&identity).is_none());
     assert_eq!(
         transport.methods(),
-        vec!["POST", "GET", "GET", "GET", "GET", "POST", "GET", "GET"]
+        vec!["POST", "GET", "GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"]
     );
 
     // Terminal: a later pass performs no network work.
@@ -639,6 +641,78 @@ async fn nullifier_spent_recovery_retry_after_unresolved_dispatch_is_terminal() 
         .await
         .unwrap();
     assert_eq!(transport.methods(), before);
+}
+
+/// Code 2's pass judges a no-match only on a replica at or above the highest
+/// height any endpoint reports; below it the vote may have landed where the
+/// replica cannot show it yet, so the row stays `Recovering` and pending
+/// rather than ending hashless.
+#[tokio::test]
+async fn nullifier_spent_pass_on_a_lagging_replica_keeps_the_vote_recovering() {
+    let identity = identity(1, 0);
+    let store = Arc::new(InMemoryChainSubmissionStore::default());
+    store.seed_derivation(derived(identity.clone(), 1));
+    let transport = Arc::new(ScriptedTransport::default());
+    transport.queue(Ok(accepted()));
+    transport.queue(Ok(pending()));
+    let clock = ManualClock::new(100);
+    let coordinator = coordinator(
+        Arc::clone(&transport),
+        Arc::clone(&store),
+        clock.clone(),
+        10,
+    );
+    coordinator
+        .advance(
+            StoreAdvancementRequest::vote(identity.clone()),
+            &ManualControl::default(),
+        )
+        .await
+        .unwrap();
+
+    clock.set(111);
+    transport.queue(Ok(pending()));
+    for response in tree_responses(&[[8; 32]]) {
+        transport.queue(Ok(response));
+    }
+    transport.queue(Ok(ChainHttpResponse::json(
+        422,
+        br#"{"code":2,"log":"nullifier already spent"}"#.to_vec(),
+    )));
+    transport.queue(Ok(chain_height_response(200)));
+    transport.queue(Ok(validator_set_height_response(150)));
+    for response in tree_responses(&[[8; 32]]) {
+        transport.queue(Ok(response));
+    }
+    let result = coordinator
+        .advance_with_recovery(
+            StoreAdvancementRequest::vote(identity.clone()),
+            ChainRecoveryMode::ExactTree,
+            &ManualControl::default(),
+        )
+        .await
+        .unwrap();
+
+    // The row keeps its dispatch evidence, so a later pass that reaches the
+    // height settles the code 2 as before.
+    assert!(
+        matches!(
+            result,
+            ChainSubmissionResult::Pending(ChainSubmissionPending::Recovering {
+                candidate_transaction_hash: None,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    let record = store.record(&identity).unwrap();
+    assert_eq!(record.durable_state(), ChainSubmissionState::Recovering);
+    assert!(record.state().has_unresolved_dispatch());
+    assert!(store.projection(&identity).is_none());
+    assert_eq!(
+        transport.methods(),
+        vec!["POST", "GET", "GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"]
+    );
 }
 
 #[tokio::test]
@@ -674,6 +748,7 @@ async fn nullifier_spent_recovery_retry_after_unresolved_dispatch_confirms_from_
         br#"{"code":2,"log":"nullifier already spent"}"#.to_vec(),
     )));
     // The tree indexed the earlier dispatch between the two passes.
+    queue_code_two_heights(&transport, 200);
     for response in tree_responses(&[[8; 32], [3; 32], [4; 32], [7; 32]]) {
         transport.queue(Ok(response));
     }
@@ -697,7 +772,7 @@ async fn nullifier_spent_recovery_retry_after_unresolved_dispatch_confirms_from_
     );
     assert_eq!(
         transport.methods(),
-        vec!["POST", "GET", "GET", "GET", "GET", "POST", "GET", "GET"]
+        vec!["POST", "GET", "GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"]
     );
 }
 
@@ -1874,6 +1949,26 @@ fn accepted_batch(identity: &ChainSubmissionIdentity) -> ChainHttpResponse {
 
 fn pending() -> ChainHttpResponse {
     ChainHttpResponse::json(404, br#"{"error":"tx not found"}"#.to_vec())
+}
+
+/// The vote chain height route's answer at `height` (contracts-v1 §8).
+fn chain_height_response(height: u64) -> ChainHttpResponse {
+    ChainHttpResponse::json(200, format!(r#"{{"height":"{height}"}}"#).into_bytes())
+}
+
+/// A replica's validator-set answer at `height`, read before its snapshot.
+fn validator_set_height_response(height: u64) -> ChainHttpResponse {
+    ChainHttpResponse::json(
+        200,
+        format!(r#"{{"block_height":"{height}","validators":[]}}"#).into_bytes(),
+    )
+}
+
+/// Queues what code 2's pass reads before its snapshot: the highest height
+/// the one endpoint reports, then its replica's height, both `height`.
+fn queue_code_two_heights(transport: &ScriptedTransport, height: u64) {
+    transport.queue(Ok(chain_height_response(height)));
+    transport.queue(Ok(validator_set_height_response(height)));
 }
 
 fn tree_responses(leaves: &[[u8; 32]]) -> Vec<ChainHttpResponse> {
@@ -4703,6 +4798,7 @@ async fn nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_exac
         422,
         br#"{"code":2,"log":"nullifier already spent"}"#.to_vec(),
     )));
+    queue_code_two_heights(&transport, 200);
     for response in tree_responses(&[[8; 32], [3; 32], [4; 32], [7; 32]]) {
         transport.queue(Ok(response));
     }
@@ -4722,7 +4818,10 @@ async fn nullifier_spent_after_unresolved_dispatch_confirms_from_tree_under_exac
     };
     assert_eq!(confirmation.final_van_position(), 1);
     assert_eq!(confirmation.vote_commitment_positions(), &[2]);
-    assert_eq!(transport.methods(), vec!["POST", "POST", "GET", "GET"]);
+    assert_eq!(
+        transport.methods(),
+        vec!["POST", "POST", "GET", "GET", "GET", "GET"]
+    );
     assert!(store.projection(&identity).is_some());
     assert_eq!(
         store.record(&identity).unwrap().durable_state(),
@@ -4741,6 +4840,7 @@ async fn nullifier_spent_after_unresolved_dispatch_with_no_match_is_terminal_und
         422,
         br#"{"code":2,"log":"nullifier already spent"}"#.to_vec(),
     )));
+    queue_code_two_heights(&transport, 200);
     for response in tree_responses(&[[8; 32]]) {
         transport.queue(Ok(response));
     }
@@ -4761,7 +4861,10 @@ async fn nullifier_spent_after_unresolved_dispatch_with_no_match_is_terminal_und
             if diagnostic.kind() == ChainSubmissionDiagnosticKind::NullifierAlreadySpent
     ));
     // The no-match authorization was discarded: no further POST.
-    assert_eq!(transport.methods(), vec!["POST", "POST", "GET", "GET"]);
+    assert_eq!(
+        transport.methods(),
+        vec!["POST", "POST", "GET", "GET", "GET", "GET"]
+    );
     let record = store.record(&identity).unwrap();
     assert_eq!(
         record.durable_state(),

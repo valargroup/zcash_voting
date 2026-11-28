@@ -12,16 +12,18 @@ use super::{
     },
     recovery::{
         scan_exact_layout, RecoveryRetryAuthorization, RecoveryScanFailure, RecoveryScanOutcome,
+        RequiredReplicaHeight,
     },
     state::{SubmissionObservation, SubmissionRecordState},
     store::{
-        preserve_loaded_state, ChainSubmissionStore, ConfirmationCommit, StoreAdmission,
-        StoreAdvancementRequest, StoredChainSubmission,
+        preserve_loaded_state, ChainSubmissionStore, ConfirmationCommit, ProxyRetirement,
+        StoreAdmission, StoreAdvancementRequest, StoredChainSubmission,
     },
     ChainPostDispatch, ChainSubmissionDiagnostic, ChainSubmissionDiagnosticKind,
     ChainSubmissionFailure, ChainSubmissionFailureKind, ChainSubmissionResult,
     ChainSubmissionState, ChainTransport,
 };
+use proxy_batch::ProxyFailure;
 
 const MAX_POST_ATTEMPTS_PER_PASS: usize = 8;
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(10 * 60);
@@ -133,6 +135,14 @@ where
         })
     }
 
+    /// The highest latest block height any endpoint reports.
+    pub(super) async fn latest_block_height(
+        &self,
+        observations: &crate::ObservationScope,
+    ) -> Result<u64, LookupFailure> {
+        self.protocol.latest_block_height(observations).await
+    }
+
     /// Advances a delegation or singleton vote by one bounded pass.
     pub(super) async fn advance(
         &self,
@@ -167,6 +177,13 @@ where
         control: &dyn SubmissionControl,
         operation_epoch: u64,
     ) -> Result<ChainSubmissionResult, ChainSubmissionFailure> {
+        // A proxy batch always advances under exact tree, since its code 2
+        // needs a tree pass.
+        let recovery = if request.is_proxy_batch() {
+            ChainRecoveryMode::ExactTree
+        } else {
+            recovery
+        };
         let operation =
             CapturedSubmissionOperation::new(request.identity().clone(), operation_epoch);
         let applicable_identities = request.applicable_identities();
@@ -239,17 +256,7 @@ where
                     let reserved = self
                         .store
                         .reserve_ambiguous_retry(derived.generation(), now)
-                        .map_err(|error| {
-                            if error.strongest_state().is_some() {
-                                error
-                            } else {
-                                ChainSubmissionFailure::with_durable_state(
-                                    error.kind(),
-                                    record.durable_state(),
-                                    error.message(),
-                                )
-                            }
-                        })?;
+                        .map_err(|error| error.or_durable_state(record.durable_state()))?;
                     return self
                         .submit_reserved_attempts(
                             &request, &operation, &lease, *derived, reserved, recovery, 0, control,
@@ -380,6 +387,14 @@ where
                 PostAttemptOutcome::Rejected {
                     kind, diagnostic, ..
                 } => {
+                    if derived.proxy().is_some() {
+                        let failure = ProxyFailure::Rejected(kind, diagnostic);
+                        return self
+                            .settle_proxy_failure(
+                                request, operation, lease, &derived, failure, control,
+                            )
+                            .await;
+                    }
                     if ambiguity_seen && kind == ChainRejectionKind::NullifierAlreadySpent {
                         return self
                             .settle_nullifier_spent_after_dispatch(
@@ -558,17 +573,7 @@ where
             return Ok(AmbiguousRetryReservation::Interrupted(reserved));
         }
         let durable_state = reserved.durable_state();
-        let attach_state = |error: ChainSubmissionFailure| {
-            if error.strongest_state().is_some() {
-                error
-            } else {
-                ChainSubmissionFailure::with_durable_state(
-                    error.kind(),
-                    durable_state,
-                    error.message(),
-                )
-            }
-        };
+        let attach_state = |error: ChainSubmissionFailure| error.or_durable_state(durable_state);
         let now = self.clock.now_seconds().map_err(attach_state)?;
         self.store
             .reserve_ambiguous_retry(generation, now)
@@ -640,6 +645,22 @@ where
                     )
                     .await
             }
+            ChainSubmissionRequest::ProxyDelegationBatch(submission) => {
+                let super::ChainSubmissionTarget::ProxyDelegationBatch { batch_digest } =
+                    derived.generation().identity().target()
+                else {
+                    unreachable!("proxy batch request has a proxy batch identity")
+                };
+                self.protocol
+                    .submit_proxy_delegation_batch_with_dispatch(
+                        endpoint_index,
+                        submission,
+                        batch_digest,
+                        dispatch,
+                        observations,
+                    )
+                    .await
+            }
         }
     }
 
@@ -671,17 +692,7 @@ where
         })?;
         self.store
             .remove_fresh_reservation(generation, now)
-            .map_err(|error| {
-                if error.strongest_state().is_some() {
-                    error
-                } else {
-                    ChainSubmissionFailure::with_durable_state(
-                        error.kind(),
-                        ChainSubmissionState::Submitting,
-                        error.message(),
-                    )
-                }
-            })
+            .map_err(|error| error.or_durable_state(ChainSubmissionState::Submitting))
     }
 
     fn reconcile_with_durable_state(
@@ -691,17 +702,7 @@ where
         diagnostic: Option<ChainSubmissionDiagnostic>,
         durable_state: ChainSubmissionState,
     ) -> Result<StoredChainSubmission, ChainSubmissionFailure> {
-        let attach_state = |error: ChainSubmissionFailure| {
-            if error.strongest_state().is_some() {
-                error
-            } else {
-                ChainSubmissionFailure::with_durable_state(
-                    error.kind(),
-                    durable_state,
-                    error.message(),
-                )
-            }
-        };
+        let attach_state = |error: ChainSubmissionFailure| error.or_durable_state(durable_state);
         let now = self.clock.now_seconds().map_err(attach_state)?;
         self.store
             .reconcile(generation, observation, diagnostic, now)
@@ -736,6 +737,19 @@ where
                     .await
                 {
                     LookupProgress::Interrupted => record.public_result(),
+                    LookupProgress::Observed(TransactionStatusObservation::CommittedFailure(
+                        committed,
+                    )) if derived.proxy().is_some() && committed.codespace.is_some() => {
+                        self.settle_proxy_failure(
+                            request,
+                            operation,
+                            lease,
+                            &derived,
+                            ProxyFailure::Committed(&committed, ChainSubmissionState::Tracking),
+                            control,
+                        )
+                        .await
+                    }
                     LookupProgress::Observed(TransactionStatusObservation::Pending) => {
                         let record = self.finish_inconclusive_tracking(&derived, record, None)?;
                         self.recover_if_enabled(
@@ -856,6 +870,19 @@ where
                         durable_state: ChainSubmissionState::Recovering,
                         control,
                     }),
+                    LookupProgress::Observed(TransactionStatusObservation::CommittedFailure(
+                        committed,
+                    )) if derived.proxy().is_some() && committed.codespace.is_some() => {
+                        self.settle_proxy_failure(
+                            request,
+                            operation,
+                            lease,
+                            &derived,
+                            ProxyFailure::Committed(&committed, ChainSubmissionState::Recovering),
+                            control,
+                        )
+                        .await
+                    }
                     LookupProgress::Observed(TransactionStatusObservation::CommittedFailure(_)) => {
                         // Same terminality rule as the `Tracking` arm above: an
                         // imported delegation has one immutable candidate, and a
@@ -1019,8 +1046,17 @@ where
             } => *candidate_transaction_hash,
             _ => unreachable!("checked above"),
         };
+        // The no-match only authorizes a same-generation retry, which any
+        // replica may.
         match self
-            .scan_tree(&derived, candidate, operation, lease, control)
+            .scan_tree(
+                &derived,
+                candidate,
+                RequiredReplicaHeight::Any,
+                operation,
+                lease,
+                control,
+            )
             .await?
         {
             RecoveryScan::Match {
@@ -1035,6 +1071,17 @@ where
                 control,
             ),
             RecoveryScan::Interrupted => record.public_result(),
+            RecoveryScan::Lagging(record) => record.public_result(),
+            RecoveryScan::RegistrationLanded { position } => self
+                .retire_proxy(
+                    request,
+                    &derived,
+                    ProxyRetirement::RegistrationLanded {
+                        registration_position: position,
+                    },
+                    Some(ChainSubmissionState::Recovering),
+                )?
+                .public_result(),
             RecoveryScan::NoMatch(authorization) => {
                 if post_attempts_used >= self.policy.maximum_post_attempts {
                     return record.public_result();
@@ -1067,17 +1114,7 @@ where
                 let reserved = self
                     .store
                     .reserve_recovery_retry(request, authorization, now)
-                    .map_err(|error| {
-                        if error.strongest_state().is_some() {
-                            error
-                        } else {
-                            ChainSubmissionFailure::with_durable_state(
-                                error.kind(),
-                                record.durable_state(),
-                                error.message(),
-                            )
-                        }
-                    })?;
+                    .map_err(|error| error.or_durable_state(record.durable_state()))?;
                 self.submit_recovery_retry(
                     request,
                     operation,
@@ -1093,16 +1130,24 @@ where
         }
     }
 
-    /// Runs one bounded exact-tree pass for a durable `Recovering` row.
+    /// Runs one bounded exact-tree pass for a durable `Recovering` row, whose
+    /// no-match counts only from a replica that meets `required`.
     ///
     /// A scan that cannot complete (malformed or contradictory tree data, a
     /// transport failure) records a bounded diagnostic on the row, leaves it
     /// `Recovering`, and surfaces an error; it never produces authorization or
-    /// retires a candidate. Interruption is reported as such with no error.
+    /// retires a candidate. A pass on which no replica met `required` leaves
+    /// the row `Recovering` with a diagnostic, without an error. Interruption
+    /// is reported as such with no error.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one pass keeps its target, required height and captured authority explicit"
+    )]
     async fn scan_tree<'a>(
         &self,
         derived: &DerivedChainSubmission,
         candidate: Option<super::CandidateTransactionHash>,
+        required: RequiredReplicaHeight,
         operation: &'a CapturedSubmissionOperation,
         lease: &'a SubmissionOperationLease,
         control: &dyn SubmissionControl,
@@ -1113,6 +1158,7 @@ where
             &self.protocol,
             derived,
             candidate,
+            required,
             operation,
             lease,
             || interruption(operation, control).is_some(),
@@ -1120,6 +1166,15 @@ where
         )
         .await
         {
+            Ok(RecoveryScanOutcome::Lagging { required_height }) => {
+                let record = self.reconcile_with_durable_state(
+                    derived.generation(),
+                    SubmissionObservation::ContinueRecovery,
+                    Some(lagging_diagnostic(required_height)),
+                    ChainSubmissionState::Recovering,
+                )?;
+                Ok(RecoveryScan::Lagging(record))
+            }
             Ok(RecoveryScanOutcome::Match {
                 final_van_position,
                 vote_commitment_positions,
@@ -1127,6 +1182,9 @@ where
                 final_van_position,
                 vote_commitment_positions,
             }),
+            Ok(RecoveryScanOutcome::RegistrationLanded { position }) => {
+                Ok(RecoveryScan::RegistrationLanded { position })
+            }
             Ok(RecoveryScanOutcome::NoMatch(authorization)) => {
                 Ok(RecoveryScan::NoMatch(authorization))
             }
@@ -1172,11 +1230,12 @@ where
     /// Code 2 proves this generation's nullifiers are spent, so an earlier
     /// dispatch landed. Under exact-tree advancement one tree pass runs first:
     /// a match confirms the generation with its positions; a completed valid
-    /// no-match discards its retry authorization, which must never dispatch
+    /// no-match, on a replica at or above the highest height any endpoint
+    /// reports, discards its retry authorization, which must never dispatch
     /// again, and ends the generation as `SubmittedWithoutHash`. A scan that
-    /// cannot complete leaves the row `Recovering` with its dispatch evidence
-    /// so a later pass converges. Status-only advancement has no scan and ends
-    /// the generation at once.
+    /// cannot complete, or on which no replica reaches that height, leaves the
+    /// row `Recovering` with its dispatch evidence so a later pass converges.
+    /// Status-only advancement has no scan and ends the generation at once.
     #[allow(
         clippy::too_many_arguments,
         reason = "the code-2 settlement keeps each captured authority explicit"
@@ -1206,7 +1265,14 @@ where
             return end_hashless();
         }
         match self
-            .scan_tree(derived, None, operation, lease, control)
+            .scan_tree(
+                derived,
+                None,
+                RequiredReplicaHeight::HighestReported,
+                operation,
+                lease,
+                control,
+            )
             .await?
         {
             RecoveryScan::Match {
@@ -1224,6 +1290,16 @@ where
             // already proved the nullifiers spent, so nothing may dispatch.
             RecoveryScan::NoMatch(_discarded_authorization) => end_hashless(),
             RecoveryScan::Interrupted => current.public_result(),
+            RecoveryScan::Lagging(record) => record.public_result(),
+            // Only a proxy batch probes for a split-off leaf, and a proxy
+            // batch settles code 2 in `settle_proxy_nullifier_spent`.
+            RecoveryScan::RegistrationLanded { .. } => {
+                Err(ChainSubmissionFailure::with_durable_state(
+                    ChainSubmissionFailureKind::InvariantViolation,
+                    ChainSubmissionState::Recovering,
+                    "only a proxy batch probes for a landed registration",
+                ))
+            }
         }
     }
 
@@ -1315,6 +1391,12 @@ where
             PostAttemptOutcome::Rejected {
                 kind, diagnostic, ..
             } => {
+                if derived.proxy().is_some() {
+                    let failure = ProxyFailure::Rejected(kind, diagnostic);
+                    return self
+                        .settle_proxy_failure(request, operation, lease, &derived, failure, control)
+                        .await;
+                }
                 if ambiguity_preceded && kind == ChainRejectionKind::NullifierAlreadySpent {
                     return self
                         .settle_nullifier_spent_after_dispatch(
@@ -1439,17 +1521,7 @@ where
                 &allowed,
                 now,
             )
-            .map_err(|error| {
-                if error.strongest_state().is_some() {
-                    error
-                } else {
-                    ChainSubmissionFailure::with_durable_state(
-                        error.kind(),
-                        ChainSubmissionState::Recovering,
-                        error.message(),
-                    )
-                }
-            })?;
+            .map_err(|error| error.or_durable_state(ChainSubmissionState::Recovering))?;
         match committed {
             ConfirmationCommit::Interrupted(record) | ConfirmationCommit::Confirmed(record) => {
                 record.public_result()
@@ -1508,17 +1580,7 @@ where
                 &allowed,
                 now,
             )
-            .map_err(|error| {
-                if error.strongest_state().is_some() {
-                    error
-                } else {
-                    ChainSubmissionFailure::with_durable_state(
-                        error.kind(),
-                        context.durable_state,
-                        error.message(),
-                    )
-                }
-            })?;
+            .map_err(|error| error.or_durable_state(context.durable_state))?;
         match committed {
             ConfirmationCommit::Interrupted(record) => record.public_result(),
             ConfirmationCommit::Confirmed(record) => record.public_result(),
@@ -1533,6 +1595,8 @@ where
     ) -> LookupProgress {
         let observations = control.observations();
 
+        // A 0x09 committed failure is classified on its codespace, which
+        // every lookup asks for.
         let lookup = self.protocol.transaction_status(candidate, &observations);
         tokio::pin!(lookup);
         tokio::select! {
@@ -1625,10 +1689,27 @@ enum RecoveryScan<'a> {
         vote_commitment_positions: Vec<u64>,
     },
     /// A valid complete pass found no layout; the private authorization may
-    /// reserve exactly one same-generation retry, or be discarded.
+    /// reserve exactly one same-generation retry or be discarded.
     NoMatch(RecoveryRetryAuthorization<'a>),
+    /// A proxy batch's carried registration landed alone at `position`.
+    RegistrationLanded { position: u64 },
+    /// No replica's snapshot reached the required height. The returned row
+    /// stays `Recovering` with a diagnostic saying so.
+    Lagging(StoredChainSubmission),
     /// The host interrupted the pass; the row is unchanged.
     Interrupted,
+}
+
+/// The diagnostic of a pass on which no replica's snapshot reached
+/// `required_height`.
+fn lagging_diagnostic(required_height: u64) -> ChainSubmissionDiagnostic {
+    ChainSubmissionDiagnostic::from_redacted_message(
+        ChainSubmissionDiagnosticKind::ReconciliationPending,
+        format!(
+            "no vote-chain replica's commitment tree reached height {required_height}, so a \
+             pass that finds nothing proves nothing yet"
+        ),
+    )
 }
 
 /// Outcome of waiting out a backoff and reserving the next ambiguous retry.
@@ -1684,5 +1765,6 @@ fn lookup_failure(
     }
 }
 
+mod proxy_batch;
 #[cfg(test)]
 mod tests;

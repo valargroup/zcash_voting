@@ -41,11 +41,16 @@ pub(super) fn missing_signer_bundles<T: ChainTransport>(
     // the voter's key. Planning already decided that, with the delegation
     // phase and the bundle's imported flag both in hand, so this reads the
     // answer rather than re-deriving it from a second set of inputs.
+    // So does a proxy batch whose first attempt carries the registration.
     for obligation in obligations {
         if let Obligation::Cast {
             bundle_index,
             signs_delegation: true,
             ..
+        }
+        | Obligation::AdvanceProxyBatch {
+            bundle_index,
+            signs_registration: true,
         } = obligation
         {
             if !skipped.contains(bundle_index) {

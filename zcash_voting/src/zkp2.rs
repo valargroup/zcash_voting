@@ -29,6 +29,17 @@ pub(crate) struct VoteAuthorityTransitionPlan {
     pub proposal_authority_new: u64,
 }
 
+/// The zatoshi `total_note_value` the ZKP2 builders take for a VAN holding
+/// `van_ballots` ballots. The builders floor-divide by `BALLOT_DIVISOR`, so
+/// this gives back exactly `van_ballots`.
+fn circuit_note_value(van_ballots: u64) -> Result<u64, VotingError> {
+    van_ballots
+        .checked_mul(crate::governance::BALLOT_DIVISOR)
+        .ok_or_else(|| VotingError::InvalidInput {
+            message: format!("a VAN of {van_ballots} ballots exceeds the circuit's weight range"),
+        })
+}
+
 /// Derives one authority transition with the same native implementation used
 /// by the proof builder, without constructing a proof.
 #[allow(clippy::too_many_arguments)]
@@ -36,7 +47,7 @@ pub(crate) fn plan_vote_authority_transition(
     hotkey_seed: &[u8],
     network: Network,
     address_index: u32,
-    total_note_value: u64,
+    van_ballots: u64,
     gov_comm_rand: &[u8],
     voting_round_id: &[u8],
     proposal_id: u32,
@@ -52,7 +63,7 @@ pub(crate) fn plan_vote_authority_transition(
     let transition = derive_vote_authority_transition(
         &sk,
         address_index,
-        total_note_value,
+        circuit_note_value(van_ballots)?,
         gov_comm_rand,
         voting_round_id,
         proposal_id as u64,
@@ -97,7 +108,8 @@ fn parse_base(name: &str, bytes: &[u8]) -> Result<pallas::Base, VotingError> {
 /// * `hotkey_seed` - Seed bytes for the hotkey SpendingKey.
 /// * `network` - Zcash network used to derive the hotkey spending key.
 /// * `address_index` - Diversifier index used for the hotkey address during delegation.
-/// * `total_note_value` - Sum of delegated note values.
+/// * `van_ballots` - The spent VAN's weight in ballots, from the
+///   remaining-weight loader.
 /// * `gov_comm_rand` - 32-byte VAN blinding factor (from DB).
 /// * `voting_round_id` - 32-byte voting round identifier (from DB, hex-decoded).
 /// * `ea_pk` - 32-byte compressed election authority public key.
@@ -114,7 +126,7 @@ pub(crate) fn build_vote_commitment(
     hotkey_seed: &[u8],
     network: Network,
     address_index: u32,
-    total_note_value: u64,
+    van_ballots: u64,
     gov_comm_rand: &[u8],
     voting_round_id: &[u8],
     ea_pk: &[u8],
@@ -137,7 +149,7 @@ pub(crate) fn build_vote_commitment(
             hotkey_seed,
             network,
             address_index,
-            total_note_value,
+            van_ballots,
             gov_comm_rand,
             voting_round_id,
             ea_pk,
@@ -159,7 +171,7 @@ pub(crate) fn build_vote_commitment(
             hotkey_seed,
             network,
             address_index,
-            total_note_value,
+            van_ballots,
             gov_comm_rand,
             voting_round_id,
             ea_pk,
@@ -183,7 +195,7 @@ pub(crate) fn build_admitted_vote_commitment(
     hotkey_seed: &[u8],
     network: Network,
     address_index: u32,
-    total_note_value: u64,
+    van_ballots: u64,
     gov_comm_rand: &[u8],
     voting_round_id: &[u8],
     ea_pk: &[u8],
@@ -271,6 +283,7 @@ pub(crate) fn build_admitted_vote_commitment(
         // The caller will need alpha_v to sign the TX2 sighash with rsk_v = ask_v.randomize(&alpha_v).
         let alpha_v = pallas::Scalar::random(&mut voting_crypto_deps::rand::rngs::OsRng);
         let sk_for_proof = sk.clone();
+        let total_note_value = circuit_note_value(van_ballots)?;
         let proof_observations = observations.clone();
         let vote_bundle = proof_observations
             .measure_result("zkp2.prove", || {

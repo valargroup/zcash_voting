@@ -11,6 +11,7 @@ use crate::phases::{
     delegation_submission_statuses_on, share_phases_on, vote_submission_statuses_on,
     DelegationSubmissionStatus, SharePhase, VotePhase,
 };
+use crate::proxy::batch::{proxy_batch_statuses_on, ProxyBatchStatus};
 use crate::session::{load_ballot_intents, Decision};
 use crate::share_policy::ImmediateShareKey;
 use crate::share_tracking::round_immediate_share;
@@ -29,6 +30,9 @@ pub(crate) struct BundleSnapshot {
     /// The version-17 projection of the delegation transaction hash, the
     /// fallback when no lifecycle row reports one.
     pub(crate) delegation_tx_hash: Option<String>,
+    /// Dispatched or landed proxy DCs took the bundle's whole weight
+    /// ([`VanState::fully_delegated`](queries::VanState::fully_delegated)).
+    pub(crate) fully_delegated: bool,
 }
 
 /// One vote row as planning sees it.
@@ -68,6 +72,9 @@ pub(crate) struct RoundSnapshot {
     /// delegation generation, so a rebuilt or re-proved delegation is a new
     /// generation and is absent here even while the ledger row survives.
     pub(crate) rejection_blocked_bundles: BTreeMap<u32, ChainSubmissionDiagnostic>,
+    /// Bundles the committed proxy allocation places DCs on, with how far
+    /// each batch has come.
+    pub(crate) proxy_batches: BTreeMap<u32, ProxyBatchStatus>,
 }
 
 /// Reads the round's durable state on `tx`.
@@ -81,6 +88,10 @@ pub(crate) fn load_round_snapshot(
 ) -> Result<RoundSnapshot, VotingError> {
     let delegations = delegation_submission_statuses_on(tx, wallet_id, round_id)?;
     let rejection_blocked_bundles = rejection_blocked_bundles(tx, wallet_id, round_id)?;
+    let mut fully_delegated = BTreeMap::new();
+    for van in queries::load_van_states(tx, round_id, wallet_id)? {
+        fully_delegated.insert(van.bundle_index, van.fully_delegated()?);
+    }
     let bundles = queries::bundle_planning_rows(tx, round_id, wallet_id)?
         .into_iter()
         .map(|row| {
@@ -89,6 +100,10 @@ pub(crate) fn load_round_snapshot(
                 BundleSnapshot {
                     capability_imported: row.capability_imported,
                     delegation_tx_hash: row.delegation_tx_hash,
+                    fully_delegated: fully_delegated
+                        .get(&row.bundle_index)
+                        .copied()
+                        .unwrap_or(false),
                 },
             )
         })
@@ -133,6 +148,7 @@ pub(crate) fn load_round_snapshot(
         .collect();
     let lifecycle_hashes = lifecycle_transaction_hashes(tx, wallet_id, round_id)?;
     let persisted_immediate_share = round_immediate_share(tx, round_id, wallet_id)?;
+    let proxy_batches = proxy_batch_statuses_on(tx, wallet_id, round_id)?;
     Ok(RoundSnapshot {
         round_id: round_id.to_string(),
         delegations,
@@ -144,7 +160,61 @@ pub(crate) fn load_round_snapshot(
         lifecycle_hashes,
         persisted_immediate_share,
         rejection_blocked_bundles,
+        proxy_batches,
     })
+}
+
+/// Why round planning would never prove a bundle's proxy batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnprovableProxyBatch {
+    /// A vote may have spent the bundle's VAN or reduced its proposal
+    /// authority below the full authority ZKP4 needs.
+    VanMayBeSpent,
+    /// The bundle's registration ended unconfirmed, or its combined cast is
+    /// rejection-blocked.
+    RegistrationUnusable,
+}
+
+/// The first bundle of `round_id` whose proxy batch round planning would
+/// never prove, and why, or `None` when every bundle's could be.
+///
+/// It reads the facts classification gates `ProxyDelegate` on plus the VAN
+/// facts batch proving re-verifies. A delegation still in flight is not
+/// reported, since it may yet confirm. A commit refuses on any of these,
+/// since every batch waits for every bundle's proof.
+pub(crate) fn first_unprovable_proxy_batch(
+    tx: &Transaction<'_>,
+    wallet_id: &str,
+    round_id: &str,
+) -> Result<Option<(u32, UnprovableProxyBatch)>, VotingError> {
+    let mut found = BTreeMap::new();
+    let mut note = |bundle_index: u32, reason| {
+        found.entry(bundle_index).or_insert(reason);
+    };
+    for van in queries::load_van_states(tx, round_id, wallet_id)? {
+        if van.registration_van_spent
+            || van.proposal_authority != voting_circuits::MAX_PROPOSAL_AUTHORITY
+        {
+            note(van.bundle_index, UnprovableProxyBatch::VanMayBeSpent);
+        }
+    }
+    for vote in vote_submission_statuses_on(tx, wallet_id, round_id)? {
+        if super::lifecycle::vote_phase_holds_proxy_batch(vote.phase) {
+            note(vote.bundle_index, UnprovableProxyBatch::VanMayBeSpent);
+        }
+    }
+    for delegation in delegation_submission_statuses_on(tx, wallet_id, round_id)? {
+        if super::lifecycle::is_terminal_delegation_phase(delegation.phase) {
+            note(
+                delegation.bundle_index,
+                UnprovableProxyBatch::RegistrationUnusable,
+            );
+        }
+    }
+    for bundle_index in rejection_blocked_bundles(tx, wallet_id, round_id)?.into_keys() {
+        note(bundle_index, UnprovableProxyBatch::RegistrationUnusable);
+    }
+    Ok(found.into_iter().next())
 }
 
 /// Bundles at the combined-rejection cap whose delegation generation still

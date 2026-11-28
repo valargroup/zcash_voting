@@ -116,6 +116,8 @@ canonical obligations are:
 |---|---|---|
 | `Delegate` | bundle | bundle index |
 | `AdvanceDelegation` | bundle | bundle index, whether the delegation is a structurally imported capability, phase, tx hash |
+| `ProxyDelegate` | bundle | bundle index; the batch's slots, layout and anchor are read from durable state at act time |
+| `AdvanceProxyBatch` | bundle | bundle index; whether the batch's first attempt carries the registration and so needs the voter's signer |
 | `Retire` | vote unit | unit id and every member; an undispatched unit a member of which left the roster |
 | `Cast` | bundle | every draft `(proposal_id, choice)` the bundle must cast, the units to retire first, the delegation prerequisite if any |
 | `ReconcileChain` | vote unit | unit id, ordered member proposals, phase, tx hash, the delegation prerequisite if any |
@@ -174,12 +176,14 @@ The consequences that follow, and that tests pin:
 
 ### Cast gating
 
-For each bundle and each rostered proposal with a `Choice` intent that no
-live unit covers with the same choice (a unit being retired, and a stale
-singleton, are not live), a cast is due. A bundle is **held** by a live unit
-in `Committed`, `Submitted`, `SubmissionManaged` or `SubmittedWithoutHash`, or
-by a delegation in `SubmissionManaged`, `SubmittedWithoutHash` or
-`SubmissionRejected`; a due cast on a held bundle plans nothing at all, not
+For each bundle that is not fully delegated (see "Fully delegated bundles")
+and each rostered proposal with a `Choice` intent that no live unit covers
+with the same choice (a unit being retired, and a stale singleton, are not
+live), a cast is due. A bundle is **held** by a live unit
+in `Committed`, `Submitted`, `SubmissionManaged` or `SubmittedWithoutHash`, by
+a delegation in `SubmissionManaged`, `SubmittedWithoutHash` or
+`SubmissionRejected`, or by a pending proxy batch (see "Proxy delegation
+batches"); a due cast on a held bundle plans nothing at all, not
 even the delegation prerequisite, because nothing can be cast there until the
 holder resolves. On a free bundle the cast is `Cast` when the ballot is
 **terminal** (no open proposal and no unrostered intent to clear) and
@@ -301,6 +305,206 @@ persisted recovery bundles rather than from the constant.
   the combined transaction. `RoundStepProgress::DelegateAndVoteBatchPersisted`
   is a new progress kind between vote signing and helper planning.
 
+### Proxy delegation batches
+
+A committed proxy allocation places DCs on some of the round's bundles. Each
+such bundle owes one 0x09 batch, and the planner reads how far it has come from
+the same snapshot as everything else: `Planned` (committed slots and no proved
+batch), `Proved` (proved, nothing on the wire), `Dispatched` (a lifecycle row is
+unresolved), `Refused` (it records the chain's refusal) or `Landed`, with
+whether the registration's signature is still needed
+(`the_snapshot_reads_each_batch_s_submission_state`).
+`docs/chain_submission_invariants.md` owns the batch's chain lifecycle and its
+resending rules; this section owns what the planner and the step do with
+them.
+
+- `ProxyDelegate` is planned for a `Planned` batch whose bundle's delegation is
+  `Prepared`, `PcztBuilt`, `Proved` or `Confirmed`, whose VAN no vote may have
+  spent, and whose combined cast is not rejection-blocked. It needs no ballot
+  intent, so a proxy-only round plans its registration through it. A
+  delegation the lifecycle still owns (`Submitted`, `SubmissionManaged`) is
+  advanced first, and a terminal one plans no batch
+  (`a_proxy_only_round_plans_its_batch_without_a_ballot`,
+  `a_delegation_in_flight_holds_the_batch_until_it_resolves`).
+- **The two-way hold.** A pending batch spends its bundle's VAN at full
+  authority, so it holds the bundle from every fresh cast and from dispatching
+  an undispatched unit: neither `Cast`, `Delegate` nor `ReconcileChain` of a
+  `Committed` unit is planned there, and the proposals they would have served
+  are `withheld_casts`. The remainder is cast later, from the batch's successor
+  VAN. In the other direction a vote that may have spent the VAN — `Submitted`,
+  `SubmissionManaged`, `SubmittedWithoutHash` or `Confirmed` — holds the batch:
+  no `ProxyDelegate` is planned while the vote's own work continues. A
+  `SubmissionRejected` vote spent nothing and holds nothing
+  (`a_pending_batch_holds_an_undispatched_vote`,
+  `a_cast_that_may_have_spent_the_van_holds_the_batch`,
+  `the_hold_lifts_only_when_the_batch_lands`). Only landing lifts the hold: a
+  landed batch's successor VAN is the bundle's. A refused batch may still
+  land, so it holds until it does or voting ends. The acts re-read the hold
+  themselves (see Check-then-act;
+  `a_bundle_held_by_its_proxy_batch_prepares_no_vote`,
+  `a_bundle_held_by_its_proxy_batch_reserves_no_cast`). The other direction
+  is settled before any slot exists: a commit refuses a bundle whose batch
+  could never be proved, since every batch waits for every bundle's proof
+  (`first_unprovable_proxy_batch`; `AlreadyVoted` for a vote that may have
+  spent the VAN or reduced its proposal authority, `RegistrationUnusable`
+  for a terminal or rejection-blocked registration;
+  `a_commit_refuses_a_bundle_whose_batch_could_never_be_proved`). Any saved
+  vote share plan of the round also refuses the commit with `AlreadyVoted`,
+  and an undispatched vote without one is held instead (see the helper
+  specification's "Share count and identity", item 3).
+- **`AdvanceProxyBatch`** is planned for a `Proved` batch once every bundle's
+  batch is proved and no cast may have spent its VAN, so no batch lands while
+  another could still fail to prove; and for every `Dispatched` or `Refused`
+  batch (`every_batch_is_proved_before_any_is_broadcast`,
+  `a_cast_that_may_have_spent_the_van_holds_a_proved_batch`,
+  `a_batch_on_the_wire_is_advanced_until_it_lands`).
+  A batch whose first attempt carries the registration names its bundle in
+  `delegation_bundles_needing_signing`, and the driver's signing preflight
+  asks for it; later attempts sign with the round hotkey only
+  (`a_first_attempt_carrying_the_registration_needs_the_signer`).
+  `RoundPlan::proxy_batches` reports each bundle's stage (`Planned`,
+  `Proved`, `Dispatched`, `Refused`, `Landed`)
+  (`the_plan_reports_each_bundle_s_batch_stage`).
+- **The step.** With nothing on the wire, `AdvanceProxyBatch` refuses a new
+  attempt after the authenticated vote end with `VoteEnded`, requires the
+  bound hotkey, takes the registration's SpendAuth signature from the
+  delegation driver once when the batch carries it, signs and persists the
+  attempt as the chain specification's "Proxy delegation batches" says,
+  and reports `ProxyBatchSigned` before the POST. It then runs one exact-tree
+  episode, re-signing an attempt answered expired at most twice per step
+  (`an_attempt_is_signed_and_durable_before_its_post_and_landing_lifts_the_hold`,
+  `an_expired_attempt_is_re_signed_with_no_new_proof_or_device_signature`,
+  `a_new_attempt_after_the_vote_end_is_refused`). Landing and a split-off
+  advance; a split-off batch is planned as `Planned` again and proved
+  against the chain anchor
+  (`a_lifted_registration_splits_the_batch_off_to_be_proved_again`).
+- **A refused batch.** A pause or any other refusal leaves the batch
+  `Refused` and the step `Pending`, so the next step sends it again until it
+  lands or voting ends (`a_refused_batch_stays_pending_and_is_sent_again`,
+  `a_paused_batch_stays_recoverable_and_retries_once_the_pause_lifts`).
+- **The persisted batch layout.** The share layout is chosen once, from the
+  last-moment window, when the allocation is committed: single share if and
+  only if `RoundHostContext::is_last_moment()`, the call casts use, and the
+  commit requires the same layout as the preview the delegator confirmed
+  (`single_share`). It is persisted on every slot with
+  the slot's `(d, w, dc_slot)` before any proof. Batch planning, every re-prove
+  and every later re-plan read the stored layout and never the host clock, so
+  a batch committed before the window keeps the standard layout when it is
+  planned or proved inside it, and the same slots always rebuild
+  byte-identical DCs. The anchor enters only the proofs: a chain-anchored
+  batch carries the same DCs and successor VANs as a registration-anchored
+  one (`the_committed_layout_survives_a_re_plan_in_the_last_moment_window`,
+  `rebuilding_the_same_slots_yields_byte_identical_dcs`,
+  `a_chain_anchored_batch_binds_its_anchor_and_keeps_its_dcs`).
+- **Batch planning is write-once.** The step writes each slot's nullifier
+  (the circuit's `dc_slot_nullifier_hash` over the hotkey's `nk`, the round and
+  the bundle's `van_comm_rand`) and its spend-auth randomizer `alpha_v`
+  together, once, before the first proof. Planning again reuses them and
+  refuses a stored nullifier the hotkey and setup no longer reproduce
+  (`every_slot_nullifier_is_the_circuit_s`, `a_batch_is_planned_once`).
+- **Frozen setup.** From the commit on, a bundle with slots keeps its
+  delegation setup: `van_comm_rand` and the registration VAN define every
+  slot's nullifier and the VAN chain its DCs spend. The session reset, the
+  unbroadcast discard, a setup rebuild and bundle pruning each refuse such a
+  bundle with `DelegationSetupFrozen`, naming the action and changing nothing.
+  Round deletion still removes a round whose allocation is only committed,
+  with its slots; once a batch is proved it is broadcast evidence
+  (`DelegationBroadcastEvidence::ProxyBatch`) and every path that checks that
+  evidence, round deletion included, refuses
+  (`a_session_reset_refuses_a_bundle_with_committed_slots`,
+  `discarding_unbroadcast_setup_refuses_a_frozen_bundle`,
+  `replacing_a_frozen_bundle_s_setup_is_refused`,
+  `pruning_refuses_a_frozen_bundle`,
+  `a_proved_batch_is_evidence_that_keeps_the_round`).
+- **Execution runs in phases.** `ProxyDelegate` refuses a new batch after the
+  authenticated vote end with `VoteEnded`, as `Cast` does, and requires the
+  bound hotkey to be the bundle's delegation target. It plans the batch, then
+  proves the registration's ZKP1 through the host's delegation driver when the
+  delegation is unregistered (proof only; it never signs), or syncs the vote
+  tree for the confirmed VAN's witness, then builds every DC in slot order and
+  proves all ZKP4s. It stops at a stored, proved, unsigned batch
+  (`the_registration_is_proved_before_any_dc`,
+  `a_confirmed_registration_anchors_its_batch_in_the_vote_tree`,
+  `a_batch_after_the_vote_end_is_refused`, `a_batch_needs_the_round_hotkey`;
+  release-only through `make proofs`:
+  `a_real_registration_and_its_batch_prove_through_the_step`).
+- The VAN weight every proof spends comes from one loader,
+  `storage::queries::van_state`: `floor(total_note_value / 12,500,000)` less
+  every dispatched or confirmed slot's ballots. The original note total stays
+  the registration's, in the delegation generation and history
+  (`undispatched_slots_leave_the_registered_weight`,
+  `dispatched_or_confirmed_slots_leave_the_van`,
+  `a_dispatched_batch_retires_the_registration_van_expectation`). Round
+  planning reads the same loader, in its snapshot transaction, for the rule
+  below.
+
+### Fully delegated bundles
+
+A bundle is **fully delegated** when at least one of its slots counts in the
+loader above (its batch was dispatched or landed) and no ballot remains: `VanState::fully_delegated`. An
+allocation whose choices take the whole round produces one, and so does one
+whose kept remainder rounded to zero ballots on that bundle. Its
+successor VAN holds zero ballots and is dead by convention (plan CF-2):
+clients never cast from it. A bundle with no counted slot is never fully
+delegated, whatever its weight, so a round without proxy delegation plans
+exactly as before
+(`only_slots_that_take_every_ballot_make_a_bundle_fully_delegated`).
+
+- **No cast.** A fully delegated bundle plans no `Cast`, no `Blocked` cast
+  and no `Delegate` prerequisite for any choice, and an undispatched unit on
+  it is never dispatched, since dispatching is the second half of a cast. None
+  of this is a withheld cast: nothing is owed
+  (`delegating_everything_owes_no_ballot_and_no_cast_even_with_intents`,
+  `a_fully_delegated_bundle_never_dispatches_an_undispatched_vote`).
+- **No ballot.** When every bundle of the round is fully delegated the round
+  has nothing left to vote: `open_proposals`, `unrostered_intents` and
+  `choice_proposals` are empty, so the driver never stops with `NeedsBallot`
+  and the selected-choices baseline counts nothing. The plan reports
+  `nothing_left_to_vote` and names every such bundle in
+  `fully_delegated_bundles`. In a round that mixes them, the ballot is owed
+  for the bundles with weight, which alone cast it, an unrostered intent still
+  withholds their casts, and `all_decided` waits only on their votes
+  (`a_mixed_round_casts_only_from_the_bundle_with_weight`,
+  `an_unrostered_intent_does_not_hold_a_round_with_nothing_left_to_vote`).
+- **Intents are ignored, not refused.** Ballot intents are recorded per round,
+  not per bundle, and a bundle's weight reaches zero only when its batch is
+  dispatched, which may follow the ballot. Planning therefore has to ignore
+  stored intents for a fully delegated bundle whatever the write path does,
+  and a write-time refusal would make the same write succeed or fail by batch
+  timing. The intents stay durable, the plan that
+  `RoundExecutor::set_ballot_intents` returns carries the diagnostic
+  (`nothing_left_to_vote`, `fully_delegated_bundles`).
+- **No immediate share.** A fully delegated bundle never carries the round's
+  immediate share, so with every bundle fully delegated there is none (see
+  the helper specification's "Share count and identity", item 3;
+  `the_immediate_share_skips_a_fully_delegated_higher_bundle`,
+  `a_lower_bundle_s_vote_carries_the_immediate_share_past_a_fully_delegated_one`).
+- **Work already on the chain lifecycle survives.** A submitted vote on a
+  fully delegated bundle is still reconciled and a confirmed one still owes
+  its shares, by the rule this document starts from. This planner never casts
+  there, so only a build without this rule could have left such a vote
+  (`a_vote_already_on_the_chain_lifecycle_is_still_driven`).
+- **The act re-checks it.** `load_zkp2_inputs` refuses a fully delegated VAN
+  with `InvalidInput`. Vote preparation reads it before proving and again in
+  the `BEGIN IMMEDIATE` transaction that persists the vote, so no vote proof
+  spends the dead VAN even if a batch was dispatched after the cast was
+  planned (`a_fully_delegated_van_proves_no_vote`).
+- End to end, a landed batch that took the bundle's whole weight leaves a run
+  that stops with `NoWorkLeft`, before and after
+  the ballot is recorded, with no vote POST and no share sent; a kept
+  remainder plans its cast from the answers recorded before the commit once
+  the batch lands, and the planner still owes the ballot for kept weight
+  without answers
+  (`delegating_everything_never_asks_for_a_ballot_or_casts` in
+  `vote_work/tests/proxy_remainder.rs`; `a_kept_remainder_still_votes`).
+- **A commit answers the kept share.** `commit_allocation` refuses a plan
+  that keeps ballots with `KeptShareUnanswered` unless every proposal of the
+  roster the host passes has a ballot intent, read in the commit's own
+  transaction. So a delegation either takes the whole weight or is submitted
+  with the kept share's answers, and the round is never left half voted by
+  design (`a_commit_that_keeps_ballots_needs_the_kept_share_answered`,
+  `a_commit_with_the_kept_share_unanswered_is_refused`).
+
 ### Share obligations
 
 - A confirmed vote's expected share indexes come from its recovery bundle.
@@ -336,9 +540,16 @@ source of truth:
 - steps are ordered delegation first, then vote and share submission,
   then share confirmation; within a rank proposal-primary, then bundle, then
   share index, so an interrupted question finishes across bundles before a
-  later question resumes. A DC's share steps belong to no proposal: they rank
-  ahead of every proposal's within their tier, by bundle and then slot and
-  share, and are not `recovered_vote_work`;
+  later question resumes. `ProxyDelegate` ranks with delegation work, makes
+  the primary action `Delegate`, and names its bundle in
+  `delegation_bundles_needing_work` but not in
+  `delegation_bundles_needing_signing`, because proving asks the voter for no
+  signature (`a_proxy_step_resolves_to_its_obligation`). `AdvanceProxyBatch`
+  ranks and acts the same way, and names its bundle in the signing set too
+  when its first attempt carries the registration; it is a prerequisite of
+  the bundle's vote and share steps. A DC's share steps belong to no
+  proposal: they rank ahead of every proposal's within their tier, by bundle
+  and then slot and share, and are not `recovered_vote_work`;
 - `blocking_prerequisite` answers from the obligation's prerequisite;
 - the derived flags (`has_unconfirmed_shares`, `blocking_share_work`,
   `has_recoverable_vote_or_share_work`, `immediate_share_key`,
@@ -382,8 +593,11 @@ fresh plan taken under the lock, or to no work.
 | vote phase, delegation phase, share phase | `chain_submissions`, `votes`, `bundles`, `share_delegations` | `phases.rs` projections |
 | atomic batch membership and order | recovery bundle JSON on each member, batch digest | unit grouping |
 | helper plan for a vote | `helper_share_plans`, cleared by trigger when the vote's undispatched generation changes | plan presence in the snapshot |
-| round immediate-share designation | `round_immediate_share` row, first writer wins, immutable, voided with its undispatched generation | seeded once from the highest eligible bundle and lowest chosen proposal |
+| round immediate-share designation | `round_immediate_share` row, first writer wins, immutable, voided with its undispatched generation | seeded once from the highest eligible bundle, one not fully delegated (`immediate_share_bundle`), and lowest chosen proposal |
 | roster, vote end, last-moment window, helper fleet | host, per call | never persisted; classification input |
+| proxy allocation, and each slot's `(d, w, dc_slot)` and batch layout | `proxy_allocations`, `proxy_slots`, written at commit and immutable | the layout from the last-moment window at commit, never again |
+| slot nullifier and spend-auth randomizer | `proxy_slots`, written once by batch planning before the first proof | recomputed and checked, never redrawn |
+| proved proxy batch | `proxy_batches`, `proxy_batch_dcs`, replaced whole or not at all | batch progress in the snapshot |
 | lifecycle ownership of an intent | derived from the unit's lifecycle position | never persisted |
 
 The legacy `rounds.phase` column is a lossy round-wide high-water mark, not an
@@ -411,11 +625,14 @@ own write transaction or lock:
 | Obligation | Serialized by | Re-verified at act time |
 |---|---|---|
 | `Retire` | bundle lock | the row is still `tx_hash IS NULL AND vc_tree_position IS NULL` and not lifecycle-owned, inside `BEGIN IMMEDIATE`; batch members are expanded from the durable batch, not the snapshot |
-| `Cast` | bundle lock | retirement as above; the bound hotkey is the bundle's confirmed delegation target; the vote end has not passed on the host clock; the persist step refuses a vote whose recovery bundle appeared meanwhile |
-| `ReconcileChain` | bundle lock, then the chain lifecycle's own generation lock | the generation digest compare-and-swap of the chain lifecycle |
+| `Cast` | bundle lock | retirement as above; the bound hotkey is the bundle's confirmed delegation target; the vote end has not passed on the host clock; the persist step refuses a vote whose recovery bundle appeared meanwhile, and vote preparation refuses a bundle its proxy batch holds (slots and no confirmed 0x09) and ZKP2 input loading a fully delegated VAN, both before proving and inside that persist transaction; the first broadcast reservation refuses a held bundle under `BEGIN IMMEDIATE` |
+| `ReconcileChain` | bundle lock, then the chain lifecycle's own generation lock | the generation digest compare-and-swap of the chain lifecycle; an undispatched unit's first broadcast reservation refuses a bundle its proxy batch holds, under `BEGIN IMMEDIATE` |
 | `Deliver` | bundle lock | plan creation under `BEGIN IMMEDIATE` with the `commitment_bundle_json` compare-and-swap; designation compare-and-swap; `CommittedVote::confirmed` re-reads the generation |
 | `Confirm` | bundle lock, then per-share operation lock | the helper specification's quorum rules |
 | `Delegate`, `AdvanceDelegation`, `AdvanceImportedDelegation` | bundle lock | the delegation pipeline and coordinator |
+| `ProxyDelegate` | bundle lock | batch planning writes under `BEGIN IMMEDIATE` and recomputes stored nullifiers; the proved batch is written under `BEGIN IMMEDIATE` after re-reading its inputs, that no batch is proved, that no vote or batch POST may have spent the VAN, and that a registration batch's delegation has a ZKP1 proof and no chain evidence while a chain-anchored one spends the confirmed position |
+| `AdvanceProxyBatch` | bundle lock, then the chain lifecycle's own generation lock | an attempt is signed under `BEGIN IMMEDIATE` only while the batch has no lifecycle row; derivation re-verifies every signature |
+| allocation commit (a host call, not an obligation) | `BEGIN IMMEDIATE` | no allocation exists, the plan still previews as the delegator confirmed, and no bundle has a vote that may have spent its VAN, a reduced proposal authority, or a registration that can never admit a batch (`first_unprovable_proxy_batch`), and no vote of the round has a saved share plan (`lowest_bundle_with_vote_share_plan`) |
 
 A vote has reached the chain when **either** witness of its confirmation is
 present: `tx_hash IS NOT NULL OR vc_tree_position IS NOT NULL`. Hash
@@ -583,7 +800,8 @@ mechanism is in children, one per responsibility — `run_loop`, `selection`,
   `stop_round_ends_at_the_first_failure`).
 - **Scheduling and locking read one table.** `round_lock::bundle_scope` is
   authoritative for executor exclusion. Casts, imported delegation advancement,
-  chain reconciliation, delivery, and confirmation are bundle-scoped, with
+  proxy batches, chain reconciliation, delivery, and confirmation are
+  bundle-scoped, with
   per-share locks beneath delivery and tracking. Executor exclusion is separate
   from the chain coordinator's account/round → bundle → submission identities →
   database order. Round-wide designation, snapshots, generation checks, phase
@@ -871,14 +1089,31 @@ Conformance is demonstrated by behavior. Tests cover:
   and conflicting batch hashes are invariant violations with the existing
   messages;
 - `Deliver` is owed for missing shares; every submitted, unconfirmed share is
-  `Confirm`, carrying whether it has an acceptance or outcome-unknown attempt.
+  `Confirm`, carrying whether it has an acceptance or outcome-unknown attempt;
+- a planned proxy batch owes `ProxyDelegate` without a ballot and holds its
+  bundle from casts and undispatched units, a vote that may have spent the VAN
+  holds the batch, and a proved batch is submitted and still holds
+  (`round_planning/tests/proxy_hold.rs`);
+- `AdvanceProxyBatch` is planned once every batch is proved and for every
+  batch on the wire; the hold lifts only on landing
+  (`round_planning/tests/proxy_submission.rs`);
+- a fully delegated bundle plans no cast and dispatches no undispatched unit
+  whatever the intents say, a round of nothing else owes no ballot and
+  reports `nothing_left_to_vote`, a mixed round casts only from the bundles
+  with weight, and a bundle without proxy delegation plans as before
+  (`round_planning/tests/proxy_remainder.rs`).
 
 ### Snapshot
 
 - the loader runs inside one deferred read transaction and never takes the
   connection mutex itself (a contending writer thread does not deadlock);
 - the snapshot's phases, hashes, intents and plan presence equal what the
-  per-call readers returned for every existing planner fixture.
+  per-call readers returned for every existing planner fixture;
+- the snapshot reads each bundle's proxy batch progress in the same
+  transaction (`the_snapshot_reads_each_bundle_s_batch_progress`,
+  `the_snapshot_reads_each_batch_s_submission_state`), and whether each
+  bundle is fully delegated through the remaining-weight loader
+  (`delegating_everything_never_asks_for_a_ballot_or_casts`).
 
 ### Projection and plans
 
@@ -914,6 +1149,11 @@ Conformance is demonstrated by behavior. Tests cover:
   finished, and a fully skipped ballot stops with nothing left to do
   (`a_round_the_voter_has_not_decided_stops_for_the_ballot`,
   `a_fully_skipped_ballot_stops_with_no_work_left`);
+- a round whose every bundle is fully delegated never stops for the ballot,
+  with or without recorded intents, and casts nothing, while a bundle with a
+  kept remainder casts the answers committed with the delegation
+  (`delegating_everything_never_asks_for_a_ballot_or_casts`,
+  `a_kept_remainder_still_votes`);
 - a partly decided ballot still runs the bundle's delegation prerequisite,
   because the planner lists it while the voter decides the rest of the roster
   (`a_partly_decided_ballot_still_runs_the_delegation_prerequisite`);
@@ -1077,7 +1317,9 @@ pins the start event when preparation fails before setup.
 
 ## Shared proving and tree coordination
 
-ZKP1, ZKP2, direct proving calls, and key warm-up share the SDK proving runtime.
+ZKP1, ZKP2, ZKP4, direct proving calls, and key warm-up share the SDK proving
+runtime. The ZKP4 key is loaded only by a proxy batch's ZKP4 phase, after its
+ZKP1 phase; startup warm-up covers ZKP1 and ZKP2 only.
 CPU workers and active heavy jobs are independent limits, both defaulting to
 available parallelism. The existing per-batch proof default remains three.
 Key readiness and admission waits occur outside CPU workers; batch orchestration

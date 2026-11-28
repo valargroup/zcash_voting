@@ -153,6 +153,8 @@ fn covered_proposals(obligations: &RoundObligations) -> BTreeSet<u32> {
             Obligation::Blocked { .. }
             | Obligation::Delegate { .. }
             | Obligation::AdvanceDelegation { .. }
+            | Obligation::ProxyDelegate { .. }
+            | Obligation::AdvanceProxyBatch { .. }
             | Obligation::Retire { .. }
             | Obligation::Deliver { .. }
             | Obligation::Confirm { .. } => {}

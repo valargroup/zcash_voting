@@ -7,10 +7,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::phases::{DelegationPhase, VotePhase};
 use crate::session::{
     CompletedVoteChoice, CompletedVoteDisplay, Decision, DelegationRecoveryWork,
-    DelegationRecoveryWorkKind, DelegationStatus, NextStep, RoundPlan, RoundPlanAction,
-    VoteRecoveryWork, VoteRecoveryWorkKind,
+    DelegationRecoveryWorkKind, DelegationStatus, NextStep, ProxyBatchPlanStatus, RoundPlan,
+    RoundPlanAction, VoteRecoveryWork, VoteRecoveryWorkKind,
 };
-use crate::share_policy::{round_immediate_share_key, VOTE_COMMITMENT_SHARE_COUNT};
+use crate::share_policy::{
+    immediate_share_bundle, round_immediate_share_key, VOTE_COMMITMENT_SHARE_COUNT,
+};
 use crate::share_tracking::{CommitmentRef, ShareKey};
 use crate::types::VotingError;
 
@@ -131,11 +133,18 @@ pub(crate) fn project(
         .any(|phase| *phase != DelegationPhase::Prepared)
         || !votes.is_empty()
         || !snapshot.share_phases.is_empty();
+    // A fully delegated bundle casts nothing, so a choice is decided once
+    // every bundle with weight left confirmed it.
+    let voting_bundles: Vec<u32> = bundles
+        .iter()
+        .copied()
+        .filter(|bundle_index| !obligations.fully_delegated_bundles.contains(bundle_index))
+        .collect();
     let all_decided = proposal_ids.iter().all(|&pid| match intents.get(&pid) {
         Some(Decision::Skipped) => true,
         Some(Decision::Choice(choice)) => {
-            !bundles.is_empty()
-                && bundles.iter().all(|&b| {
+            !voting_bundles.is_empty()
+                && voting_bundles.iter().all(|&b| {
                     let vote_key = (b, pid);
                     vote_choices.get(&vote_key) == Some(choice)
                         && matches!(votes.get(&vote_key), Some(VotePhase::Confirmed))
@@ -235,6 +244,22 @@ pub(crate) fn project(
             }
         }
     }
+    // Likewise a proxy batch whose first attempt carries the registration.
+    // Each such obligation projects its own `AdvanceProxyBatch` step.
+    for obligation in &obligations.obligations {
+        if let Obligation::AdvanceProxyBatch {
+            bundle_index,
+            signs_registration: true,
+        } = obligation
+        {
+            work_summary
+                .delegation_bundles_needing_signing
+                .push(*bundle_index);
+            work_summary
+                .delegation_bundles_needing_work
+                .push(*bundle_index);
+        }
+    }
     work_summary
         .delegation_bundles_needing_signing
         .sort_unstable();
@@ -250,7 +275,13 @@ pub(crate) fn project(
     // executed, whatever the current roster derives; report that marker, and
     // derive from the current choices only while no plan exists.
     let immediate_share_key = snapshot.persisted_immediate_share.or_else(|| {
-        round_immediate_share_key(bundles.iter().copied().max(), &obligations.choice_proposals)
+        let bundle_index = immediate_share_bundle(bundles.iter().map(|&bundle_index| {
+            (
+                bundle_index,
+                obligations.fully_delegated_bundles.contains(&bundle_index),
+            )
+        }));
+        round_immediate_share_key(bundle_index, &obligations.choice_proposals)
     });
     let immediate_share_confirmed = immediate_share_key.as_ref().is_some_and(|key| {
         snapshot.shares.iter().any(|share| {
@@ -290,6 +321,20 @@ pub(crate) fn project(
         has_recoverable_vote_or_share_work: work_summary.has_recoverable_vote_or_share_work,
         recovered_delegation_work,
         recovered_vote_work,
+        proxy_batches: snapshot
+            .proxy_batches
+            .iter()
+            .map(|(&bundle_index, status)| ProxyBatchPlanStatus {
+                bundle_index,
+                stage: status.progress,
+            })
+            .collect(),
+        fully_delegated_bundles: obligations
+            .fully_delegated_bundles
+            .iter()
+            .copied()
+            .collect(),
+        nothing_left_to_vote: obligations.nothing_left_to_vote,
     })
 }
 
@@ -316,6 +361,14 @@ fn steps_from_obligations(obligations: &[Obligation]) -> Vec<NextStep> {
             } => steps.push(NextStep::AdvanceDelegation {
                 bundle_index: *bundle_index,
             }),
+            Obligation::ProxyDelegate { bundle_index } => steps.push(NextStep::ProxyDelegate {
+                bundle_index: *bundle_index,
+            }),
+            Obligation::AdvanceProxyBatch { bundle_index, .. } => {
+                steps.push(NextStep::AdvanceProxyBatch {
+                    bundle_index: *bundle_index,
+                })
+            }
             Obligation::Cast {
                 bundle_index,
                 drafts,
@@ -379,9 +432,15 @@ pub(crate) fn resolve_step<'a>(
     obligations
         .iter()
         .find(|obligation| match (obligation, step) {
-            (Obligation::Delegate { bundle_index }, NextStep::Delegate { bundle_index: b }) => {
-                bundle_index == b
-            }
+            (Obligation::Delegate { bundle_index }, NextStep::Delegate { bundle_index: b })
+            | (
+                Obligation::ProxyDelegate { bundle_index },
+                NextStep::ProxyDelegate { bundle_index: b },
+            )
+            | (
+                Obligation::AdvanceProxyBatch { bundle_index, .. },
+                NextStep::AdvanceProxyBatch { bundle_index: b },
+            ) => bundle_index == b,
             (
                 Obligation::AdvanceDelegation {
                     bundle_index,
@@ -474,7 +533,9 @@ pub(crate) fn step_rank(step: &NextStep) -> (u32, u32, u32, u32) {
     // vote/share recovery. Vote work is proposal-primary so an interrupted
     // question finishes across all bundles before later questions resume.
     match step {
-        NextStep::Delegate { bundle_index } => (0, 0, *bundle_index, 0),
+        NextStep::Delegate { bundle_index }
+        | NextStep::ProxyDelegate { bundle_index }
+        | NextStep::AdvanceProxyBatch { bundle_index } => (0, 0, *bundle_index, 0),
         NextStep::AdvanceDelegation { bundle_index }
         | NextStep::AdvanceImportedDelegation { bundle_index } => (0, 0, *bundle_index, 0),
         NextStep::CastVote {
@@ -536,7 +597,9 @@ pub(crate) fn blocking_prerequisite<'a>(
     let dependent_bundle = match step {
         NextStep::Delegate { .. }
         | NextStep::AdvanceDelegation { .. }
-        | NextStep::AdvanceImportedDelegation { .. } => return None,
+        | NextStep::AdvanceImportedDelegation { .. }
+        | NextStep::ProxyDelegate { .. }
+        | NextStep::AdvanceProxyBatch { .. } => return None,
         NextStep::CastVote { bundle_index, .. }
         | NextStep::AdvanceVote { bundle_index, .. }
         | NextStep::AdvanceVoteBatch { bundle_index, .. }
@@ -549,6 +612,8 @@ pub(crate) fn blocking_prerequisite<'a>(
             NextStep::Delegate { bundle_index }
                 | NextStep::AdvanceDelegation { bundle_index }
                 | NextStep::AdvanceImportedDelegation { bundle_index }
+                | NextStep::ProxyDelegate { bundle_index }
+                | NextStep::AdvanceProxyBatch { bundle_index }
                 if *bundle_index == dependent_bundle
         )
     })
@@ -572,6 +637,8 @@ fn select_primary_action(
             NextStep::Delegate { .. }
                 | NextStep::AdvanceDelegation { .. }
                 | NextStep::AdvanceImportedDelegation { .. }
+                | NextStep::ProxyDelegate { .. }
+                | NextStep::AdvanceProxyBatch { .. }
         )
     }) {
         return RoundPlanAction::Delegate;
@@ -693,12 +760,15 @@ fn recovered_delegation_work_from_steps(
                 });
             }
             // Listed exhaustively on purpose: a new step must be classified
-            // here rather than silently dropped.
+            // here rather than silently dropped. A proxy batch is fresh work,
+            // not a delegation to recover.
             NextStep::CastVote { .. }
             | NextStep::AdvanceVote { .. }
             | NextStep::AdvanceVoteBatch { .. }
             | NextStep::SubmitShares { .. }
-            | NextStep::ConfirmShare { .. } => {}
+            | NextStep::ConfirmShare { .. }
+            | NextStep::ProxyDelegate { .. }
+            | NextStep::AdvanceProxyBatch { .. } => {}
         }
     }
     Ok(work)
@@ -815,6 +885,8 @@ fn recovered_vote_work_from_steps(
             NextStep::Delegate { .. }
             | NextStep::AdvanceDelegation { .. }
             | NextStep::AdvanceImportedDelegation { .. }
+            | NextStep::ProxyDelegate { .. }
+            | NextStep::AdvanceProxyBatch { .. }
             | NextStep::CastVote { .. }
             | NextStep::SubmitShares {
                 commitment: CommitmentRef::Proxy { .. },
@@ -889,6 +961,15 @@ pub(crate) fn summarize_plan_work(
     for step in steps {
         match step {
             NextStep::Delegate { bundle_index, .. } => {
+                needing_work.insert(*bundle_index);
+            }
+            NextStep::ProxyDelegate { bundle_index } => {
+                // Proving ZKP1 here needs no voter signature.
+                needing_work.insert(*bundle_index);
+            }
+            NextStep::AdvanceProxyBatch { bundle_index } => {
+                // `project` adds the bundle to the signing set when its first
+                // attempt carries the registration.
                 needing_work.insert(*bundle_index);
             }
             NextStep::AdvanceDelegation { bundle_index, .. } => {

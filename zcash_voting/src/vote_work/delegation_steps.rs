@@ -23,6 +23,31 @@ impl<T: ChainTransport> RoundExecutor<T> {
         progress: &dyn RoundStepProgressReporter,
     ) -> Result<RoundStepOutcome, RoundStepFailure> {
         let ledger = StepLedger::default();
+        if self
+            .prepare_delegation_proof(scope, bundle_index, lock, progress)
+            .await?
+            .is_none()
+        {
+            return self.step_cancelled(scope, ledger);
+        }
+        self.outcome(scope, super::RoundStepDisposition::Advanced, ledger)
+    }
+
+    /// Runs the driver's proof-only ZKP1 preparation of `bundle_index` on a
+    /// blocking thread, forwarding its progress.
+    ///
+    /// The thread holds `lock` until preparation has persisted, even if this
+    /// future is dropped, so no competing proof starts for the bundle.
+    /// Returns `Ok(None)` when the host interrupted the step at either
+    /// boundary around the result, so the caller ends it as cancelled.
+    pub(super) async fn prepare_delegation_proof(
+        &self,
+        scope: &StepScope<'_>,
+        bundle_index: u32,
+        lock: &HeldRoundLock,
+        progress: &dyn RoundStepProgressReporter,
+    ) -> Result<Option<()>, RoundStepFailure> {
+        let ledger = StepLedger::default();
         let inputs = self.delegation_inputs(scope)?;
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
@@ -98,14 +123,14 @@ impl<T: ChainTransport> RoundExecutor<T> {
             });
         }
         if scope.interrupted() {
-            return self.step_cancelled(scope, ledger);
+            return Ok(None);
         }
         proof_status
             .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
         if scope.interrupted() {
-            return self.step_cancelled(scope, ledger);
+            return Ok(None);
         }
-        self.outcome(scope, super::RoundStepDisposition::Advanced, ledger)
+        Ok(Some(()))
     }
 
     pub(super) async fn run_advance_delegation(
@@ -116,28 +141,9 @@ impl<T: ChainTransport> RoundExecutor<T> {
         progress: &dyn RoundStepProgressReporter,
     ) -> Result<RoundStepOutcome, RoundStepFailure> {
         let ledger = StepLedger::default();
-        let inputs = self.delegation_inputs(scope)?;
-        let driver = Arc::clone(&inputs.driver);
-        let signer = inputs.signer.clone();
-        // The signing task keeps the bundle lock while it runs, so an aborted
-        // future cannot let a new pass prompt the host signer concurrently.
-        let held_lock = Arc::clone(lock);
-        let observations = scope.observations.clone();
-        let signature = tokio::task::spawn_blocking(move || {
-            let _held_lock = held_lock;
-            driver.resign_blocking_observed(bundle_index, &signer, &observations)
-        })
-        .await
-        .map_err(|error| {
-            self.step_failure(
-                RoundStepFailureKind::InvariantViolation,
-                Some(&scope.step),
-                None,
-                &ledger,
-                format!("delegation signing task failed: {error}"),
-            )
-        })?
-        .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
+        let signature = self
+            .resign_delegation(scope, bundle_index, lock, &ledger, "delegation")
+            .await?;
         let request = AdvanceDelegation {
             vote_round_id: scope.round_id_bytes,
             bundle_index,
@@ -154,6 +160,45 @@ impl<T: ChainTransport> RoundExecutor<T> {
             .await
             .map_err(|failure| self.step_chain_failure(failure, Some(&scope.step), &ledger))?;
         self.chain_step_outcome(scope, outcome, ledger, progress)
+    }
+
+    /// SpendAuth-signs `bundle_index`'s locked delegation generation again
+    /// through the host's delegation driver (see `delegation_inputs`), on a
+    /// blocking task. `task` names the signing in a join failure.
+    #[allow(
+        clippy::result_large_err,
+        reason = "a step fails with the executor's RoundStepFailure, as every step does"
+    )]
+    pub(super) async fn resign_delegation(
+        &self,
+        scope: &StepScope<'_>,
+        bundle_index: u32,
+        lock: &HeldRoundLock,
+        ledger: &StepLedger,
+        task: &str,
+    ) -> Result<[u8; 64], RoundStepFailure> {
+        let inputs = self.delegation_inputs(scope)?;
+        let driver = Arc::clone(&inputs.driver);
+        let signer = inputs.signer.clone();
+        // The signing task keeps the bundle lock while it runs, so an aborted
+        // future cannot let a new pass prompt the host signer concurrently.
+        let held_lock = Arc::clone(lock);
+        let observations = scope.observations.clone();
+        tokio::task::spawn_blocking(move || {
+            let _held_lock = held_lock;
+            driver.resign_blocking_observed(bundle_index, &signer, &observations)
+        })
+        .await
+        .map_err(|error| {
+            self.step_failure(
+                RoundStepFailureKind::InvariantViolation,
+                Some(&scope.step),
+                None,
+                ledger,
+                format!("{task} signing task failed: {error}"),
+            )
+        })?
+        .map_err(|error| self.step_voting_failure(error, Some(&scope.step), ledger))
     }
 
     /// The host's delegation inputs, refused unless the driver is bound to

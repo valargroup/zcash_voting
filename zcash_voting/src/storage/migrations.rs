@@ -2,7 +2,7 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use crate::VotingError;
 
-const CURRENT_VERSION: u32 = 25;
+const CURRENT_VERSION: u32 = 26;
 
 /// Schema version that `001_init.sql` produces, and the oldest version that can
 /// be upgraded in place.
@@ -160,9 +160,23 @@ END;",
         "ALTER TABLE proofs ADD COLUMN circuit_key_fingerprint BLOB \
          CHECK(circuit_key_fingerprint IS NULL OR length(circuit_key_fingerprint) = 32);",
     ),
+    // v26 adds the dormant proxy delegation tables and admits the 0x09 kind
+    // to `chain_submissions`, rebuilding it as v23 did. An older SDK then
+    // refuses the database as newer.
+    (25, include_str!("migrations/008_proxy_delegation.sql")),
 ];
 
-const RESET_SQL: &str = "DROP TABLE IF EXISTS combined_cast_rejections;
+const RESET_SQL: &str = "DROP TABLE IF EXISTS proxy_dc_shares;
+DROP TABLE IF EXISTS proxy_share_plans;
+DROP TABLE IF EXISTS proxy_dc_landings;
+DROP TABLE IF EXISTS proxy_batch_attempts;
+DROP TABLE IF EXISTS proxy_batch_dcs;
+DROP TABLE IF EXISTS proxy_batches;
+DROP TABLE IF EXISTS proxy_slots;
+DROP TABLE IF EXISTS proxy_allocations;
+DROP TABLE IF EXISTS proxy_delegate_ballots;
+DROP TABLE IF EXISTS proxy_delegate_keys;
+DROP TABLE IF EXISTS combined_cast_rejections;
 DROP TABLE IF EXISTS pir_proof_cache;
 DROP TABLE IF EXISTS ballot_intent;
 DROP TABLE IF EXISTS imt_proofs;
@@ -297,18 +311,28 @@ fn reconcile_combined_preview(conn: &Connection) -> Result<bool, VotingError> {
     expected
         .execute_batch(include_str!("migrations/001_init.sql"))
         .map_err(migration_error)?;
-    // The preview predates the combined-cast rejection ledger, which the
-    // version-23 ladder entry below creates. It is therefore not part of what
-    // identifies a preview schema, and leaving it in the expected fingerprint
-    // would refuse every preview database instead of upgrading it. The same
-    // holds for the proof key fingerprint, which the version-24 ladder entry
-    // adds.
+    // The preview predates the combined-cast rejection ledger, the proof key
+    // fingerprint and the proxy delegation tables, which the version-23,
+    // version-24 and version-25 ladder entries below add. They are therefore
+    // not part of what identifies a preview schema, and leaving them in the
+    // expected fingerprint would refuse every preview database instead of
+    // upgrading it.
     expected
         .execute_batch(
             "DROP TRIGGER IF EXISTS combined_cast_rejections_monotonic_streak;
              DROP TRIGGER IF EXISTS combined_cast_rejections_generation_restart;
              DROP TABLE IF EXISTS combined_cast_rejections;
-             ALTER TABLE proofs DROP COLUMN circuit_key_fingerprint;",
+             ALTER TABLE proofs DROP COLUMN circuit_key_fingerprint;
+             DROP TABLE IF EXISTS proxy_dc_shares;
+             DROP TABLE IF EXISTS proxy_share_plans;
+             DROP TABLE IF EXISTS proxy_dc_landings;
+             DROP TABLE IF EXISTS proxy_batch_attempts;
+             DROP TABLE IF EXISTS proxy_batch_dcs;
+             DROP TABLE IF EXISTS proxy_batches;
+             DROP TABLE IF EXISTS proxy_slots;
+             DROP TABLE IF EXISTS proxy_allocations;
+             DROP TABLE IF EXISTS proxy_delegate_ballots;
+             DROP TABLE IF EXISTS proxy_delegate_keys;",
         )
         .map_err(migration_error)?;
     let actual = preview_schema_fingerprint(conn)?;

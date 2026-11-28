@@ -30,7 +30,9 @@ pub(crate) fn bundle_scope(step: &NextStep) -> Option<u32> {
         | NextStep::AdvanceVote { bundle_index, .. }
         | NextStep::AdvanceVoteBatch { bundle_index, .. }
         | NextStep::SubmitShares { bundle_index, .. }
-        | NextStep::ConfirmShare { bundle_index, .. } => Some(*bundle_index),
+        | NextStep::ConfirmShare { bundle_index, .. }
+        | NextStep::ProxyDelegate { bundle_index }
+        | NextStep::AdvanceProxyBatch { bundle_index } => Some(*bundle_index),
     }
 }
 

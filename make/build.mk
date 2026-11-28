@@ -18,8 +18,8 @@ VCT_PACKAGES  := -p vote-commitment-tree -p vote-commitment-tree-client
 # runs the whole suite without failing fast.
 NEXTEST_PROFILE ?= agent
 
-.PHONY: help check test test-lrz check-vct test-vct doc-test proofs msrv fmt clippy \
-	delegate-vectors \
+.PHONY: help check test test-lrz check-vct test-vct test-unstable-proxy-delegation doc-test proofs msrv fmt \
+	clippy delegate-vectors \
 	recovery-conformance-check recovery-conformance recovery-conformance-crash \
 	recovery-conformance-stalls recovery-conformance-fleet \
 	stage-bench-check stage-bench-worker stage-bench stage-bench-unit
@@ -54,6 +54,20 @@ check-vct: ## Type-check standalone tree libraries on both backends
 		--features vote-commitment-tree/lrz,vote-commitment-tree-client/lrz --locked
 	@CARGO_TARGET_DIR="$(VCT_TARGET_DIR)" \
 		cargo check $(VCT_PACKAGES) --lib --locked
+
+# The opt-in `unstable-proxy-delegation` feature turns proxy delegation on for
+# end-to-end tests and flag-on development builds. It is test-only and in no
+# default feature set, so `check`, `test`, `clippy` and `msrv` keep covering
+# the shipped build with the gate closed; this target covers the other
+# setting. It shares the Zakura target directory, where cargo keeps each
+# feature set's artifacts apart.
+test-unstable-proxy-delegation: ## Check and test the unstable, test-only proxy delegation feature
+	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" \
+		cargo check $(APP_PACKAGES) --all-targets \
+		--features test-fixtures,zcash_voting/unstable-proxy-delegation --locked
+	@CARGO_TARGET_DIR="$(ZAKURA_TARGET_DIR)" \
+		cargo nextest run -P $(NEXTEST_PROFILE) -p zcash_voting \
+		--features test-fixtures,unstable-proxy-delegation --locked
 
 test-vct: ## Run the vote-commitment-tree crates on both backends
 	@CARGO_TARGET_DIR="$(VCT_TARGET_DIR)" \

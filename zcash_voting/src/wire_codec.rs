@@ -722,7 +722,9 @@ impl TryFrom<session::NextStep> for NextStepView {
         match step {
             session::NextStep::Delegate { bundle_index }
             | session::NextStep::AdvanceDelegation { bundle_index }
-            | session::NextStep::AdvanceImportedDelegation { bundle_index } => Ok(Self {
+            | session::NextStep::AdvanceImportedDelegation { bundle_index }
+            | session::NextStep::ProxyDelegate { bundle_index }
+            | session::NextStep::AdvanceProxyBatch { bundle_index } => Ok(Self {
                 kind,
                 bundle_index,
                 proposal_id: 0,
@@ -818,6 +820,29 @@ impl From<NextStepView> for session::NextStep {
                 commitment: view_commitment(view.proposal_id, view.dc_slot),
                 share_index: view.share_index,
             },
+            Kind::ProxyDelegate => Self::ProxyDelegate {
+                bundle_index: view.bundle_index,
+            },
+            Kind::AdvanceProxyBatch => Self::AdvanceProxyBatch {
+                bundle_index: view.bundle_index,
+            },
+        }
+    }
+}
+
+impl From<session::ProxyBatchPlanStatus> for crate::wire::ProxyBatchStatusView {
+    fn from(status: session::ProxyBatchPlanStatus) -> Self {
+        use crate::wire::ProxyBatchStageView as View;
+        use session::ProxyBatchStage as Stage;
+        Self {
+            bundle_index: status.bundle_index,
+            stage: match status.stage {
+                Stage::Planned => View::Planned,
+                Stage::Proved => View::Proved,
+                Stage::Dispatched => View::Dispatched,
+                Stage::Refused => View::Refused,
+                Stage::Landed => View::Landed,
+            },
         }
     }
 }
@@ -881,6 +906,9 @@ impl TryFrom<session::RoundPlan> for RoundPlanView {
 
     fn try_from(plan: session::RoundPlan) -> Result<Self, Self::Error> {
         Ok(Self {
+            proxy_batches: plan.proxy_batches.into_iter().map(Into::into).collect(),
+            fully_delegated_bundles: plan.fully_delegated_bundles,
+            nothing_left_to_vote: plan.nothing_left_to_vote,
             round_id: plan.round_id,
             pending_recovery: plan.pending_recovery,
             blocking_recovery: plan.blocking_recovery,
@@ -984,6 +1012,9 @@ impl From<crate::ChainSubmissionDiagnosticKind> for ChainDiagnosticKindView {
             Kind::StorageFailure => Self::StorageFailure,
             Kind::EndpointUnsupported => Self::EndpointUnsupported,
             Kind::RouteAnswerReplaced => Self::RouteAnswerReplaced,
+            Kind::ProxyBatchPaused => Self::ProxyBatchPaused,
+            Kind::ProxyBatchExpired => Self::ProxyBatchExpired,
+            Kind::ProxyRegistrationLanded => Self::ProxyRegistrationLanded,
         }
     }
 }
@@ -1452,6 +1483,14 @@ impl TryFrom<crate::RoundStepProgress> for RoundStepProgressView {
                 view.kind = RoundStepProgressKind::DelegateAndVoteBatchPersisted;
                 view.bundle_index = Some(bundle_index);
             }
+            P::ProxyBatchProved { bundle_index } => {
+                view.kind = RoundStepProgressKind::ProxyBatchProved;
+                view.bundle_index = Some(bundle_index);
+            }
+            P::ProxyBatchSigned { bundle_index } => {
+                view.kind = RoundStepProgressKind::ProxyBatchSigned;
+                view.bundle_index = Some(bundle_index);
+            }
             P::TreeSynced { height } => {
                 view.kind = RoundStepProgressKind::TreeSynced;
                 view.tree_height = Some(height);
@@ -1588,7 +1627,8 @@ impl From<&VotingError> for VotingErrorView {
                 view.endpoint = endpoint.clone();
             }
             VotingError::DelegationTargetMismatch { bundle_index, .. }
-            | VotingError::DelegationAlreadyBroadcast { bundle_index, .. } => {
+            | VotingError::DelegationAlreadyBroadcast { bundle_index, .. }
+            | VotingError::DelegationSetupFrozen { bundle_index, .. } => {
                 view.bundle_index = Some(*bundle_index);
             }
             _ => {}
@@ -1632,6 +1672,7 @@ impl From<VotingErrorKind> for VotingErrorKindView {
             VotingErrorKind::PirUnavailable => Self::PirUnavailable,
             VotingErrorKind::DelegationTargetMismatch => Self::DelegationTargetMismatch,
             VotingErrorKind::DelegationAlreadyBroadcast => Self::DelegationAlreadyBroadcast,
+            VotingErrorKind::DelegationSetupFrozen => Self::DelegationSetupFrozen,
         }
     }
 }
@@ -1833,6 +1874,8 @@ impl TryFrom<crate::round_drive::RoundDriveEvent> for RoundDriveEventView {
         Ok(view)
     }
 }
+
+mod proxy_delegator;
 
 #[cfg(test)]
 mod tests {
@@ -2905,6 +2948,7 @@ mod tests {
                     share_index: 1,
                 },
                 session::NextStep::AdvanceImportedDelegation { bundle_index: 10 },
+                session::NextStep::AdvanceProxyBatch { bundle_index: 11 },
             ],
             delegation_statuses: vec![session::DelegationStatus {
                 bundle_index: 2,
@@ -2962,6 +3006,12 @@ mod tests {
             }),
             immediate_share_confirmed: false,
             all_decided: false,
+            proxy_batches: vec![session::ProxyBatchPlanStatus {
+                bundle_index: 11,
+                stage: session::ProxyBatchStage::Refused,
+            }],
+            fully_delegated_bundles: vec![3, 4],
+            nothing_left_to_vote: true,
         };
 
         let view = RoundPlanView::try_from(plan).unwrap();
@@ -3022,9 +3072,24 @@ mod tests {
                 "advance_vote_batch",
                 "submit_shares",
                 "confirm_share",
-                "advance_imported_delegation"
+                "advance_imported_delegation",
+                "advance_proxy_batch"
             ]
         );
+        assert_eq!(view.next_steps[10].bundle_index, 11);
+        assert_eq!(
+            view.proxy_batches,
+            vec![crate::wire::ProxyBatchStatusView {
+                bundle_index: 11,
+                stage: crate::wire::ProxyBatchStageView::Refused,
+            }]
+        );
+        assert_eq!(
+            serde_json::to_value(view.proxy_batches[0].stage).unwrap(),
+            "refused"
+        );
+        assert_eq!(view.fully_delegated_bundles, vec![3, 4]);
+        assert!(view.nothing_left_to_vote);
         assert_eq!(view.next_steps[0].bundle_index, 1);
         assert_eq!(view.next_steps[2].proposal_id, 11);
         assert_eq!(view.next_steps[2].choice, 1);

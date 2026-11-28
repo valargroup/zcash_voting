@@ -21,6 +21,10 @@ const VC_LEAF_INDICES_ATTRIBUTE: &str = "vote_commitment_leaf_indices";
 const PROPOSAL_IDS_ATTRIBUTE: &str = "proposal_ids";
 const VAN_NULLIFIERS_ATTRIBUTE: &str = "van_nullifiers";
 const NULLIFIER_COUNT_ATTRIBUTE: &str = "nullifier_count";
+const PROXY_DELEGATION_BATCH_EVENT: &str = "proxy_delegation_batch";
+const HAS_REGISTRATION_ATTRIBUTE: &str = "has_registration";
+const DC_LEAF_INDICES_ATTRIBUTE: &str = "dc_leaf_indices";
+const DC_COUNT_ATTRIBUTE: &str = "dc_count";
 const ROUND_ID_ATTRIBUTES: [&str; 2] = ["vote_round_id", "round_id"];
 
 /// Validates committed hash evidence against one locked generation.
@@ -160,11 +164,10 @@ pub(super) fn validate_hash_confirmation(
                     Ok(hex::encode(bytes))
                 })
                 .collect::<Result<Vec<_>, VotingError>>()?;
-            let event_nullifiers = parse_csv_strings(required_attribute(
-                event,
-                batch_event,
-                VAN_NULLIFIERS_ATTRIBUTE,
-            )?)?;
+            let event_nullifiers = parse_csv_strings(
+                required_attribute(event, batch_event, VAN_NULLIFIERS_ATTRIBUTE)?,
+                "cast_vote_batch van_nullifiers",
+            )?;
             if event_nullifiers != expected_nullifiers {
                 return Err(VotingError::InvalidInput {
                     message: "cast_vote_batch nullifier order does not match the locked generation"
@@ -175,11 +178,10 @@ pub(super) fn validate_hash_confirmation(
                 required_attribute(event, batch_event, FINAL_VAN_LEAF_INDEX_ATTRIBUTE)?,
                 "cast_vote_batch final VAN position",
             )?;
-            let positions = parse_csv_u64(required_attribute(
-                event,
-                batch_event,
-                VC_LEAF_INDICES_ATTRIBUTE,
-            )?)?;
+            let positions = parse_csv_u64(
+                required_attribute(event, batch_event, VC_LEAF_INDICES_ATTRIBUTE)?,
+                "cast_vote_batch vote_commitment_leaf_indices",
+            )?;
             if positions.len() != batch_size
                 || positions.iter().enumerate().any(|(index, position)| {
                     final_van_position
@@ -191,6 +193,88 @@ pub(super) fn validate_hash_confirmation(
                     message:
                         "cast_vote_batch positions must be the complete adjacent action layout"
                             .to_string(),
+                });
+            }
+            ValidatedChainSubmissionConfirmation::from_hash(
+                transaction_hash,
+                final_van_position,
+                positions,
+            )
+            .map_err(confirmation_error)
+        }
+        (
+            ChainSubmissionTarget::ProxyDelegationBatch { batch_digest },
+            ExpectedTreeLayout::ProxyBatch {
+                delegation_commitments,
+                ..
+            },
+        ) => {
+            let binding = derived.proxy().ok_or_else(|| VotingError::Internal {
+                message: "a proxy batch generation carries its binding".to_string(),
+            })?;
+            let event = required_event_for_round(events, PROXY_DELEGATION_BATCH_EVENT, &round_id)?;
+            let attribute = |key| required_attribute(event, PROXY_DELEGATION_BATCH_EVENT, key);
+            let mismatch = |what: &str| VotingError::InvalidInput {
+                message: format!(
+                    "proxy_delegation_batch {what} does not match the locked generation"
+                ),
+            };
+            if parse_canonical_hex32(attribute(BATCH_DIGEST_ATTRIBUTE)?, "proxy batch digest")?
+                != batch_digest
+            {
+                return Err(mismatch("batch_digest"));
+            }
+            let has_registration = match attribute(HAS_REGISTRATION_ATTRIBUTE)? {
+                "true" => true,
+                "false" => false,
+                _ => return Err(mismatch("has_registration")),
+            };
+            if has_registration != binding.carries_registration() {
+                return Err(mismatch("has_registration"));
+            }
+            if parse_compat_u64(
+                attribute(NULLIFIER_COUNT_ATTRIBUTE)?,
+                "proxy batch nullifier_count",
+            )? != binding.gov_nullifier_count as u64
+            {
+                return Err(mismatch("nullifier_count"));
+            }
+            if parse_compat_u64(attribute(DC_COUNT_ATTRIBUTE)?, "proxy batch dc_count")?
+                != delegation_commitments.len() as u64
+            {
+                return Err(mismatch("dc_count"));
+            }
+            let expected_nullifiers = binding
+                .van_nullifiers
+                .iter()
+                .map(hex::encode)
+                .collect::<Vec<_>>();
+            if parse_csv_strings(
+                attribute(VAN_NULLIFIERS_ATTRIBUTE)?,
+                "proxy_delegation_batch van_nullifiers",
+            )? != expected_nullifiers
+            {
+                return Err(mismatch("van_nullifiers"));
+            }
+            let final_van_position = parse_compat_u64(
+                attribute(FINAL_VAN_LEAF_INDEX_ATTRIBUTE)?,
+                "proxy batch final VAN position",
+            )?;
+            let positions = parse_csv_u64(
+                attribute(DC_LEAF_INDICES_ATTRIBUTE)?,
+                "proxy_delegation_batch dc_leaf_indices",
+            )?;
+            if positions.len() != delegation_commitments.len()
+                || positions.iter().enumerate().any(|(index, position)| {
+                    final_van_position
+                        .checked_add(index as u64 + 1)
+                        .is_none_or(|expected| *position != expected)
+                })
+            {
+                return Err(VotingError::InvalidInput {
+                    message: "proxy_delegation_batch positions must be the final VAN followed \
+                              by every DC, adjacent"
+                        .to_string(),
                 });
             }
             ValidatedChainSubmissionConfirmation::from_hash(
@@ -328,12 +412,11 @@ fn parse_compat_u64(raw: &str, field: &str) -> Result<u64, VotingError> {
     })
 }
 
-fn parse_csv_u64(raw: &str) -> Result<Vec<u64>, VotingError> {
-    parse_csv(
-        raw,
-        "cast_vote_batch vote_commitment_leaf_indices",
-        |value| parse_compat_u64(value, "cast_vote_batch position"),
-    )
+/// Parses a comma-separated list of tree positions named `field`.
+fn parse_csv_u64(raw: &str, field: &str) -> Result<Vec<u64>, VotingError> {
+    parse_csv(raw, field, |value| {
+        parse_compat_u64(value, &format!("{field} position"))
+    })
 }
 
 fn parse_csv_u32(raw: &str) -> Result<Vec<u32>, VotingError> {
@@ -345,9 +428,10 @@ fn parse_csv_u32(raw: &str) -> Result<Vec<u32>, VotingError> {
     })
 }
 
-fn parse_csv_strings(raw: &str) -> Result<Vec<String>, VotingError> {
-    parse_csv(raw, "cast_vote_batch van_nullifiers", |value| {
-        parse_canonical_hex32(value, "cast_vote_batch VAN nullifier")?;
+/// Parses a comma-separated list of canonical hex VAN nullifiers.
+fn parse_csv_strings(raw: &str, field: &str) -> Result<Vec<String>, VotingError> {
+    parse_csv(raw, field, |value| {
+        parse_canonical_hex32(value, &format!("{field} entry"))?;
         Ok(value.to_string())
     })
 }
@@ -600,10 +684,69 @@ pub(super) fn apply_confirmed_generation(
             }
             Ok(())
         }
+        (
+            ChainSubmissionTarget::ProxyDelegationBatch { .. },
+            ExpectedTreeLayout::ProxyBatch {
+                delegation_commitments,
+                ..
+            },
+        ) if positions.len() == delegation_commitments.len() => {
+            let binding = bound.proxy().ok_or_else(|| VotingError::Internal {
+                message: "a proxy batch generation carries its binding".to_string(),
+            })?;
+            let landings = binding
+                .dc_slots
+                .iter()
+                .copied()
+                .zip(positions.iter().copied())
+                .collect::<Vec<_>>();
+            crate::confirmation::apply_proxy_batch_confirmation_with_conn(
+                conn,
+                identity.wallet_id(),
+                &round_id,
+                identity.bundle_index(),
+                transaction_hash.as_deref(),
+                binding.carries_registration(),
+                confirmation.final_van_position(),
+                &landings,
+            )
+        }
         _ => Err(VotingError::InvalidInput {
             message: "confirmed positions do not match the semantic generation layout".to_string(),
         }),
     }
+}
+
+/// Applies the domain effect of a 0x09 generation's registration landing
+/// alone in the caller's lifecycle transaction.
+///
+/// `registration_position` becomes the bundle's VAN, its undispatched votes
+/// retire and the proved batch is deleted so it is proved again from its
+/// persisted slots.
+pub(super) fn apply_proxy_retirement(
+    conn: &rusqlite::Transaction<'_>,
+    identity: &super::ChainSubmissionIdentity,
+    registration_position: u64,
+) -> Result<(), VotingError> {
+    let round_id = hex::encode(identity.vote_round_id());
+    let wallet_id = identity.wallet_id();
+    let bundle_index = identity.bundle_index();
+    crate::confirmation::apply_delegation_confirmation_with_conn(
+        conn,
+        wallet_id,
+        &round_id,
+        bundle_index,
+        None,
+        registration_position,
+    )?;
+    crate::vote::retire_undispatched_votes_outside_roster_with_conn(
+        conn,
+        wallet_id,
+        &round_id,
+        bundle_index,
+        &[],
+    )?;
+    crate::proxy::batch::delete_proved_batch(conn, &round_id, wallet_id, bundle_index)
 }
 
 #[cfg(test)]

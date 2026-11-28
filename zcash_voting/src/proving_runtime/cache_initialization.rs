@@ -3,6 +3,7 @@
 use crate::{ObservationScope, VotingError};
 use std::sync::OnceLock;
 
+/// A proving key cache, warmed once per process.
 #[derive(Clone, Copy)]
 pub(crate) enum CacheKind {
     Delegation,

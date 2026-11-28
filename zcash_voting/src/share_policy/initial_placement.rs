@@ -23,10 +23,26 @@ use super::{
 /// stable identity rather than a guarantee about the share's value.
 pub const IMMEDIATE_SHARE_INDEX: u32 = 0;
 
+/// The bundle that owns the round's immediate share: the highest-index
+/// bundle that still votes, of `bundles` given as `(bundle_index,
+/// fully_delegated)`.
+///
+/// A fully delegated bundle never casts, so the round would wait forever for
+/// a share designated on it. Callers keep a designation already persisted.
+pub(crate) fn immediate_share_bundle(
+    bundles: impl IntoIterator<Item = (u32, bool)>,
+) -> Option<u32> {
+    bundles
+        .into_iter()
+        .filter(|&(_, fully_delegated)| !fully_delegated)
+        .map(|(bundle_index, _)| bundle_index)
+        .max()
+}
+
 /// Select the round's immediate share from durable round state.
 ///
 /// Bundles are ordered by value descending, so `highest_bundle_index` denotes
-/// the lowest-value eligible bundle. The lowest proposal ID with a recorded
+/// the lowest-value eligible bundle; [`immediate_share_bundle`] picks it. The lowest proposal ID with a recorded
 /// ballot choice owns the designation; skipped proposals must not be included.
 pub fn round_immediate_share_key(
     highest_bundle_index: Option<u32>,

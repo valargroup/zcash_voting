@@ -174,6 +174,7 @@ pub(super) fn committed() -> crate::chain_submission::protocol::CommittedTransac
     crate::chain_submission::protocol::CommittedTransaction {
         height: 8,
         code: 0,
+        codespace: None,
         events: vec![TxEvent {
             event_type: "cast_vote".to_string(),
             attributes: vec![

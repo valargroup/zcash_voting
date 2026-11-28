@@ -545,6 +545,20 @@ pub enum NextStep {
         commitment: CommitmentRef,
         share_index: u32,
     },
+    /// Plan and prove the bundle's proxy delegation batch.
+    ///
+    /// Planned once the committed proxy allocation places DCs on the bundle
+    /// and its delegation is unregistered or confirmed. It proves ZKP1 when
+    /// the batch carries the registration, then every ZKP4, and never signs
+    /// or broadcasts. See `docs/round_orchestration_invariants.md`, "Proxy
+    /// delegation batches".
+    ProxyDelegate { bundle_index: u32 },
+    /// Submit and confirm the bundle's proved proxy delegation batch.
+    ///
+    /// It signs and persists an attempt before each POST and holds the bundle
+    /// from casts until the batch lands. See
+    /// `docs/chain_submission_invariants.md`, "Proxy delegation batches".
+    AdvanceProxyBatch { bundle_index: u32 },
 }
 
 impl NextStep {
@@ -568,6 +582,8 @@ impl NextStep {
             Self::AdvanceVoteBatch { .. } => Kind::AdvanceVoteBatch,
             Self::SubmitShares { .. } => Kind::SubmitShares,
             Self::ConfirmShare { .. } => Kind::ConfirmShare,
+            Self::ProxyDelegate { .. } => Kind::ProxyDelegate,
+            Self::AdvanceProxyBatch { .. } => Kind::AdvanceProxyBatch,
         }
     }
 }
@@ -832,6 +848,40 @@ pub struct RoundPlan {
     pub recovered_delegation_work: Vec<DelegationRecoveryWork>,
     /// Vote recovery work grouped from `next_steps` for wallet orchestration.
     pub recovered_vote_work: Vec<VoteRecoveryWork>,
+    /// Each bundle the committed proxy allocation places DCs on, in bundle
+    /// order, with where its batch stands.
+    pub proxy_batches: Vec<ProxyBatchPlanStatus>,
+    /// Bundles whose dispatched or landed proxy DCs took their whole weight,
+    /// ascending. Such a bundle plans no `CastVote` and owes no ballot.
+    pub fully_delegated_bundles: Vec<u32>,
+    /// True when the round has bundles and every one is in
+    /// `fully_delegated_bundles`. Then `open_proposals` and
+    /// `unrostered_intents` are empty and ballot intents are kept but ignored.
+    pub nothing_left_to_vote: bool,
+}
+
+/// Where one bundle's proxy delegation batch stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProxyBatchStage {
+    /// Committed and not yet proved.
+    Planned,
+    /// Proved and waiting to be submitted.
+    Proved,
+    /// Submitted and not yet resolved.
+    Dispatched,
+    /// Submitted, and the chain refused its last attempt. It is sent again
+    /// until it lands or voting ends.
+    Refused,
+    /// Landed.
+    Landed,
+}
+
+/// One bundle's proxy delegation batch in a [`RoundPlan`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProxyBatchPlanStatus {
+    pub bundle_index: u32,
+    pub stage: ProxyBatchStage,
 }
 
 /// Build the resume plan for `round_id`.

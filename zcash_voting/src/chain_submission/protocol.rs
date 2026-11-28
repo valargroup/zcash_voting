@@ -8,6 +8,7 @@ use url::{Host, Url};
 use crate::{
     confirmation::TxEvent,
     delegation_key_fingerprint::{DelegationKeyFingerprint, DELEGATION_KEY_FINGERPRINT_HEADER},
+    proxy::batch::ProxyDelegationBatchWire,
     types::Network,
     wire::{DelegationSubmissionWire, VoteCommitmentWire},
 };
@@ -24,6 +25,16 @@ const API_PREFIX: [&str; 2] = ["shielded-vote", "v1"];
 const DELEGATION_ENDPOINT: &str = "delegate-vote";
 const VOTE_ENDPOINT: &str = "cast-vote";
 const VOTE_BATCH_ENDPOINT: &str = "cast-vote-batch";
+const PROXY_DELEGATION_BATCH_ENDPOINT: &str = "proxy-delegation-batch";
+/// Opts every submission and `/tx/{hash}` lookup into the `codespace` field
+/// (contracts-v1 §0). A node that ignores it answers as before.
+const CODESPACE_HEADER: &str = "x-svote-codespace";
+/// The vote chain's height route (contracts-v1 §8). A dormant node answers 404.
+const CHAIN_HEIGHT_PATH: &str = "shielded-vote/v1/height";
+/// The Cosmos SDK validator-set route, the height fallback for a node without
+/// [`CHAIN_HEIGHT_PATH`].
+pub(super) const LATEST_VALIDATOR_SET_PATH: &str =
+    "cosmos/base/tendermint/v1beta1/validatorsets/latest?pagination.limit=1";
 // CheckTx may use its complete 120-second server budget to verify a proof. The
 // client default leaves time for connection setup and response delivery.
 const MIN_CHAIN_POST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -32,12 +43,65 @@ const DEFAULT_CHAIN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CHAIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_CHAIN_HTTP_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_CHAIN_ENDPOINTS: usize = 100;
+/// Code 2 as a node without codespaces reports a spent nullifier.
 const NULLIFIER_ALREADY_SPENT_CODE: u32 = 2;
 
+/// How a chain rejection steers the lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChainRejectionKind {
+    /// A nullifier is already spent: code 2, in codespace `vote` for a 0x09
+    /// batch.
     NullifierAlreadySpent,
+    /// `vote` 51: coordinators paused DC batches. A 0x09 batch only.
+    ProxyBatchPaused,
+    /// `vote` 52: the attempt expired, which proves no attempt of the batch
+    /// landed or can. A 0x09 batch only.
+    ProxyBatchExpired,
+    /// Any other rejection.
     Other,
+}
+
+/// Classifies a delegation or cast (0x02 to 0x07) rejection on (codespace,
+/// code) (contracts-v1 §0, §6). Only `vote` 2 is a spent nullifier. Without a
+/// codespace the code alone is used.
+fn cast_rejection_kind(codespace: Option<&str>, code: u32) -> ChainRejectionKind {
+    use zcash_vote_delegate::ProxyChainError;
+    let spent = match codespace {
+        Some(codespace) => matches!(
+            ProxyChainError::from_codespace_and_code(codespace, code),
+            Some(ProxyChainError::DuplicateNullifier)
+        ),
+        None => code == NULLIFIER_ALREADY_SPENT_CODE,
+    };
+    if spent {
+        ChainRejectionKind::NullifierAlreadySpent
+    } else {
+        ChainRejectionKind::Other
+    }
+}
+
+/// Classifies a 0x09 rejection on (codespace, code) (contract §6). Only
+/// codespace `vote` names a registered error.
+pub(super) fn proxy_batch_rejection_kind(codespace: &str, code: u32) -> ChainRejectionKind {
+    use zcash_vote_delegate::ProxyChainError;
+    match ProxyChainError::from_codespace_and_code(codespace, code) {
+        Some(ProxyChainError::DuplicateNullifier) => ChainRejectionKind::NullifierAlreadySpent,
+        Some(ProxyChainError::ProxyDelegationPaused) => ChainRejectionKind::ProxyBatchPaused,
+        Some(ProxyChainError::ProxyBatchExpired) => ChainRejectionKind::ProxyBatchExpired,
+        _ => ChainRejectionKind::Other,
+    }
+}
+
+/// Which response contract a mutation endpoint follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponseShape {
+    /// The deployed `BroadcastResult`, with or without a batch digest and
+    /// with an optional `codespace` (contracts-v1 §0).
+    Legacy {
+        expected_batch_digest: Option<[u8; 32]>,
+    },
+    /// The 0x09 endpoint's `BroadcastResult` (contracts-v1 §0, §8).
+    ProxyBatch { expected_batch_digest: [u8; 32] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +161,8 @@ pub(super) enum PostAttemptOutcome {
 pub(super) struct CommittedTransaction {
     pub(super) height: u64,
     pub(super) code: u32,
+    /// The result's ABCI codespace, absent from a node that ignores the header.
+    pub(super) codespace: Option<String>,
     pub(super) events: Vec<TxEvent>,
 }
 
@@ -223,7 +289,9 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
             ChainPost {
                 endpoint: DELEGATION_ENDPOINT,
                 body,
-                expected_batch_digest: None,
+                shape: ResponseShape::Legacy {
+                    expected_batch_digest: None,
+                },
                 delegation_key_fingerprint: proof_key_fingerprint,
             },
             dispatch,
@@ -267,7 +335,9 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
             ChainPost {
                 endpoint: VOTE_ENDPOINT,
                 body,
-                expected_batch_digest: None,
+                shape: ResponseShape::Legacy {
+                    expected_batch_digest: None,
+                },
                 delegation_key_fingerprint: None,
             },
             dispatch,
@@ -297,7 +367,9 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
             ChainPost {
                 endpoint: VOTE_BATCH_ENDPOINT,
                 body,
-                expected_batch_digest: Some(expected_batch_digest),
+                shape: ResponseShape::Legacy {
+                    expected_batch_digest: Some(expected_batch_digest),
+                },
                 delegation_key_fingerprint: None,
             },
             dispatch,
@@ -333,8 +405,44 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
             ChainPost {
                 endpoint: "delegate-and-cast-vote-batch",
                 body,
-                expected_batch_digest: Some(expected_batch_digest),
+                shape: ResponseShape::Legacy {
+                    expected_batch_digest: Some(expected_batch_digest),
+                },
                 delegation_key_fingerprint: proof_key_fingerprint,
+            },
+            dispatch,
+            observations,
+        )
+        .await
+    }
+
+    /// POSTs one signed attempt of a 0x09 batch. See
+    /// [`parse_proxy_batch_response`] for how the answer is read.
+    pub(super) async fn submit_proxy_delegation_batch_with_dispatch(
+        &self,
+        endpoint_index: usize,
+        submission: &ProxyDelegationBatchWire,
+        expected_batch_digest: [u8; 32],
+        dispatch: ChainPostDispatch,
+        observations: &crate::ObservationScope,
+    ) -> PostAttemptOutcome {
+        let body = match submission.to_json() {
+            Ok(json) => json.into_bytes(),
+            Err(error) => {
+                return PostAttemptOutcome::LocalFailure(invalid_protocol(format!(
+                    "serialize proxy delegation batch failed: {error}"
+                )))
+            }
+        };
+        self.post(
+            endpoint_index,
+            ChainPost {
+                endpoint: PROXY_DELEGATION_BATCH_ENDPOINT,
+                body,
+                shape: ResponseShape::ProxyBatch {
+                    expected_batch_digest,
+                },
+                delegation_key_fingerprint: None,
             },
             dispatch,
             observations,
@@ -352,7 +460,7 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         let ChainPost {
             endpoint,
             body,
-            expected_batch_digest,
+            shape,
             delegation_key_fingerprint,
         } = post;
         if body.len() > MAX_CHAIN_HTTP_REQUEST_BYTES {
@@ -378,6 +486,7 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         if let Some(fingerprint) = delegation_key_fingerprint {
             request.add_header(DELEGATION_KEY_FINGERPRINT_HEADER, fingerprint.to_hex());
         }
+        request.add_header(CODESPACE_HEADER, "1".to_string());
 
         let stage = observations.stage("chain::post_attempt");
         let dispatch_marker = dispatch.clone();
@@ -417,7 +526,7 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
                 {
                     PostAttemptOutcome::NotDispatchedByServer
                 } else {
-                    parse_post_response(response, endpoint, expected_batch_digest)
+                    parse_post_response(response, endpoint, shape)
                 }
             }
             Ok(Err(error)) if error.kind() == ChainTransportFailureKind::DefinitelyUnsent => {
@@ -459,6 +568,84 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         outcome
     }
 
+    /// The highest latest block height any endpoint reports, failing only when
+    /// none answers. Each endpoint is read from [`CHAIN_HEIGHT_PATH`], then
+    /// from [`LATEST_VALIDATOR_SET_PATH`] when that gives no height.
+    pub(super) async fn latest_block_height(
+        &self,
+        observations: &crate::ObservationScope,
+    ) -> Result<u64, LookupFailure> {
+        let operation = observations.stage("chain::latest_block_height");
+        let mut highest = None;
+        let mut last_failure = None;
+        for base_url in &self.endpoints {
+            let observed = match self
+                .endpoint_height(base_url, CHAIN_HEIGHT_PATH, parse_chain_height_response)
+                .await
+            {
+                Err(LookupFailure::Protocol(_)) => {
+                    self.endpoint_height(
+                        base_url,
+                        LATEST_VALIDATOR_SET_PATH,
+                        parse_block_height_response,
+                    )
+                    .await
+                }
+                observed => observed,
+            };
+            match observed {
+                Ok(height) => highest = Some(highest.map_or(height, |seen: u64| seen.max(height))),
+                Err(failure) => last_failure = Some(failure),
+            }
+        }
+        let result = highest.ok_or_else(|| {
+            last_failure.unwrap_or_else(|| {
+                LookupFailure::Protocol(invalid_protocol(
+                    "vote-chain block height lookup produced no endpoint result",
+                ))
+            })
+        });
+        operation.finish(
+            if result.is_ok() {
+                crate::ObservationOutcome::Succeeded
+            } else {
+                crate::ObservationOutcome::Failed
+            },
+            result.as_ref().err().map(|_| "LookupFailure"),
+        );
+        result
+    }
+
+    /// One endpoint's height from `path`, read by `parse`.
+    async fn endpoint_height(
+        &self,
+        base_url: &str,
+        path: &str,
+        parse: fn(&ChainHttpResponse) -> Result<u64, ChainSubmissionDiagnostic>,
+    ) -> Result<u64, LookupFailure> {
+        let request = chain_request(
+            format!("{base_url}/{path}"),
+            false,
+            self.timing.lookup_timeout,
+        );
+        match tokio::time::timeout(
+            self.timing.lookup_timeout,
+            self.transport.chain_get(request),
+        )
+        .await
+        {
+            Ok(Ok(response)) => parse(&response).map_err(LookupFailure::Protocol),
+            Ok(Err(error)) => Err(LookupFailure::Transport(error)),
+            Err(_) => Err(LookupFailure::Transport(
+                ChainTransportError::possibly_dispatched(
+                    "vote-chain block height lookup timed out",
+                ),
+            )),
+        }
+    }
+
+    /// Polls every endpoint for `transaction_hash`, preferring committed
+    /// evidence over pending.
     pub(super) async fn transaction_status(
         &self,
         transaction_hash: CandidateTransactionHash,
@@ -472,11 +659,12 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
             let mut last_failure = None;
 
             for (endpoint_index, base_url) in self.endpoints.iter().enumerate() {
-                let request = chain_request(
+                let mut request = chain_request(
                     join_chain_url(base_url, &["tx", &hash]),
                     false,
                     self.timing.lookup_timeout,
                 );
+                request.add_header(CODESPACE_HEADER, "1".to_string());
                 let attempt_context = observations
                     .attempt(u32::try_from(endpoint_index.saturating_add(1)).unwrap_or(u32::MAX));
                 let stage = attempt_context.stage("chain::status_attempt");
@@ -555,8 +743,9 @@ struct ChainPost<'request> {
     endpoint: &'request str,
     /// Serialized JSON request body.
     body: Vec<u8>,
-    /// Digest an atomic-batch answer must echo before it counts as evidence.
-    expected_batch_digest: Option<[u8; 32]>,
+    /// Response contract the answer follows, with the digest an atomic-batch
+    /// answer must echo before it counts as evidence.
+    shape: ResponseShape,
     /// Circuit key that made the delegation proof in `body`, sent as a
     /// request header. `None` for vote routes and for a proof whose key was
     /// not recorded.
@@ -574,7 +763,7 @@ fn chain_request(url: String, has_json_body: bool, timeout: Duration) -> ChainHt
 fn parse_post_response(
     response: ChainHttpResponse,
     endpoint: &str,
-    expected_batch_digest: Option<[u8; 32]>,
+    shape: ResponseShape,
 ) -> PostAttemptOutcome {
     if let Some(diagnostic) = gateway_shaped_route_answer(&response, endpoint) {
         return PostAttemptOutcome::PossiblyDispatched(diagnostic);
@@ -588,10 +777,19 @@ fn parse_post_response(
     let parsed: TransactionResultJson = match serde_json::from_slice(response.body()) {
         Ok(parsed) => parsed,
         Err(_) => {
-            return PostAttemptOutcome::PossiblyDispatched(invalid_protocol(
-                "vote-chain transaction response is malformed JSON",
-            ))
+            return PostAttemptOutcome::PossiblyDispatched(invalid_protocol(match shape {
+                ResponseShape::Legacy { .. } => "vote-chain transaction response is malformed JSON",
+                ResponseShape::ProxyBatch { .. } => PROXY_BATCH_NOT_BROADCAST_RESULT,
+            }))
         }
+    };
+    let expected_batch_digest = match shape {
+        ResponseShape::Legacy {
+            expected_batch_digest,
+        } => expected_batch_digest,
+        ResponseShape::ProxyBatch {
+            expected_batch_digest,
+        } => return parse_proxy_batch_response(response.status(), parsed, expected_batch_digest),
     };
     match (expected_batch_digest, &parsed.batch_digest) {
         (Some(expected), BatchDigestJson::Present(observed))
@@ -614,31 +812,94 @@ fn parse_post_response(
         (None, BatchDigestJson::Absent) => {}
     }
 
-    match (response.status(), parsed.code) {
+    classify_broadcast_result(
+        response.status(),
+        parsed,
+        "vote-chain",
+        "vote-chain mutation",
+        |code, codespace| {
+            (
+                cast_rejection_kind(codespace, code),
+                format!("vote chain rejected transaction with code {code}"),
+            )
+        },
+    )
+}
+
+/// Why a 0x09 answer that is not its `BroadcastResult`, with a required
+/// `codespace` and `batch_digest`, stays possibly dispatched.
+const PROXY_BATCH_NOT_BROADCAST_RESULT: &str =
+    "proxy batch response is not a BroadcastResult with a codespace";
+
+/// Interprets the 0x09 endpoint's answer (contracts-v1 §0, §8).
+///
+/// The answer must carry a `codespace`, and its digest must equal
+/// `expected_batch_digest` for acceptance and rejection alike. A missing
+/// field, a mismatched digest or any other shape is not evidence and stays
+/// possibly dispatched.
+fn parse_proxy_batch_response(
+    status: u16,
+    parsed: TransactionResultJson,
+    expected_batch_digest: [u8; 32],
+) -> PostAttemptOutcome {
+    let (Some(codespace), BatchDigestJson::Present(batch_digest)) =
+        (parsed.codespace.clone(), &parsed.batch_digest)
+    else {
+        return PostAttemptOutcome::PossiblyDispatched(invalid_protocol(
+            PROXY_BATCH_NOT_BROADCAST_RESULT,
+        ));
+    };
+    if batch_digest != &hex::encode(expected_batch_digest) {
+        return PostAttemptOutcome::PossiblyDispatched(invalid_protocol(
+            "proxy batch response omitted or changed its batch digest",
+        ));
+    }
+    classify_broadcast_result(status, parsed, "proxy batch", "proxy batch", |code, _| {
+        (
+            proxy_batch_rejection_kind(&codespace, code),
+            format!("vote chain rejected the proxy batch with {codespace} code {code}"),
+        )
+    })
+}
+
+/// Maps a `BroadcastResult` whose digest already checked out to an attempt
+/// outcome. A 200 with code 0 and a canonical hash is accepted, and a 422
+/// with a nonzero code is rejected. Anything else stays possibly
+/// dispatched.
+///
+/// `answer` and `mutation` name the answer in diagnostics. `rejection`
+/// gives a rejected code's kind and the start of its diagnostic, from the
+/// code and the answer's codespace.
+fn classify_broadcast_result(
+    status: u16,
+    parsed: TransactionResultJson,
+    answer: &str,
+    mutation: &str,
+    rejection: impl FnOnce(u32, Option<&str>) -> (ChainRejectionKind, String),
+) -> PostAttemptOutcome {
+    match (status, parsed.code) {
         (200, 0) => match parsed.tx_hash.as_deref().and_then(normalize_candidate_hash) {
             Some(candidate) => PostAttemptOutcome::Accepted(candidate),
-            None => PostAttemptOutcome::PossiblyDispatched(invalid_protocol(
-                "accepted vote-chain response omitted a canonical transaction hash",
-            )),
+            None => PostAttemptOutcome::PossiblyDispatched(invalid_protocol(format!(
+                "accepted {answer} response omitted a canonical transaction hash"
+            ))),
         },
         (422, code) if code != 0 => {
-            let candidate_transaction_hash =
-                match parsed.tx_hash.as_deref() {
-                    None | Some("") => None,
-                    Some(hash) => match normalize_candidate_hash(hash) {
-                        Some(hash) => Some(hash),
-                        None => return PostAttemptOutcome::PossiblyDispatched(invalid_protocol(
-                            "rejected vote-chain response contained an invalid transaction hash",
-                        )),
-                    },
-                };
+            let candidate_transaction_hash = match parsed.tx_hash.as_deref() {
+                None | Some("") => None,
+                Some(hash) => match normalize_candidate_hash(hash) {
+                    Some(hash) => Some(hash),
+                    None => {
+                        return PostAttemptOutcome::PossiblyDispatched(invalid_protocol(format!(
+                            "rejected {answer} response contained an invalid transaction hash"
+                        )))
+                    }
+                },
+            };
+            let (kind, message) = rejection(code, parsed.codespace.as_deref());
             PostAttemptOutcome::Rejected {
                 code,
-                kind: if code == NULLIFIER_ALREADY_SPENT_CODE {
-                    ChainRejectionKind::NullifierAlreadySpent
-                } else {
-                    ChainRejectionKind::Other
-                },
+                kind,
                 // The response log is the only thing that says *why* the chain
                 // refused, and a bare numeric code leaves an operator with
                 // nothing to act on. It is server-controlled text, so it is
@@ -652,12 +913,9 @@ fn parse_post_response(
                 diagnostic: ChainSubmissionDiagnostic::from_redacted_message(
                     ChainSubmissionDiagnosticKind::ChainRejected,
                     if parsed.log.trim().is_empty() {
-                        format!("vote chain rejected transaction with code {code}")
+                        message
                     } else {
-                        format!(
-                            "vote chain rejected transaction with code {code}: {}",
-                            parsed.log.trim()
-                        )
+                        format!("{message}: {}", parsed.log.trim())
                     },
                 ),
                 candidate_transaction_hash,
@@ -667,9 +925,56 @@ fn parse_post_response(
             "vote-chain mutation redirect was rejected",
         )),
         (status, code) => PostAttemptOutcome::PossiblyDispatched(invalid_protocol(format!(
-            "unsupported vote-chain mutation response status={status} code={code}"
+            "unsupported {mutation} response status={status} code={code}"
         ))),
     }
+}
+
+/// Reads `{"height": "<decimal>"}` from the height route (contracts-v1 §8).
+fn parse_chain_height_response(
+    response: &ChainHttpResponse,
+) -> Result<u64, ChainSubmissionDiagnostic> {
+    #[derive(Deserialize)]
+    struct ChainHeightJson {
+        height: String,
+    }
+    parse_height_response(response, "height", |parsed: ChainHeightJson| parsed.height)
+}
+
+/// The height of a [`LATEST_VALIDATOR_SET_PATH`] answer.
+#[derive(Deserialize)]
+pub(super) struct ValidatorSetJson {
+    pub(super) block_height: String,
+}
+
+/// Reads the decimal `block_height` from a validator-set answer.
+fn parse_block_height_response(
+    response: &ChainHttpResponse,
+) -> Result<u64, ChainSubmissionDiagnostic> {
+    parse_height_response(response, "block height", |parsed: ValidatorSetJson| {
+        parsed.block_height
+    })
+}
+
+/// Reads the decimal height string `height` picks out of a 200 JSON answer;
+/// `what` names the height in diagnostics.
+fn parse_height_response<T: serde::de::DeserializeOwned>(
+    response: &ChainHttpResponse,
+    what: &str,
+    height: impl FnOnce(T) -> String,
+) -> Result<u64, ChainSubmissionDiagnostic> {
+    validate_json_response(response)?;
+    if response.status() != 200 {
+        return Err(invalid_protocol(format!(
+            "vote-chain {what} lookup returned status {}",
+            response.status()
+        )));
+    }
+    let parsed: T = serde_json::from_slice(response.body())
+        .map_err(|_| invalid_protocol(format!("vote-chain {what} answer is malformed")))?;
+    height(parsed)
+        .parse()
+        .map_err(|_| invalid_protocol(format!("vote-chain {what} is not a decimal height")))
 }
 
 fn parse_status_response(
@@ -706,6 +1011,7 @@ fn parse_status_response(
     let committed = CommittedTransaction {
         height,
         code: parsed.code,
+        codespace: parsed.codespace,
         events: parsed.events,
     };
     match (response.status(), committed.code) {
@@ -840,12 +1146,16 @@ fn normalize_candidate_hash(value: &str) -> Option<CandidateTransactionHash> {
     CandidateTransactionHash::from_str(&value.to_ascii_lowercase()).ok()
 }
 
+/// A deployed endpoint's `BroadcastResult`. Unknown fields are refused, so a
+/// reshaped answer stays possibly dispatched.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TransactionResultJson {
     #[serde(default)]
     tx_hash: Option<String>,
     code: u32,
+    #[serde(default)]
+    codespace: Option<String>,
     #[serde(default)]
     log: String,
     #[serde(default)]
@@ -869,6 +1179,9 @@ impl<'de> Deserialize<'de> for BatchDigestJson {
 struct TransactionStatusJson {
     height: String,
     code: u32,
+    /// Present when the node honors the codespace header.
+    #[serde(default)]
+    codespace: Option<String>,
     #[serde(rename = "log")]
     _log: String,
     events: Vec<TxEvent>,
@@ -992,8 +1305,10 @@ fn invalid_protocol(message: impl AsRef<str>) -> ChainSubmissionDiagnostic {
 #[cfg(test)]
 mod tests {
     mod batch_request;
+    mod codespace;
     mod delegation_key_header;
     mod ingress_timeout;
+    mod proxy_batch;
     mod rejection_diagnostics;
 
     use std::{
@@ -1145,9 +1460,13 @@ mod tests {
                 ("content-type".to_string(), "application/json".to_string()),
             ]
         );
-        assert_eq!(request.headers().len(), 3);
+        assert_eq!(request.headers().len(), 4);
         assert_eq!(request.headers()[2].0, "x-vote-ingress-attempt-v1");
         assert_eq!(hex::decode(&request.headers()[2].1).unwrap().len(), 32);
+        assert_eq!(
+            request.headers()[3],
+            ("x-svote-codespace".to_string(), "1".to_string())
+        );
         assert_eq!(request.timeout(), Duration::from_secs(150));
         assert_eq!(request.max_response_bytes(), MAX_CHAIN_HTTP_RESPONSE_BYTES);
         assert_eq!(body, wire.to_json().unwrap().as_bytes());

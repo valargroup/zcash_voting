@@ -72,6 +72,9 @@ fn record_rejected_submission_fixture(
             None,
             Some(ordered_batch_digest.to_vec()),
         ),
+        ChainSubmissionTarget::ProxyDelegationBatch { batch_digest } => {
+            ("proxy_delegation_batch", None, Some(batch_digest.to_vec()))
+        }
     };
     db.conn()
         .execute(

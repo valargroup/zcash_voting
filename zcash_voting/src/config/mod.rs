@@ -90,6 +90,11 @@ pub struct WalletCapabilities {
     pub vote_protocol: Vec<String>,
     pub tally: Vec<String>,
     pub pir: Vec<String>,
+    /// Proxy delegation versions the wallet offers; `proxy::availability`
+    /// requires `"v1"` (contract §11.4). Absent when deserialized from a
+    /// form that predates it, so such a wallet offers none.
+    #[serde(default)]
+    pub proxy_delegation: Vec<String>,
 }
 
 impl Default for WalletCapabilities {
@@ -102,6 +107,11 @@ impl Default for WalletCapabilities {
             vote_protocol: vec![VERSION_V0.to_string(), VOTE_PROTOCOL_VERSION_V1.to_string()],
             tally: vec![VERSION_V0.to_string()],
             pir: vec![VERSION_V0.to_string()],
+            proxy_delegation: if crate::proxy::PROXY_DELEGATION_ENABLED {
+                vec![crate::proxy::PROXY_DELEGATION_WALLET_VERSION.to_string()]
+            } else {
+                Vec::new()
+            },
         }
     }
 }

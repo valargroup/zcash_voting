@@ -229,6 +229,7 @@ async fn a_key_mismatch_answer_is_a_definite_rejection_read_from_its_numeric_cod
         kind,
         diagnostic,
         candidate_transaction_hash,
+        ..
     } = outcome
     else {
         panic!("a key mismatch must be a definite rejection, got {outcome:?}");

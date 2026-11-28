@@ -199,6 +199,7 @@ fn committed_batch(digest: [u8; 32], recoveries: &[VoteRecoveryBundle]) -> Commi
     CommittedTransaction {
         height: 8,
         code: 0,
+        codespace: None,
         events: vec![TxEvent {
             event_type: "cast_vote_batch".to_string(),
             attributes: vec![

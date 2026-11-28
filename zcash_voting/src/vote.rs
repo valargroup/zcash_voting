@@ -1589,7 +1589,7 @@ pub(crate) fn observe_prepare_atomic_vote_batch(
                 secret,
                 network,
                 state.zkp2.address_index,
-                state.zkp2.total_note_value,
+                state.zkp2.van_ballots,
                 &state.zkp2.gov_comm_rand,
                 &round_id_bytes,
                 draft.proposal_id,
@@ -2112,7 +2112,10 @@ fn validate_captured_batch_state(
     Ok(())
 }
 
-fn single_leaf_auth_path(
+/// The authentication path of `leaf_bytes` as the only leaf of an empty vote
+/// tree: the synthetic witness a chained action spends its predecessor's
+/// successor VAN through.
+pub(crate) fn single_leaf_auth_path(
     leaf_bytes: [u8; 32],
 ) -> Result<[[u8; 32]; VAN_AUTH_PATH_LEN], VotingError> {
     use pasta_curves::group::ff::PrimeField;
@@ -2167,7 +2170,7 @@ fn build_batch_proofs(
                         hotkey_seed,
                         plan.state.network,
                         plan.state.zkp2.address_index,
-                        plan.state.zkp2.total_note_value,
+                        plan.state.zkp2.van_ballots,
                         &plan.state.zkp2.gov_comm_rand,
                         round_id_bytes,
                         &plan.state.zkp2.ea_pk,
@@ -4462,8 +4465,8 @@ fn validate_prepared_vote_state(
         Some("round network")
     } else if current.zkp2.gov_comm_rand != captured.zkp2.gov_comm_rand {
         Some("governance commitment randomness")
-    } else if current.zkp2.total_note_value != captured.zkp2.total_note_value {
-        Some("delegated note value")
+    } else if current.zkp2.van_ballots != captured.zkp2.van_ballots {
+        Some("VAN weight")
     } else if current.zkp2.address_index != captured.zkp2.address_index {
         Some("delegation address index")
     } else if current.zkp2.ea_pk != captured.zkp2.ea_pk {

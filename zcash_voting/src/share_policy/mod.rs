@@ -105,6 +105,7 @@ impl ShareTrackingSummary {
     }
 }
 
+pub(crate) use initial_placement::immediate_share_bundle;
 pub use initial_placement::{
     plan_share_submission, plan_share_submission_from_order, plan_share_submissions,
     plan_share_submissions_with_preferred_servers, round_immediate_share_key,

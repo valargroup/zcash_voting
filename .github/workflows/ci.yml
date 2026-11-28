@@ -65,6 +65,19 @@ jobs:
           cargo test -p zcash_voting -p zcash_vote_delegate -p zcash-voting-wallet-example --doc \
             --features test-fixtures \
             --locked
+      # The unstable, test-only proxy delegation feature is off in every
+      # default build, which the steps above test. This checks that it still
+      # builds and that the proxy tests pass with the gate open; locally,
+      # `make test-unstable-proxy-delegation` runs the whole suite with it.
+      - name: Check the unstable proxy delegation feature
+        if: matrix.partition == 2
+        run: |
+          cargo check -p zcash_voting -p zcash_vote_delegate -p zcash-voting-wallet-example \
+            --all-targets --features test-fixtures,zcash_voting/unstable-proxy-delegation \
+            --locked
+          cargo nextest run -P ci -p zcash_voting \
+            --features test-fixtures,unstable-proxy-delegation \
+            --locked -E 'test(/^proxy::/)'
 
   proofs:
     name: Halo2 proof tests

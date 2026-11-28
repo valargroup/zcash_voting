@@ -5,12 +5,15 @@
 //! durable round plan and the ordering between helper-plan persistence, chain
 //! advancement, confirmation, and helper-share delivery.
 
+mod advance_proxy_batch;
 mod cast_vote;
 mod delegate_and_vote_batch;
 mod delegation_steps;
+mod proxy_delegate;
 pub(crate) mod round_lock;
 mod share_confirmation;
 mod step_control;
+mod step_guards;
 mod step_ledger;
 pub(crate) mod step_outcomes;
 mod step_scope;
@@ -158,6 +161,11 @@ pub enum RoundStepProgress {
     VoteCommit(VoteCommitStage),
     /// A combined delegation and all signed vote recoveries are durable.
     DelegateAndVoteBatchPersisted { bundle_index: u32 },
+    /// The bundle's proxy delegation batch is proved and stored, unsigned.
+    ProxyBatchProved { bundle_index: u32 },
+    /// A new attempt of the bundle's proxy delegation batch is signed and
+    /// durable.
+    ProxyBatchSigned { bundle_index: u32 },
     /// Complete delivery plans are durable for all listed votes.
     HelperPlansPrepared(Vec<VoteRecoveryKey>),
     /// One bounded chain advancement episode produced this outcome.

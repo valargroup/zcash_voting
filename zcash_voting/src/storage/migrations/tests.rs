@@ -68,10 +68,59 @@ fn without_combined_cast_rejections(schema: &str) -> String {
     schema[..start].trim_end().to_string() + "\n"
 }
 
+/// Every table version 26 adds.
+const PROXY_TABLES: [&str; 10] = [
+    "proxy_allocations",
+    "proxy_slots",
+    "proxy_batches",
+    "proxy_batch_dcs",
+    "proxy_batch_attempts",
+    "proxy_dc_landings",
+    "proxy_share_plans",
+    "proxy_dc_shares",
+    "proxy_delegate_keys",
+    "proxy_delegate_ballots",
+];
+
+/// Inserts a `proxy_delegation_batch` lifecycle row into the round of
+/// [`test_params`], which the version-26 kind constraint must admit.
+fn insert_proxy_batch_submission(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO chain_submissions
+         (identity_key, round_id, wallet_id, network, bundle_index, kind,
+          ordered_batch_digest, generation_digest, state, committed_post_reservations,
+          created_at, updated_at)
+         VALUES (?1, ?2, 'wallet', 'testnet', 0, 'proxy_delegation_batch', ?3, ?4,
+                 'submitting', 1, 11, 11)",
+        rusqlite::params![
+            vec![0x51_u8; 32],
+            ROUND,
+            vec![0x52_u8; 32],
+            vec![0x53_u8; 32]
+        ],
+    )
+    .expect("version 26 admits the 0x09 kind");
+}
+
+/// Strips the proxy delegation tables added at version 26. No database at
+/// version 25 or earlier can carry them.
+fn without_proxy_delegation(schema: &str) -> String {
+    let start = schema
+        .find("-- Proxy delegation state (schema version 26)")
+        .expect("schema must contain the tables added at version 26");
+    schema[..start].trim_end().to_string() + "\n"
+}
+
+/// The complete version-25 schema: everything but the proxy tables and the
+/// 0x09 kind that version 26 admits to `chain_submissions`.
+fn v25_schema() -> String {
+    without_proxy_delegation(include_str!("001_init.sql")).replace(",'proxy_delegation_batch'", "")
+}
+
 /// Strips the proof key fingerprint added at version 25. No database at
 /// version 24 or earlier can carry it.
 fn v24_schema() -> String {
-    let schema = include_str!("001_init.sql");
+    let schema = v25_schema();
     let stripped = schema.replace(
         "    circuit_key_fingerprint BLOB CHECK(circuit_key_fingerprint IS NULL OR length(circuit_key_fingerprint) = 32),\n",
         "",
@@ -1517,6 +1566,9 @@ fn test_tables_created() {
     assert!(tables.contains(&"keystone_signatures".to_string()));
     assert!(tables.contains(&"ballot_intent".to_string()));
     assert!(tables.contains(&"pir_proof_cache".to_string()));
+    for proxy_table in PROXY_TABLES {
+        assert!(tables.contains(&proxy_table.to_string()), "{proxy_table}");
+    }
 
     let round_columns = table_columns(&conn, "rounds");
     assert!(round_columns.contains(&"network".to_string()));
@@ -1891,6 +1943,74 @@ fn v23_upgrades_to_a_schema_identical_to_a_fresh_one() {
             .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
             .unwrap(),
         CURRENT_VERSION
+    );
+}
+
+/// The v25 to v26 step keeps every existing row, adds empty proxy tables, and
+/// ends on exactly the schema a fresh database gets.
+#[test]
+fn v25_upgrades_to_v26_keeping_every_row_and_matching_a_fresh_schema() {
+    // The proxy DDL is written twice, in `001_init.sql` and in
+    // `008_proxy_delegation.sql`, so the full normalized schema of every
+    // object is compared, not just the table names.
+    let mut upgraded = Connection::open_in_memory().unwrap();
+    upgraded.execute_batch(&v25_schema()).unwrap();
+    upgraded.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    queries::insert_round(
+        &upgraded,
+        "wallet",
+        crate::Network::Testnet,
+        &test_params(),
+        None,
+    )
+    .unwrap();
+    insert_v17_delegation_with_complete_setup(&upgraded, ROUND, "wallet", 0, Some(7));
+    queries::store_vote(&upgraded, ROUND, "wallet", 0, 1, 2, &[0x21; 32]).unwrap();
+    upgraded
+        .execute(
+            "INSERT INTO chain_submissions
+             (identity_key, round_id, wallet_id, network, bundle_index, kind,
+              proposal_id, generation_digest, state, committed_post_reservations,
+              tracking_started_at, diagnostic_kind, diagnostic, created_at, updated_at)
+             VALUES (?1, ?2, 'wallet', 'testnet', 0, 'vote', 1, ?3,
+                     'recovering', 1, 8, 'ambiguous_dispatch', 'timeout', 9, 10)",
+            rusqlite::params![vec![0x41_u8; 32], ROUND, vec![0x42_u8; 32]],
+        )
+        .unwrap();
+    let preserved: Vec<(String, Vec<Vec<String>>)> = table_names(&upgraded)
+        .into_iter()
+        .map(|table| {
+            let rows = dump_table(&upgraded, &table);
+            (table, rows)
+        })
+        .collect();
+    upgraded.pragma_update(None, "user_version", 25).unwrap();
+
+    migrate(&mut upgraded).unwrap();
+    migrate(&mut upgraded).unwrap();
+
+    for (table, rows) in preserved {
+        assert_eq!(dump_table(&upgraded, &table), rows, "{table} must survive");
+    }
+    let mut fresh = Connection::open_in_memory().unwrap();
+    migrate(&mut fresh).unwrap();
+    assert_eq!(
+        schema_objects(&upgraded),
+        schema_objects(&fresh),
+        "the ladder and `001_init.sql` must build the same schema"
+    );
+    for proxy_table in PROXY_TABLES {
+        assert!(
+            dump_table(&upgraded, proxy_table).is_empty(),
+            "{proxy_table}"
+        );
+    }
+    insert_proxy_batch_submission(&upgraded);
+    assert_eq!(
+        upgraded
+            .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .unwrap(),
+        26
     );
 }
 

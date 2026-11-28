@@ -99,6 +99,9 @@ pub enum VotingErrorKind {
     /// A delegation may already be on chain, so the state the host asked to
     /// clear is the only thing that can recover the round's voting weight.
     DelegationAlreadyBroadcast,
+    /// A committed proxy allocation places delegation commitments on the
+    /// bundle, so its delegation setup may not be cleared, replaced or pruned.
+    DelegationSetupFrozen,
 }
 
 fn insufficient_eligibility_message(
@@ -223,6 +226,11 @@ pub enum VotingError {
     /// weight. Nothing was cleared.
     #[error("delegation for bundle {bundle_index} may already be on chain ({evidence}), so its recovery state was kept")]
     DelegationAlreadyBroadcast { bundle_index: u32, evidence: String },
+    /// The caller asked to clear, replace or prune the delegation setup of
+    /// `bundle_index`, which carries committed proxy delegation slots that
+    /// derive from it. Nothing was changed.
+    #[error("bundle {bundle_index} carries committed proxy delegation slots, so its delegation setup is frozen; refusing to {action}")]
+    DelegationSetupFrozen { bundle_index: u32, action: String },
 }
 
 impl VotingError {
@@ -243,6 +251,7 @@ impl VotingError {
             Self::PirUnavailable { .. } => VotingErrorKind::PirUnavailable,
             Self::DelegationTargetMismatch { .. } => VotingErrorKind::DelegationTargetMismatch,
             Self::DelegationAlreadyBroadcast { .. } => VotingErrorKind::DelegationAlreadyBroadcast,
+            Self::DelegationSetupFrozen { .. } => VotingErrorKind::DelegationSetupFrozen,
         }
     }
 

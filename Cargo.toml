@@ -46,3 +46,9 @@ split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
 debug = false
+
+# Until a voting-circuits release ships ZKP4, both crates of that repository
+# come from one commit of its ZKP4 branch, so a single copy builds.
+[patch.crates-io]
+voting-circuits = { git = "https://github.com/valargroup/voting-circuits", rev = "aa3ba600ddcd58db23d1c4e9de8c3ed2e28cdb56" }
+voting-crypto-deps = { git = "https://github.com/valargroup/voting-circuits", rev = "aa3ba600ddcd58db23d1c4e9de8c3ed2e28cdb56" }

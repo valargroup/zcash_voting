@@ -186,3 +186,37 @@ fn duplicate_candidate_hash_becomes_hashless_recovery() {
         } if ambiguity_diagnostic.kind() == ChainSubmissionDiagnosticKind::InvalidProtocolResponse
     ));
 }
+
+/// A cast's broadcast reservation re-reads the proxy hold inside its
+/// transaction: while the bundle has proxy slots and no landed 0x09 batch,
+/// no vote of it is reserved.
+#[test]
+fn a_bundle_held_by_its_proxy_batch_reserves_no_cast() {
+    let db = open_prepared(":memory:");
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO proxy_allocations
+                 (round_id, wallet_id, choices_json, committed_at)
+             VALUES ('{ROUND}', 'wallet', '[{{}}]', 1);
+             INSERT INTO proxy_slots
+                 (round_id, wallet_id, bundle_index, dc_slot, delegate_index, weight_ballots,
+                  layout)
+             VALUES ('{ROUND}', 'wallet', 0, 0, 17, 1, 0);"
+        ))
+        .unwrap();
+    let store = SqliteChainSubmissionStore::new(Arc::clone(&db));
+    let request = StoreAdvancementRequest::vote(identity());
+
+    let refused = store.admit(&request, true, 1, 10);
+    assert!(matches!(
+        &refused,
+        Err(failure) if failure.kind() == ChainSubmissionFailureKind::InvalidInput
+    ));
+    let count: i64 = db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM chain_submissions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0, "nothing is reserved");
+}

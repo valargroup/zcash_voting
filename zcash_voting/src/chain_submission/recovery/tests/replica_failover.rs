@@ -278,3 +278,147 @@ fn leaf_request_budget_is_shared_across_replicas() {
 
     assert!(matches!(failure, RecoveryScanFailure::Invalid(_)));
 }
+
+/// A JSON answer giving a replica's latest block height, as both the height
+/// route and the validator-set route carry it.
+fn replica_height(height: u64) -> ChainHttpResponse {
+    ChainHttpResponse::json(
+        200,
+        format!(r#"{{"height":"{height}","block_height":"{height}"}}"#).into_bytes(),
+    )
+}
+
+/// One replica's pass with a required height: its height read before the
+/// snapshot, then the snapshot of `leaves`.
+fn replica_pass(height: u64, leaves: &[[u8; 32]]) -> Vec<ChainHttpResponse> {
+    std::iter::once(replica_height(height))
+        .chain(tree_responses(leaves))
+        .collect()
+}
+
+#[tokio::test]
+async fn no_replica_at_the_required_height_ends_the_pass_lagging() {
+    // The second replica fails outright, its height read and its snapshot
+    // alike; the first one's lag still decides.
+    let unavailable = || {
+        Err(ChainTransportError::definitely_unsent(
+            "replica unavailable",
+        ))
+    };
+    let responses = [replica_height(99), replica_height(100)]
+        .into_iter()
+        .chain(replica_pass(99, &[[8; 32]]))
+        .map(Ok)
+        .chain([unavailable(), unavailable()])
+        .collect();
+
+    let (outcome, _) = scan_results_requiring(
+        endpoints(),
+        responses,
+        None,
+        RequiredReplicaHeight::HighestReported,
+        || false,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        RecoveryScanOutcome::Lagging {
+            required_height: 100
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_match_counts_from_a_replica_below_the_required_height() {
+    let responses = [replica_height(1), replica_height(100)]
+        .into_iter()
+        .chain(replica_pass(1, &[[3; 32], [4; 32]]))
+        .map(Ok)
+        .collect();
+
+    let (outcome, _) = scan_results_requiring(
+        endpoints(),
+        responses,
+        None,
+        RequiredReplicaHeight::HighestReported,
+        || false,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(outcome, RecoveryScanOutcome::Match { .. }));
+}
+
+/// A pass with a required height judges a snapshot by its own
+/// `block_height` (contracts-v1 §8) over the height read before it, and
+/// refuses one that is not a decimal height at or above the tree's.
+#[tokio::test]
+async fn a_required_pass_judges_the_snapshot_by_its_block_height() {
+    let pass = |read_before: u64, block_height: &str| {
+        let mut responses = replica_pass(read_before, &[[8; 32]]);
+        let mut latest: serde_json::Value = serde_json::from_slice(responses[1].body()).unwrap();
+        latest["block_height"] = block_height.into();
+        responses[1] = ChainHttpResponse::json(200, serde_json::to_vec(&latest).unwrap());
+        responses
+    };
+    let scan = |first: Vec<ChainHttpResponse>, second: Vec<ChainHttpResponse>| {
+        let responses = [replica_height(100), replica_height(100)]
+            .into_iter()
+            .chain(first)
+            .chain(second)
+            .map(Ok)
+            .collect();
+        scan_results_requiring(
+            endpoints(),
+            responses,
+            None,
+            RequiredReplicaHeight::HighestReported,
+            || false,
+        )
+    };
+
+    let (outcome, urls) = scan(pass(150, "99"), pass(50, "100")).await.unwrap();
+    assert!(matches!(outcome, RecoveryScanOutcome::NoMatch(_)));
+    assert!(urls.last().unwrap().starts_with("https://chain-b.example/"));
+
+    for malformed in ["soon", "0"] {
+        let failure = scan(pass(150, malformed), pass(150, malformed))
+            .await
+            .err()
+            .expect("a malformed snapshot height is refused");
+        assert!(
+            matches!(failure, RecoveryScanFailure::Invalid(_)),
+            "{malformed}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_highest_reported_height_is_read_from_every_endpoint_first() {
+    let responses = [replica_height(120), replica_height(150)]
+        .into_iter()
+        .chain(replica_pass(120, &[[8; 32]]))
+        .chain(replica_pass(150, &[[8; 32]]))
+        .map(Ok)
+        .collect();
+
+    let (outcome, urls) = scan_results_requiring(
+        endpoints(),
+        responses,
+        None,
+        RequiredReplicaHeight::HighestReported,
+        || false,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        matches!(outcome, RecoveryScanOutcome::NoMatch(_)),
+        "the replica at the highest height counts"
+    );
+    assert!(urls[0].ends_with("/shielded-vote/v1/height"));
+    assert!(urls[1].ends_with("/shielded-vote/v1/height"));
+    assert!(urls[5].starts_with("https://chain-b.example/"));
+}

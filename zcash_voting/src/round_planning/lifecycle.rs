@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::phases::{DelegationPhase, VotePhase};
 use crate::session::Decision;
+use crate::session::ProxyBatchStage;
 
 /// Coarse position of a vote in the chain lifecycle, an exhaustive
 /// coarsening of [`VotePhase`].
@@ -87,6 +88,40 @@ pub(crate) fn vote_phase_holds_bundle(phase: VotePhase) -> bool {
         | VotePhase::SubmittedWithoutHash => true,
         VotePhase::Prepared | VotePhase::SubmissionRejected | VotePhase::Confirmed => false,
     }
+}
+
+/// Whether a vote in `phase` holds its bundle from a proxy batch, because it
+/// may have spent the full-authority VAN a ZKP4 DC must spend.
+pub(crate) fn vote_phase_holds_proxy_batch(phase: VotePhase) -> bool {
+    match phase {
+        VotePhase::Submitted
+        | VotePhase::SubmissionManaged
+        | VotePhase::SubmittedWithoutHash
+        | VotePhase::Confirmed => true,
+        VotePhase::Prepared | VotePhase::Committed | VotePhase::SubmissionRejected => false,
+    }
+}
+
+/// Whether a delegation in `phase` lets its bundle's proxy batch be proved.
+/// It must be unregistered, so the batch carries the registration, or
+/// confirmed.
+pub(crate) fn delegation_phase_admits_proxy_batch(phase: DelegationPhase) -> bool {
+    match phase {
+        DelegationPhase::Prepared
+        | DelegationPhase::PcztBuilt
+        | DelegationPhase::Proved
+        | DelegationPhase::Confirmed => true,
+        DelegationPhase::Submitted
+        | DelegationPhase::SubmissionManaged
+        | DelegationPhase::SubmittedWithoutHash
+        | DelegationPhase::SubmissionRejected => false,
+    }
+}
+
+/// Whether a proxy batch in `progress` holds its bundle from casts, because
+/// it spends the VAN at full authority. Only landing lifts the hold.
+pub(crate) fn proxy_batch_holds_bundle(progress: ProxyBatchStage) -> bool {
+    progress != ProxyBatchStage::Landed
 }
 
 /// Whether a delegation in `phase` reserves its bundle against a fresh cast:

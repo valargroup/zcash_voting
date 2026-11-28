@@ -596,7 +596,7 @@ fn combined_batch_builds_real_proofs_and_binds_the_initial_delegation_van() {
         hotkey.stored_secret(),
         crate::Network::Testnet,
         state.address_index,
-        state.total_note_value,
+        state.van_ballots,
         &state.gov_comm_rand,
         &[0x11; 32],
         1,

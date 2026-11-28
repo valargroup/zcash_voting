@@ -213,6 +213,9 @@ pub(crate) fn lifecycle_transaction_hashes(
                 message: format!("failed to read lifecycle transaction hash: {e}"),
             })?;
         let key = match (kind.as_str(), proposal_id, digest) {
+            // No planning target names a proxy batch's hash; its landing is
+            // read from its own lifecycle row.
+            (crate::storage::queries::PROXY_BATCH_SUBMISSION_KIND, _, Some(_)) => continue,
             ("delegation", _, _) => LifecycleHashKey::Delegation { bundle_index },
             ("vote", Some(proposal_id), _) => LifecycleHashKey::Vote {
                 bundle_index,

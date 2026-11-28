@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 
 use crate::chain_submission::planning::LifecycleTransactionHashes;
 use crate::phases::{DelegationPhase, DelegationSubmissionStatus, SharePhase, VotePhase};
+use crate::proxy::batch::ProxyBatchStatus;
 use crate::round_planning::{BundleSnapshot, RoundSnapshot, VoteSnapshot};
 use crate::session::Decision;
+use crate::session::ProxyBatchStage;
 use crate::types::{EncryptedShare, ShareDelegationRecord};
 use crate::vote::{VoteBatchRecovery, VoteRecoveryBundle};
 
@@ -21,6 +23,7 @@ pub(super) fn snapshot() -> SnapshotBuilder {
     SnapshotBuilder {
         snapshot: RoundSnapshot {
             rejection_blocked_bundles: std::collections::BTreeMap::new(),
+            proxy_batches: BTreeMap::new(),
             round_id: ROUND.to_string(),
             delegations: Vec::new(),
             bundles: BTreeMap::new(),
@@ -47,8 +50,20 @@ impl SnapshotBuilder {
             BundleSnapshot {
                 capability_imported: false,
                 delegation_tx_hash: None,
+                fully_delegated: false,
             },
         );
+        self
+    }
+
+    /// Marks `bundle_index`, already added, as fully delegated: its
+    /// dispatched or landed DCs took its whole weight.
+    pub(super) fn fully_delegated(mut self, bundle_index: u32) -> Self {
+        self.snapshot
+            .bundles
+            .get_mut(&bundle_index)
+            .expect("the bundle was added first")
+            .fully_delegated = true;
         self
     }
 
@@ -185,6 +200,18 @@ impl SnapshotBuilder {
 
     pub(super) fn intent(mut self, proposal_id: u32, decision: Decision) -> Self {
         self.snapshot.intents.insert(proposal_id, decision);
+        self
+    }
+
+    /// The round's committed proxy allocation places DCs on `bundle_index`,
+    /// whose batch has come as far as `progress`.
+    pub(super) fn proxy_batch(self, bundle_index: u32, progress: ProxyBatchStage) -> Self {
+        self.proxy_status(bundle_index, ProxyBatchStatus::at(progress))
+    }
+
+    /// As [`Self::proxy_batch`], with the batch's whole status.
+    pub(super) fn proxy_status(mut self, bundle_index: u32, status: ProxyBatchStatus) -> Self {
+        self.snapshot.proxy_batches.insert(bundle_index, status);
         self
     }
 

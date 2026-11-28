@@ -8,18 +8,19 @@ use crate::storage::VotingDb;
 
 use super::{
     abandoned_diagnostic, ensure_generation, map_generation_error, preserve_loaded_state,
-    transition_failure, ChainSubmissionStore, ConfirmationCommit, StoreAdmission,
-    StoreAdvancementRequest, StoredChainSubmission, SubmissionDerivationRequest,
+    retired_proxy_record, transition_failure, ChainSubmissionStore, ConfirmationCommit,
+    ProxyRetirement, StoreAdmission, StoreAdvancementRequest, StoredChainSubmission,
+    SubmissionDerivationRequest,
 };
 use crate::chain_submission::{
     confirmation::{
-        apply_confirmed_generation, retire_rejected_combined_generation,
+        apply_confirmed_generation, apply_proxy_retirement, retire_rejected_combined_generation,
         validate_hash_confirmation, validate_imported_delegation_confirmation,
     },
     coordination::SubmissionCoordination,
     generation::{
-        derive_delegation, derive_imported_delegation, derive_vote, derive_vote_batch,
-        DerivedChainSubmission,
+        derive_delegation, derive_imported_delegation, derive_proxy_batch, derive_vote,
+        derive_vote_batch, DerivedChainSubmission,
     },
     identity::{network_name, submission_identity_key},
     result::ValidatedChainSubmissionConfirmation,
@@ -78,6 +79,9 @@ fn derive(
         }
         SubmissionDerivationRequest::Vote { identity } => derive_vote(tx, identity),
         SubmissionDerivationRequest::VoteBatch { identity } => derive_vote_batch(tx, identity),
+        SubmissionDerivationRequest::ProxyDelegationBatch { identity } => {
+            derive_proxy_batch(tx, identity)
+        }
     }
     .map_err(map_generation_error)
 }
@@ -243,6 +247,11 @@ fn insert_fresh(
             "delegate_and_cast_vote_batch",
             None,
             Some(ordered_batch_digest.to_vec()),
+        ),
+        ChainSubmissionTarget::ProxyDelegationBatch { batch_digest } => (
+            crate::storage::queries::PROXY_BATCH_SUBMISSION_KIND,
+            None,
+            Some(batch_digest.to_vec()),
         ),
     };
     tx.execute(
@@ -484,6 +493,26 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
                 |row| row.get(0),
             ).map_err(storage_error)?;
             if predecessor { return Err(ChainSubmissionFailure::without_state(ChainSubmissionFailureKind::InvalidInput, "another submission for this bundle has not established an authoritative successor")); }
+            // A cast's first reservation re-reads the proxy hold here, so a
+            // batch committed after the vote was saved still holds it.
+            let casts = !matches!(
+                request.identity().target(),
+                ChainSubmissionTarget::Delegation | ChainSubmissionTarget::ProxyDelegationBatch { .. }
+            );
+            if casts
+                && crate::proxy::batch::batch_holds_casts(
+                    tx,
+                    &hex::encode(request.identity().vote_round_id()),
+                    request.identity().wallet_id(),
+                    request.identity().bundle_index(),
+                )
+                .map_err(map_generation_error)?
+            {
+                return Err(ChainSubmissionFailure::without_state(
+                    ChainSubmissionFailureKind::InvalidInput,
+                    "the bundle's proxy batch holds it from casts until the batch lands",
+                ));
+            }
             if matches!(request.identity().target(), ChainSubmissionTarget::Delegation) {
                 // A confirmed vote already consumed this bundle's delegation
                 // output, so a new delegation generation can never be needed
@@ -491,7 +520,7 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
                 let superseded: bool = tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM chain_submissions WHERE wallet_id=:wallet AND network=:network
                       AND round_id=:round AND bundle_index=:bundle
-                      AND kind IN ('vote','vote_batch','delegate_and_cast_vote_batch') AND state='confirmed')",
+                      AND kind IN ('vote','vote_batch','delegate_and_cast_vote_batch','proxy_delegation_batch') AND state='confirmed')",
                     named_params! { ":wallet": request.identity().wallet_id(), ":network": network_name(request.identity().network()),
                         ":round": hex::encode(request.identity().vote_round_id()), ":bundle": request.identity().bundle_index() },
                     |row| row.get(0),
@@ -826,6 +855,59 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
             record.updated_at = now.max(record.updated_at);
             persist_mutable(tx, &record)?;
             Ok(record)
+        })
+    }
+
+    fn retire_proxy_generation(
+        &self,
+        request: &StoreAdvancementRequest,
+        expected_generation: &ChainSubmissionGeneration,
+        retirement: ProxyRetirement,
+        now: u64,
+    ) -> Result<StoredChainSubmission, ChainSubmissionFailure> {
+        self.transact(|tx| {
+            let record = load_submission(tx, expected_generation.identity())?.ok_or_else(|| {
+                ChainSubmissionFailure::without_state(
+                    ChainSubmissionFailureKind::InvariantViolation,
+                    "submission disappeared before proxy retirement",
+                )
+            })?;
+            ensure_generation(&record, expected_generation)?;
+            let derived = derive(tx, request.derivation())
+                .map_err(|error| preserve_loaded_state(error, Some(&record)))?;
+            ensure_generation(&record, derived.generation())?;
+            if derived.proxy().is_none() {
+                return Err(transition_failure(
+                    record.durable_state(),
+                    "only a proxy batch is retired",
+                ));
+            }
+            let durable_state = record.durable_state();
+            let retired = retired_proxy_record(record, retirement.diagnostic(), now)?;
+            if let ProxyRetirement::RegistrationLanded {
+                registration_position,
+            } = retirement
+            {
+                apply_proxy_retirement(tx, expected_generation.identity(), registration_position)
+                    .map_err(|error| {
+                    ChainSubmissionFailure::with_durable_state(
+                        match error {
+                            crate::types::VotingError::InvalidInput { .. } => {
+                                ChainSubmissionFailureKind::InvalidInput
+                            }
+                            _ => ChainSubmissionFailureKind::Storage,
+                        },
+                        durable_state,
+                        error.to_string(),
+                    )
+                })?;
+            }
+            tx.execute(
+                "DELETE FROM chain_submissions WHERE identity_key=?1",
+                [submission_identity_key(expected_generation.identity())],
+            )
+            .map_err(storage_error)?;
+            Ok(retired)
         })
     }
 }

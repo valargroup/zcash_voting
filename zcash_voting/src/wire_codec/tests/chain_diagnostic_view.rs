@@ -18,6 +18,18 @@ fn every_diagnostic_kind_round_trips_under_its_stable_name() {
             ChainSubmissionDiagnosticKind::InvalidProtocolResponse,
             "invalid_protocol_response",
         ),
+        (
+            ChainSubmissionDiagnosticKind::ProxyBatchPaused,
+            "proxy_batch_paused",
+        ),
+        (
+            ChainSubmissionDiagnosticKind::ProxyBatchExpired,
+            "proxy_batch_expired",
+        ),
+        (
+            ChainSubmissionDiagnosticKind::ProxyRegistrationLanded,
+            "proxy_registration_landed",
+        ),
     ] {
         assert_eq!(kind.as_str(), name);
         let view: ChainDiagnosticKindView = kind.into();

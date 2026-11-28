@@ -7,7 +7,7 @@ use super::{
     generation::DerivedChainSubmission,
     protocol::CommittedTransaction,
     recovery::RecoveryRetryAuthorization,
-    state::{SubmissionObservation, SubmissionRecordState},
+    state::{apply_submission_observation, SubmissionObservation, SubmissionRecordState},
     ChainSubmissionDiagnostic, ChainSubmissionDiagnosticKind, ChainSubmissionFailure,
     ChainSubmissionFailureKind, ChainSubmissionGeneration, ChainSubmissionGenerationDigest,
     ChainSubmissionIdentity, ChainSubmissionPending, ChainSubmissionResult, ChainSubmissionState,
@@ -25,7 +25,6 @@ use super::{
     confirmation::{validate_hash_confirmation, validate_imported_delegation_confirmation},
     coordination::BundleOperationKey,
     result::ValidatedChainSubmissionConfirmation,
-    state::apply_submission_observation,
 };
 
 /// Inputs from which storage reconstructs a closed semantic generation.
@@ -43,6 +42,11 @@ pub(super) enum SubmissionDerivationRequest {
     VoteBatch {
         identity: ChainSubmissionIdentity,
     },
+    /// A bundle's 0x09 proxy batch, rebuilt from its proved batch and newest
+    /// signed attempt.
+    ProxyDelegationBatch {
+        identity: ChainSubmissionIdentity,
+    },
 }
 
 impl SubmissionDerivationRequest {
@@ -51,7 +55,35 @@ impl SubmissionDerivationRequest {
             Self::Delegation { identity, .. }
             | Self::ImportedDelegation { identity }
             | Self::Vote { identity }
-            | Self::VoteBatch { identity } => identity,
+            | Self::VoteBatch { identity }
+            | Self::ProxyDelegationBatch { identity } => identity,
+        }
+    }
+}
+
+/// Why a 0x09 generation is retired (see
+/// [`ChainSubmissionStore::retire_proxy_generation`]).
+pub(super) enum ProxyRetirement {
+    /// An attempt was answered expired (code 52). The batch is re-signed.
+    Expired(ChainSubmissionDiagnostic),
+    /// The carried registration landed alone at `registration_position`,
+    /// which becomes the bundle's VAN. The batch is proved again.
+    RegistrationLanded { registration_position: u64 },
+}
+
+impl ProxyRetirement {
+    /// The diagnostic the retired row reports.
+    pub(super) fn diagnostic(&self) -> ChainSubmissionDiagnostic {
+        match self {
+            Self::Expired(diagnostic) => ChainSubmissionDiagnostic::from_redacted_message(
+                ChainSubmissionDiagnosticKind::ProxyBatchExpired,
+                diagnostic.message(),
+            ),
+            Self::RegistrationLanded { .. } => ChainSubmissionDiagnostic::from_redacted_message(
+                ChainSubmissionDiagnosticKind::ProxyRegistrationLanded,
+                "the proxy batch's registration landed on its own; the batch is proved again \
+                 against the chain anchor",
+            ),
         }
     }
 }
@@ -94,6 +126,16 @@ impl StoreAdvancementRequest {
         Self {
             member_identities: vec![],
             derivation: SubmissionDerivationRequest::Vote { identity },
+            ordered_batch_proposal_ids: None,
+        }
+    }
+
+    /// A bundle's 0x09 proxy batch. It locks no member identity, since the
+    /// bundle lock already serializes it against the delegation.
+    pub(super) fn proxy_delegation_batch(identity: ChainSubmissionIdentity) -> Self {
+        Self {
+            member_identities: vec![],
+            derivation: SubmissionDerivationRequest::ProxyDelegationBatch { identity },
             ordered_batch_proposal_ids: None,
         }
     }
@@ -200,6 +242,14 @@ impl StoreAdvancementRequest {
         )
     }
 
+    /// Whether this advances a 0x09 proxy batch.
+    pub(super) fn is_proxy_batch(&self) -> bool {
+        matches!(
+            self.derivation,
+            SubmissionDerivationRequest::ProxyDelegationBatch { .. }
+        )
+    }
+
     fn verify_batch_roster(
         &self,
         authoritative_ordered_proposal_ids: &[u32],
@@ -231,6 +281,9 @@ impl StoreAdvancementRequest {
                 SubmissionDerivationRequest::VoteBatch { .. },
                 ChainSubmissionTarget::VoteBatch { .. }
                     | ChainSubmissionTarget::DelegateAndVoteBatch { .. }
+            ) | (
+                SubmissionDerivationRequest::ProxyDelegationBatch { .. },
+                ChainSubmissionTarget::ProxyDelegationBatch { .. }
             )
         );
         if valid {
@@ -528,6 +581,36 @@ pub(super) trait ChainSubmissionStore: Send + Sync {
         authorization: RecoveryRetryAuthorization<'_>,
         now: u64,
     ) -> Result<StoredChainSubmission, ChainSubmissionFailure>;
+
+    /// Retires a live 0x09 generation that will never land, in one
+    /// transaction, after re-deriving it. Deletes its row, applies the domain
+    /// effect and returns the row as `Rejected` with
+    /// [`ProxyRetirement::diagnostic`].
+    fn retire_proxy_generation(
+        &self,
+        request: &StoreAdvancementRequest,
+        expected_generation: &ChainSubmissionGeneration,
+        retirement: ProxyRetirement,
+        now: u64,
+    ) -> Result<StoredChainSubmission, ChainSubmissionFailure>;
+}
+
+/// The record a retired 0x09 row reports: `Rejected` with `diagnostic`.
+/// Only a live row may be retired.
+pub(super) fn retired_proxy_record(
+    mut record: StoredChainSubmission,
+    diagnostic: ChainSubmissionDiagnostic,
+    now: u64,
+) -> Result<StoredChainSubmission, ChainSubmissionFailure> {
+    let previous = record.durable_state();
+    record.state = apply_submission_observation(
+        Some(record.state),
+        SubmissionObservation::ProxyGenerationRetired(diagnostic),
+    )
+    .map_err(|error| transition_failure(previous, error))?
+    .ok_or_else(|| transition_failure(previous, "retirement removed the record"))?;
+    record.settle_after_transition(previous, None, now);
+    Ok(record)
 }
 
 pub(super) fn abandoned_diagnostic() -> ChainSubmissionDiagnostic {
@@ -609,6 +692,8 @@ pub(super) mod memory {
         /// How often each combined generation has been retired. The double has
         /// no delegation setup to retire, so it records that the rule fired.
         combined_retirements: HashMap<ChainSubmissionIdentity, u32>,
+        /// The diagnostic kind of each 0x09 retirement, in order.
+        proxy_retirements: HashMap<ChainSubmissionIdentity, Vec<ChainSubmissionDiagnosticKind>>,
         fail_before_commit: bool,
         fail_before_commit_without_state: bool,
     }
@@ -706,6 +791,20 @@ pub(super) mod memory {
                 .get(identity)
                 .copied()
                 .unwrap_or(0)
+        }
+
+        /// Every retirement of the 0x09 generation `identity`, in order.
+        pub(in crate::chain_submission) fn proxy_retirements(
+            &self,
+            identity: &ChainSubmissionIdentity,
+        ) -> Vec<ChainSubmissionDiagnosticKind> {
+            self.state
+                .lock()
+                .unwrap()
+                .proxy_retirements
+                .get(identity)
+                .cloned()
+                .unwrap_or_default()
         }
 
         pub(in crate::chain_submission) fn projection(
@@ -826,8 +925,9 @@ pub(super) mod memory {
             })
         }
 
-        /// A confirmed vote or batch has consumed the bundle's delegation
-        /// output, so a new delegation generation is refused before derivation.
+        /// A confirmed vote, batch or proxy batch has consumed the bundle's
+        /// delegation output, so a new delegation generation is refused before
+        /// derivation.
         fn delegation_is_superseded(
             state: &MemoryState,
             requested: &ChainSubmissionIdentity,
@@ -841,6 +941,7 @@ pub(super) mod memory {
                             ChainSubmissionTarget::Vote { .. }
                                 | ChainSubmissionTarget::VoteBatch { .. }
                                 | ChainSubmissionTarget::DelegateAndVoteBatch { .. }
+                                | ChainSubmissionTarget::ProxyDelegationBatch { .. }
                         )
                         && matches!(successor.state(), SubmissionRecordState::Confirmed(_))
                 })
@@ -1484,6 +1585,51 @@ pub(super) mod memory {
                 record.updated_at = now.max(record.updated_at);
                 state.records.insert(identity.clone(), record.clone());
                 Ok(record)
+            })
+        }
+
+        fn retire_proxy_generation(
+            &self,
+            request: &StoreAdvancementRequest,
+            expected_generation: &ChainSubmissionGeneration,
+            retirement: ProxyRetirement,
+            now: u64,
+        ) -> Result<StoredChainSubmission, ChainSubmissionFailure> {
+            self.transact(Some(expected_generation.identity()), |state| {
+                let record = state
+                    .records
+                    .get(expected_generation.identity())
+                    .cloned()
+                    .ok_or_else(|| {
+                        ChainSubmissionFailure::without_state(
+                            ChainSubmissionFailureKind::InvariantViolation,
+                            "submission disappeared before proxy retirement",
+                        )
+                    })?;
+                ensure_generation(&record, expected_generation)?;
+                let derived = Self::derive(state, request.derivation())
+                    .map_err(|error| preserve_loaded_state(error, Some(&record)))?;
+                ensure_generation(&record, derived.generation())?;
+                if derived.proxy().is_none() {
+                    return Err(transition_failure(
+                        record.durable_state(),
+                        "only a proxy batch is retired",
+                    ));
+                }
+                let diagnostic = retirement.diagnostic();
+                let retired = retired_proxy_record(record, diagnostic, now)?;
+                state.records.remove(expected_generation.identity());
+                state
+                    .proxy_retirements
+                    .entry(expected_generation.identity().clone())
+                    .or_default()
+                    .push(
+                        retired
+                            .diagnostic()
+                            .expect("a retired record carries its diagnostic")
+                            .kind(),
+                    );
+                Ok(retired)
             })
         }
     }
