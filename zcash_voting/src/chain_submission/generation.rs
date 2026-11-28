@@ -1254,12 +1254,6 @@ fn validated_vote_batch(
     Ok((bound, recoveries))
 }
 
-/// One proved DC with the spend-auth randomizer its slot stored.
-struct ProxyGenerationDc<'a> {
-    dc: &'a crate::proxy::batch::ProvedProxyDc,
-    alpha_v: [u8; 32],
-}
-
 /// Hashes a proxy batch generation: the identity, the anchor, the layout, the
 /// carried registration's inputs and every DC with its proof. The expiry, the
 /// signatures and the chain id are excluded, so every attempt is one
@@ -1268,7 +1262,6 @@ fn proxy_batch_generation(
     identity: &ChainSubmissionIdentity,
     batch: &ProvedProxyBatch,
     registration: Option<&DelegationGenerationInputs>,
-    dcs: &[ProxyGenerationDc<'_>],
 ) -> ChainSubmissionGeneration {
     let mut transcript = GenerationTranscript::new();
     hash_identity(&mut transcript, identity);
@@ -1284,13 +1277,12 @@ fn proxy_batch_generation(
     if let Some(inputs) = registration {
         hash_delegation_inputs(&mut transcript, inputs);
     }
-    transcript.sequence("proxy.dcs", dcs, |transcript, index, entry| {
+    transcript.sequence("proxy.dcs", &batch.dcs, |transcript, index, dc| {
         let prefix = format!("proxy.dcs.{index}");
-        let dc = entry.dc;
         transcript.u32(&format!("{prefix}.dc_slot"), u32::from(dc.dc_slot));
         transcript.u32(&format!("{prefix}.delegate_index"), dc.delegate_index);
         transcript.u64(&format!("{prefix}.weight_ballots"), dc.weight_ballots);
-        transcript.bytes32(&format!("{prefix}.alpha_v"), &entry.alpha_v);
+        transcript.bytes32(&format!("{prefix}.alpha_v"), &dc.alpha_v);
         transcript.bytes32(&format!("{prefix}.van_nullifier"), &dc.van_nullifier);
         transcript.bytes32(&format!("{prefix}.r_vpk"), &dc.r_vpk);
         transcript.bytes32(
@@ -1399,28 +1391,10 @@ pub(super) fn derive_proxy_batch(
         }
         _ => None,
     };
-    let slots = batch::load_planned_slots(conn, &round_id, wallet_id, bundle_index)?;
-    let dcs = proved
-        .dcs
-        .iter()
-        .map(|dc| {
-            slots
-                .iter()
-                .find(|slot| slot.dc_slot == dc.dc_slot)
-                .map(|slot| ProxyGenerationDc {
-                    dc,
-                    alpha_v: slot.alpha_v,
-                })
-                .ok_or_else(|| VotingError::Internal {
-                    message: format!("proved DC in slot {} has no planned slot", dc.dc_slot),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let generation = proxy_batch_generation(
         identity,
         &proved,
         registration.as_ref().map(|(_, inputs)| inputs),
-        &dcs,
     );
     let final_van = proved
         .dcs

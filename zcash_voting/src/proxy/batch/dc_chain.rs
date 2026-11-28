@@ -5,7 +5,8 @@ use vote_commitment_tree::{MerkleHashVote, MerklePath};
 use voting_circuits::proxy_delegation::{
     build_proxy_delegation_proof, ProxyDelegationBundle, ShareLayout,
 };
-use zcash_vote_delegate::{DcSeedInputs, DcShareLayout};
+use zcash_vote_delegate::{dc_seed, DcSeedInputs, DcShareLayout};
+use zeroize::Zeroizing;
 
 use super::{slot_plan::canonical_base, BatchAnchor, PlannedSlot};
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
         pallas,
     },
     hotkey::{spending_key_from_hotkey_seed, VOTING_HOTKEY_ACCOUNT_INDEX},
-    proxy::ProxyRoundKey,
+    proxy::proxy_round_key,
     types::{Network, VotingError},
     vote::{single_leaf_auth_path, VAN_AUTH_PATH_LEN},
 };
@@ -59,11 +60,7 @@ pub(crate) fn build_dc_chain(
 ) -> Result<Vec<BuiltDc>, VotingError> {
     let spending_key =
         spending_key_from_hotkey_seed(hotkey_seed, inputs.network, VOTING_HOTKEY_ACCOUNT_INDEX)?;
-    let round_key = ProxyRoundKey::from_hotkey_secret(
-        spending_key.to_bytes(),
-        inputs.network,
-        &inputs.round_id,
-    );
+    let round_key = proxy_round_key(spending_key.to_bytes(), inputs.network, &inputs.round_id);
     let round = canonical_base("vote round id", &inputs.round_id)?;
     let van_comm_rand = canonical_base("van_comm_rand", &inputs.van_comm_rand)?;
     let ea_pk = election_key(&inputs.ea_pk)?;
@@ -106,16 +103,21 @@ pub(crate) fn build_dc_chain(
             })
         };
         let van_nullifier = build([0; 32])?.instance.van_nullifier.to_repr();
-        let dc_seed = round_key.dc_seed(&DcSeedInputs {
-            van_nullifier,
-            delegate_index: slot.delegate_index,
-            weight_ballots: slot.weight_ballots,
-            layout: slot.layout,
-        });
-        let bundle = build(*dc_seed.expose_secret())?;
+        let dc_seed = Zeroizing::new(dc_seed(
+            &round_key,
+            &DcSeedInputs {
+                van_nullifier,
+                delegate_index: slot.delegate_index,
+                weight_ballots: slot.weight_ballots,
+                layout: slot.layout,
+            },
+        ));
+        let bundle = build(*dc_seed)?;
 
         let spent = canonical_base("spent VAN", &spent_van)?;
-        if !merkle_path(position, &path)?.verify(spent, bundle.instance.vote_comm_tree_root) {
+        let merkle_path =
+            MerklePath::from_parts(position, path_fields.map(MerkleHashVote::from_fp));
+        if !merkle_path.verify(spent, bundle.instance.vote_comm_tree_root) {
             return Err(VotingError::Internal {
                 message: format!(
                     "the DC in slot {} does not spend the VAN its batch chains to",
@@ -176,16 +178,4 @@ fn path_fields(
         *field = canonical_base("VAN authentication path sibling", sibling)?;
     }
     Ok(fields)
-}
-
-/// The vote-tree path that `position` and `path` describe.
-fn merkle_path(
-    position: u32,
-    path: &[[u8; 32]; VAN_AUTH_PATH_LEN],
-) -> Result<MerklePath, VotingError> {
-    let mut siblings = [MerkleHashVote::from_fp(pallas::Base::zero()); VAN_AUTH_PATH_LEN];
-    for (sibling, bytes) in siblings.iter_mut().zip(path) {
-        *sibling = MerkleHashVote::from_fp(canonical_base("VAN path sibling", bytes)?);
-    }
-    Ok(MerklePath::from_parts(position, siblings))
 }

@@ -3,7 +3,7 @@
 
 use super::fixtures::*;
 use crate::phases::{DelegationPhase, VotePhase};
-use crate::proxy::batch::{ProxyBatchProgress, ProxyBatchStatus};
+use crate::proxy::batch::ProxyBatchStatus;
 use crate::round_planning::{classify_round, plan_from_snapshot, resolve_step, Obligation};
 use crate::session::{Decision, NextStep, ProxyBatchPlanStatus, ProxyBatchStage};
 
@@ -36,7 +36,7 @@ fn casts(obligations: &[Obligation]) -> Vec<(u32, bool)> {
         .collect()
 }
 
-fn status(progress: ProxyBatchProgress) -> ProxyBatchStatus {
+fn status(progress: ProxyBatchStage) -> ProxyBatchStatus {
     ProxyBatchStatus::at(progress)
 }
 
@@ -47,8 +47,8 @@ fn every_batch_is_proved_before_any_is_broadcast() {
     let partly_proved = snapshot()
         .bundle(0, DelegationPhase::Proved)
         .bundle(1, DelegationPhase::Proved)
-        .proxy_batch(0, ProxyBatchProgress::Proved)
-        .proxy_batch(1, ProxyBatchProgress::Planned)
+        .proxy_batch(0, ProxyBatchStage::Proved)
+        .proxy_batch(1, ProxyBatchStage::Planned)
         .build();
     let obligations = classify_round(&partly_proved, &[1]).unwrap().obligations;
     assert!(advanced(&obligations).is_empty());
@@ -59,8 +59,8 @@ fn every_batch_is_proved_before_any_is_broadcast() {
     let all_proved = snapshot()
         .bundle(0, DelegationPhase::Proved)
         .bundle(1, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Proved)
-        .proxy_batch(1, ProxyBatchProgress::Proved)
+        .proxy_batch(0, ProxyBatchStage::Proved)
+        .proxy_batch(1, ProxyBatchStage::Proved)
         .build();
     assert_eq!(
         advanced(&classify_round(&all_proved, &[1]).unwrap().obligations),
@@ -75,7 +75,7 @@ fn a_cast_that_may_have_spent_the_van_holds_a_proved_batch() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
         .vote(0, 1, 1, VotePhase::SubmissionManaged)
-        .proxy_batch(0, ProxyBatchProgress::Proved)
+        .proxy_batch(0, ProxyBatchStage::Proved)
         .intent(1, Decision::Choice(1))
         .build();
 
@@ -92,7 +92,7 @@ fn a_first_attempt_carrying_the_registration_needs_the_signer() {
             0,
             ProxyBatchStatus {
                 needs_registration_signature: true,
-                ..status(ProxyBatchProgress::Proved)
+                ..status(ProxyBatchStage::Proved)
             },
         )
         .build();
@@ -114,7 +114,7 @@ fn a_first_attempt_carrying_the_registration_needs_the_signer() {
 
     let in_flight = super::fixtures::snapshot()
         .bundle(0, DelegationPhase::Proved)
-        .proxy_batch(0, ProxyBatchProgress::InFlight { refused: false })
+        .proxy_batch(0, ProxyBatchStage::Dispatched)
         .build();
     let plan = plan_from_snapshot(&in_flight, &[1]).unwrap();
     assert_eq!(plan.next_steps, vec![step]);
@@ -127,9 +127,9 @@ fn a_first_attempt_carrying_the_registration_needs_the_signer() {
 #[test]
 fn a_batch_on_the_wire_is_advanced_until_it_lands() {
     for (progress, advances) in [
-        (ProxyBatchProgress::InFlight { refused: false }, true),
-        (ProxyBatchProgress::InFlight { refused: true }, true),
-        (ProxyBatchProgress::Landed, false),
+        (ProxyBatchStage::Dispatched, true),
+        (ProxyBatchStage::Refused, true),
+        (ProxyBatchStage::Landed, false),
     ] {
         let snapshot = snapshot()
             .bundle(0, DelegationPhase::Proved)
@@ -153,23 +153,11 @@ fn a_batch_on_the_wire_is_advanced_until_it_lands() {
 #[test]
 fn the_hold_lifts_only_when_the_batch_lands() {
     for (progress, phase, casts_now) in [
-        (
-            ProxyBatchProgress::Planned,
-            DelegationPhase::PcztBuilt,
-            false,
-        ),
-        (ProxyBatchProgress::Proved, DelegationPhase::Proved, false),
-        (
-            ProxyBatchProgress::InFlight { refused: false },
-            DelegationPhase::Proved,
-            false,
-        ),
-        (
-            ProxyBatchProgress::InFlight { refused: true },
-            DelegationPhase::Proved,
-            false,
-        ),
-        (ProxyBatchProgress::Landed, DelegationPhase::Confirmed, true),
+        (ProxyBatchStage::Planned, DelegationPhase::PcztBuilt, false),
+        (ProxyBatchStage::Proved, DelegationPhase::Proved, false),
+        (ProxyBatchStage::Dispatched, DelegationPhase::Proved, false),
+        (ProxyBatchStage::Refused, DelegationPhase::Proved, false),
+        (ProxyBatchStage::Landed, DelegationPhase::Confirmed, true),
     ] {
         let snapshot = snapshot()
             .bundle(0, phase)
@@ -207,9 +195,9 @@ fn the_plan_reports_each_bundle_s_batch_stage() {
         .bundle(0, DelegationPhase::Confirmed)
         .bundle(1, DelegationPhase::Proved)
         .bundle(2, DelegationPhase::Proved)
-        .proxy_batch(0, ProxyBatchProgress::Landed)
-        .proxy_batch(1, ProxyBatchProgress::InFlight { refused: true })
-        .proxy_batch(2, ProxyBatchProgress::InFlight { refused: false })
+        .proxy_batch(0, ProxyBatchStage::Landed)
+        .proxy_batch(1, ProxyBatchStage::Refused)
+        .proxy_batch(2, ProxyBatchStage::Dispatched)
         .build();
 
     let plan = plan_from_snapshot(&snapshot, &[1]).unwrap();
@@ -254,12 +242,12 @@ fn the_snapshot_reads_each_batch_s_submission_state() {
         read(),
         ProxyBatchStatus {
             needs_registration_signature: true,
-            ..status(ProxyBatchProgress::Proved)
+            ..status(ProxyBatchStage::Proved)
         }
     );
 
     sign_attempt(&fixture, 1_000, false);
-    assert_eq!(read(), status(ProxyBatchProgress::Proved));
+    assert_eq!(read(), status(ProxyBatchStage::Proved));
 
     db.conn()
         .execute(
@@ -273,21 +261,14 @@ fn the_snapshot_reads_each_batch_s_submission_state() {
             [],
         )
         .unwrap();
-    assert_eq!(
-        read(),
-        status(ProxyBatchProgress::InFlight { refused: true })
-    );
+    assert_eq!(read(), status(ProxyBatchStage::Refused));
     for (state, kind, progress) in [
         (
             "recovering",
             "ambiguous_dispatch",
-            ProxyBatchProgress::InFlight { refused: false },
+            ProxyBatchStage::Dispatched,
         ),
-        (
-            "recovering",
-            "chain_rejected",
-            ProxyBatchProgress::InFlight { refused: true },
-        ),
+        ("recovering", "chain_rejected", ProxyBatchStage::Refused),
     ] {
         db.conn()
             .execute(

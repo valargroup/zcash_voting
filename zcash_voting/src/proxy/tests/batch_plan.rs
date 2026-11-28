@@ -9,6 +9,7 @@ use super::fixtures::{
     commit, db_with_hotkey_setup, host_at, hotkey_van, request, van_comm_rand, HOTKEY_SECRET,
     NETWORK, ROUND_ID, WALLET_ID,
 };
+use crate::wire::ProxyDelegateChoice;
 use crate::{
     backend::{
         orchard::keys::FullViewingKey,
@@ -17,7 +18,7 @@ use crate::{
     hotkey::{spending_key_from_hotkey_seed, VOTING_HOTKEY_ACCOUNT_INDEX},
     proxy::{
         batch::{build_dc_chain, load_chain_inputs, plan_batch_slots, BatchAnchor, BuiltDc},
-        batch_layout, load_allocation, AllocationRequest, DcShareLayout,
+        batch_layout, load_allocation, DcShareLayout,
     },
     storage::VotingDb,
     types::VotingError,
@@ -25,7 +26,7 @@ use crate::{
 
 /// Three delegates over one bundle, keeping a remainder, so the batch has
 /// three DCs whose weights no single share denomination covers.
-fn three_delegates() -> AllocationRequest {
+fn three_delegates() -> Vec<ProxyDelegateChoice> {
     request(&[(17, 2_300), (5, 1_700), (9, 700)])
 }
 

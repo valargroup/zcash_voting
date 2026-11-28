@@ -3383,29 +3383,16 @@ pub fn delete_bundles_from(
             "prune bundles",
         ));
     }
-    let frozen = frozen_by_proxy_slots(&tx)?;
-    let first_frozen: Option<i64> = tx
-        .query_row(
-            &format!(
-                "SELECT bundle_index FROM bundles
-                  WHERE round_id = :round_id AND wallet_id = :wallet_id
-                    AND bundle_index >= :from_index AND {frozen}
-                  ORDER BY bundle_index LIMIT 1"
-            ),
-            named_params! {
-                ":round_id": round_id,
-                ":wallet_id": wallet_id,
-                ":from_index": from_index as i64,
-            },
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to check for frozen delegation setup: {e}"),
-        })?;
-    if let Some(bundle_index) = first_frozen {
-        return Err(frozen_setup(bundle_index as u32, "prune bundles"));
-    }
+    refuse_if_frozen_by_proxy_slots(
+        &tx,
+        "round_id = :round_id AND wallet_id = :wallet_id AND bundle_index >= :from_index",
+        named_params! {
+            ":round_id": round_id,
+            ":wallet_id": wallet_id,
+            ":from_index": from_index as i64,
+        },
+        "prune bundles",
+    )?;
 
     let rows = tx
         .execute(
@@ -4056,26 +4043,12 @@ pub fn clear_unsigned_delegation_setup_fields(
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|error| {
         VotingError::from_sqlite("failed to begin unsigned setup reset", &error)
     })?;
-    let frozen = frozen_by_proxy_slots(&tx)?;
-    let first_frozen: Option<i64> = tx
-        .query_row(
-            &format!(
-                "SELECT bundle_index FROM bundles WHERE {clearable} AND {frozen}
-                  ORDER BY bundle_index LIMIT 1"
-            ),
-            named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to check for frozen delegation setup: {e}"),
-        })?;
-    if let Some(bundle_index) = first_frozen {
-        return Err(frozen_setup(
-            bundle_index as u32,
-            "clear unsigned delegation setup",
-        ));
-    }
+    refuse_if_frozen_by_proxy_slots(
+        &tx,
+        clearable,
+        named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
+        "clear unsigned delegation setup",
+    )?;
     tx.execute(
         &format!(
             "UPDATE bundles
@@ -4097,7 +4070,7 @@ pub fn clear_unsigned_delegation_setup_fields(
                  delegation_pczt = NULL,
                  pczt_sighash = NULL,
                  tx1_effects = NULL
-             WHERE {clearable} AND NOT {frozen}"
+             WHERE {clearable}"
         ),
         named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
     )
@@ -4114,9 +4087,6 @@ pub fn clear_unsigned_delegation_setup_fields(
 
 /// SQL true for the `bundles` row whose setup a committed proxy allocation
 /// froze, or constant false on a sidecar without `proxy_slots`.
-///
-/// Embedded in every statement that clears or replaces setup, so a commit
-/// between a caller's check and its write cannot lose the setup.
 fn frozen_by_proxy_slots(conn: &Connection) -> Result<&'static str, VotingError> {
     if present_tables(conn)?
         .iter()
@@ -4128,6 +4098,38 @@ fn frozen_by_proxy_slots(conn: &Connection) -> Result<&'static str, VotingError>
                        AND slot.bundle_index = bundles.bundle_index)")
     } else {
         Ok("0")
+    }
+}
+
+/// Refuses with [`frozen_setup`] for the lowest-indexed bundle matching
+/// `scope`, a condition on `bundles` bound by `params`, that committed proxy
+/// slots froze.
+///
+/// Every caller holds an immediate transaction from this check through its
+/// write, so no commit can freeze a bundle in between.
+fn refuse_if_frozen_by_proxy_slots(
+    conn: &Connection,
+    scope: &str,
+    params: impl rusqlite::Params,
+    action: &str,
+) -> Result<(), VotingError> {
+    let frozen = frozen_by_proxy_slots(conn)?;
+    let first_frozen: Option<i64> = conn
+        .query_row(
+            &format!(
+                "SELECT bundles.bundle_index FROM bundles WHERE {scope} AND {frozen}
+                  ORDER BY bundles.bundle_index LIMIT 1"
+            ),
+            params,
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| VotingError::Internal {
+            message: format!("failed to check for frozen delegation setup: {e}"),
+        })?;
+    match first_frozen {
+        Some(bundle_index) => Err(frozen_setup(bundle_index as u32, action)),
+        None => Ok(()),
     }
 }
 
@@ -4484,37 +4486,23 @@ fn discard_unbroadcast_delegation_setup_within(
                   )"
     );
     // A frozen bundle refuses the whole call before anything is written.
-    let frozen = frozen_by_proxy_slots(tx)?;
-    let first_frozen: Option<i64> = {
-        let sql = format!(
-            "SELECT bundles.bundle_index FROM bundles
-              WHERE {unbroadcast_bundles} AND {frozen}
-              ORDER BY bundles.bundle_index LIMIT 1"
-        );
-        let mut statement = tx.prepare(&sql).map_err(|e| VotingError::Internal {
-            message: format!("failed to prepare frozen setup check: {e}"),
-        })?;
-        match bundle_index {
-            Some(index) => statement.query_row(
-                named_params! {
-                    ":round_id": round_id,
-                    ":wallet_id": wallet_id,
-                    ":bundle_index": index,
-                },
-                |row| row.get(0),
-            ),
-            None => statement.query_row(
-                named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
-                |row| row.get(0),
-            ),
-        }
-        .optional()
-        .map_err(|e| VotingError::Internal {
-            message: format!("failed to check for frozen delegation setup: {e}"),
-        })?
-    };
-    if let Some(frozen_bundle) = first_frozen {
-        return Err(frozen_setup(frozen_bundle as u32, action));
+    match bundle_index {
+        Some(index) => refuse_if_frozen_by_proxy_slots(
+            tx,
+            &unbroadcast_bundles,
+            named_params! {
+                ":round_id": round_id,
+                ":wallet_id": wallet_id,
+                ":bundle_index": index,
+            },
+            action,
+        )?,
+        None => refuse_if_frozen_by_proxy_slots(
+            tx,
+            &unbroadcast_bundles,
+            named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
+            action,
+        )?,
     }
     // The guard is one expression, reused by every statement below, so no
     // deletion can be written with a weaker condition than the others.
@@ -4525,7 +4513,6 @@ fn discard_unbroadcast_delegation_setup_within(
            AND bundle_index IN (
                SELECT bundles.bundle_index FROM bundles
                 WHERE {unbroadcast_bundles}
-                  AND NOT {frozen}
            )"
     );
 

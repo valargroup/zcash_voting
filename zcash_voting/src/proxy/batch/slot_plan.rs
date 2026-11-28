@@ -199,55 +199,43 @@ fn load_slots(
               ORDER BY dc_slot",
         )
         .map_err(|error| VotingError::from_sqlite("prepare proxy slot plan query", &error))?;
-    let rows = statement
-        .query_map(
-            named_params! {
-                ":round_id": round_id,
-                ":wallet_id": wallet_id,
-                ":bundle_index": i64::from(bundle_index),
-            },
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<Vec<u8>>>(4)?,
-                    row.get::<_, Option<Vec<u8>>>(5)?,
-                ))
-            },
-        )
-        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-        .map_err(|error| VotingError::from_sqlite("load proxy slot plan", &error))?;
-    rows.into_iter()
-        .map(
-            |(dc_slot, delegate_index, weight_ballots, layout, nullifier, alpha_v)| {
-                let corrupt = |what: &str| VotingError::Internal {
-                    message: format!("stored proxy slot of bundle {bundle_index} has {what}"),
-                };
-                Ok(StoredSlot {
-                    dc_slot: u8::try_from(dc_slot).map_err(|_| corrupt("an invalid slot"))?,
-                    delegate_index: u32::try_from(delegate_index)
-                        .map_err(|_| corrupt("an invalid delegate index"))?,
-                    weight_ballots: u64::try_from(weight_ballots)
-                        .map_err(|_| corrupt("a negative weight"))?,
-                    layout: crate::proxy::layout_from_column(layout)
-                        .ok_or_else(|| corrupt("an unknown layout"))?,
-                    dc_slot_nullifier: nullifier
-                        .map(|bytes| <[u8; 32]>::try_from(bytes.as_slice()))
-                        .transpose()
-                        .map_err(|_| corrupt("a nullifier that is not 32 bytes"))?,
-                    alpha_v: alpha_v
-                        .map(|bytes| <[u8; 32]>::try_from(bytes.as_slice()))
-                        .transpose()
-                        .map_err(|_| corrupt("a randomizer that is not 32 bytes"))?,
-                })
-            },
-        )
-        .collect()
+    let sqlite = |error| VotingError::from_sqlite("load proxy slot plan", &error);
+    let corrupt = |what: &str| VotingError::Internal {
+        message: format!("stored proxy slot of bundle {bundle_index} has {what}"),
+    };
+    let mut rows = statement
+        .query(named_params! {
+            ":round_id": round_id,
+            ":wallet_id": wallet_id,
+            ":bundle_index": i64::from(bundle_index),
+        })
+        .map_err(sqlite)?;
+    let mut slots = Vec::new();
+    while let Some(row) = rows.next().map_err(sqlite)? {
+        let integer = |index| row.get::<_, i64>(index).map_err(sqlite);
+        let blob = |index, name| {
+            row.get::<_, Option<Vec<u8>>>(index)
+                .map_err(sqlite)?
+                .map(|bytes| crate::proxy::blob_array(name, bytes, corrupt))
+                .transpose()
+        };
+        slots.push(StoredSlot {
+            dc_slot: u8::try_from(integer(0)?).map_err(|_| corrupt("an invalid slot"))?,
+            delegate_index: u32::try_from(integer(1)?)
+                .map_err(|_| corrupt("an invalid delegate index"))?,
+            weight_ballots: u64::try_from(integer(2)?).map_err(|_| corrupt("a negative weight"))?,
+            layout: crate::proxy::layout_from_column(integer(3)?)
+                .ok_or_else(|| corrupt("an unknown layout"))?,
+            dc_slot_nullifier: blob(4, "nullifier")?,
+            alpha_v: blob(5, "randomizer")?,
+        });
+    }
+    Ok(slots)
 }
 
-/// Writes one slot's nullifier and randomizer, only if neither is stored yet.
+/// Writes one unplanned slot's nullifier and randomizer. The caller read the
+/// slot unplanned in its write transaction, and a trigger refuses rewriting
+/// either.
 fn write_slot_plan(
     conn: &Connection,
     round_id: &str,
@@ -257,28 +245,21 @@ fn write_slot_plan(
     dc_slot_nullifier: &[u8; 32],
     alpha_v: &[u8; 32],
 ) -> Result<(), VotingError> {
-    let written = conn
-        .execute(
-            "UPDATE proxy_slots SET dc_slot_nf = :nullifier, alpha_v = :alpha_v
-              WHERE round_id = :round_id AND wallet_id = :wallet_id
-                AND bundle_index = :bundle_index AND dc_slot = :dc_slot
-                AND dc_slot_nf IS NULL AND alpha_v IS NULL",
-            named_params! {
-                ":nullifier": dc_slot_nullifier.as_slice(),
-                ":alpha_v": alpha_v.as_slice(),
-                ":round_id": round_id,
-                ":wallet_id": wallet_id,
-                ":bundle_index": i64::from(bundle_index),
-                ":dc_slot": i64::from(dc_slot),
-            },
-        )
-        .map_err(|error| VotingError::from_sqlite("write proxy slot plan", &error))?;
-    if written != 1 {
-        return Err(VotingError::Internal {
-            message: format!("slot {dc_slot} of bundle {bundle_index} was planned concurrently"),
-        });
-    }
-    Ok(())
+    conn.execute(
+        "UPDATE proxy_slots SET dc_slot_nf = :nullifier, alpha_v = :alpha_v
+          WHERE round_id = :round_id AND wallet_id = :wallet_id
+            AND bundle_index = :bundle_index AND dc_slot = :dc_slot",
+        named_params! {
+            ":nullifier": dc_slot_nullifier.as_slice(),
+            ":alpha_v": alpha_v.as_slice(),
+            ":round_id": round_id,
+            ":wallet_id": wallet_id,
+            ":bundle_index": i64::from(bundle_index),
+            ":dc_slot": i64::from(dc_slot),
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| VotingError::from_sqlite("write proxy slot plan", &error))
 }
 
 /// The bundle's stored `van_comm_rand`, refusing a bundle without setup.

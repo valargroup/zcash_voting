@@ -2,19 +2,18 @@
 //! slot before any proof, and never amended.
 
 use super::fixtures::{
-    answered_db_with_bundle_weights, dump_table, request, seeded_rng, set_bundle_note_total,
-    FIXTURE_ROSTER, ROUND_ID, WALLET_ID,
+    already_voted, answered_db_with_bundle_weights, dump_table, request, seeded_rng,
+    set_bundle_note_total, FIXTURE_ROSTER, ROUND_ID, WALLET_ID,
 };
 use crate::{
-    proxy::{
-        commit_allocation, load_allocation, preview_allocation, AllocationRequest, DcShareLayout,
-        ProxyAllocationError,
+    proxy::{commit_allocation, load_allocation, preview_allocation, DcShareLayout},
+    wire::{
+        ProxyAllocationPreview, ProxyDelegateChoice, ProxyDelegationError, ProxyDelegationErrorKind,
     },
-    wire::ProxyAllocationPreview,
 };
 
 /// A request splitting a wallet across two delegates and keeping a fifth.
-fn two_delegates() -> AllocationRequest {
+fn two_delegates() -> Vec<ProxyDelegateChoice> {
     request(&[(17, 5_000), (3, 3_000)])
 }
 
@@ -24,7 +23,7 @@ fn two_delegates() -> AllocationRequest {
 #[test]
 fn a_commit_that_keeps_ballots_needs_the_kept_share_answered() {
     let db = answered_db_with_bundle_weights(&[60, 40]);
-    let attempt = |request: &AllocationRequest, roster: &[u32]| {
+    let attempt = |request: &[ProxyDelegateChoice], roster: &[u32]| {
         let plan = preview_allocation(&db, ROUND_ID, request, DcShareLayout::Standard).unwrap();
         commit_allocation(
             &db,
@@ -36,14 +35,15 @@ fn a_commit_that_keeps_ballots_needs_the_kept_share_answered() {
             &mut seeded_rng(10),
         )
     };
-    for (roster, unanswered) in [(&[1, 2][..], vec![2]), (&[][..], vec![])] {
-        assert!(
-            matches!(
-                attempt(&two_delegates(), roster),
-                Err(ProxyAllocationError::KeptShareUnanswered {
-                    kept_ballots: 20,
-                    unanswered: ref missing,
-                }) if *missing == unanswered
+    for (roster, unanswered) in [(&[1, 2][..], "[2]"), (&[][..], "[]")] {
+        assert_eq!(
+            attempt(&two_delegates(), roster).unwrap_err(),
+            ProxyDelegationError::new(
+                ProxyDelegationErrorKind::KeptShareUnanswered,
+                format!(
+                    "the allocation keeps 20 ballots, but proposals {unanswered} have no \
+                     answer: record the kept share's answers or delegate every ballot"
+                ),
             ),
             "{roster:?}"
         );
@@ -62,7 +62,8 @@ fn a_committed_allocation_is_its_preview_and_reads_back_unchanged() {
     let plan =
         preview_allocation(&db, ROUND_ID, &two_delegates(), DcShareLayout::Standard).unwrap();
     // Each bundle stores a sub-ballot remainder of zatoshi, which is dropped.
-    assert_eq!(plan.total_ballots(), 100);
+    let quota_ballots: u64 = plan.quotas().iter().map(|quota| quota.ballots).sum();
+    assert_eq!(quota_ballots + plan.kept_ballots(), 100);
 
     let committed = commit_allocation(
         &db,
@@ -75,10 +76,20 @@ fn a_committed_allocation_is_its_preview_and_reads_back_unchanged() {
     )
     .unwrap();
 
-    assert_eq!(committed.round_id(), ROUND_ID);
-    assert_eq!(committed.request(), &two_delegates());
-    assert_eq!(committed.layout(), DcShareLayout::Standard);
-    assert_eq!(committed.quotas(), plan.quotas());
+    assert_eq!(committed.choices(), two_delegates());
+    assert!(committed
+        .slots()
+        .iter()
+        .all(|slot| slot.layout == DcShareLayout::Standard));
+    for quota in plan.quotas() {
+        let slotted: u64 = committed
+            .slots()
+            .iter()
+            .filter(|slot| slot.delegate_index == quota.delegate_index)
+            .map(|slot| slot.weight_ballots)
+            .sum();
+        assert_eq!(slotted, quota.ballots);
+    }
     let mut planned: Vec<_> = plan
         .dcs()
         .iter()
@@ -153,9 +164,11 @@ fn no_call_amends_a_committed_allocation() {
         replaced.map(|_| ()),
         previewed.map(|_| ()),
     ] {
-        assert!(
-            matches!(refusal, Err(ProxyAllocationError::AlreadyCommitted)),
-            "{refusal:?}"
+        assert_eq!(
+            refusal,
+            Err(ProxyDelegationError::other(
+                "the round already has a committed proxy allocation"
+            ))
         );
     }
 
@@ -234,9 +247,9 @@ fn a_commit_refuses_a_plan_that_moved_since_its_preview() {
         &FIXTURE_ROSTER,
         &mut seeded_rng(7),
     );
-    assert!(
-        matches!(moved_layout, Err(ProxyAllocationError::PlanChanged)),
-        "{moved_layout:?}"
+    assert_eq!(
+        moved_layout.unwrap_err().kind,
+        ProxyDelegationErrorKind::PlanChanged
     );
 
     // A bundle's stored weight changed between preview and commit.
@@ -250,9 +263,9 @@ fn a_commit_refuses_a_plan_that_moved_since_its_preview() {
         &FIXTURE_ROSTER,
         &mut seeded_rng(8),
     );
-    assert!(
-        matches!(moved_weight, Err(ProxyAllocationError::PlanChanged)),
-        "{moved_weight:?}"
+    assert_eq!(
+        moved_weight.unwrap_err().kind,
+        ProxyDelegationErrorKind::PlanChanged
     );
     assert_eq!(load_allocation(&db, ROUND_ID).unwrap(), None);
     assert!(dump_table(&db, "proxy_slots").is_empty());
@@ -278,12 +291,11 @@ fn planning_needs_every_bundles_stored_weight() {
     let db = answered_db_with_bundle_weights(&[60, 40]);
     set_bundle_note_total(&db.conn(), WALLET_ID, 1, None);
     let refusal = preview_allocation(&db, ROUND_ID, &two_delegates(), DcShareLayout::Standard);
-    assert!(
-        matches!(
-            refusal,
-            Err(ProxyAllocationError::BundleWeightUnknown { bundle_index: 1 })
-        ),
-        "{refusal:?}"
+    assert_eq!(
+        refusal.unwrap_err(),
+        ProxyDelegationError::other(
+            "bundle 1 has no stored delegation setup, so its weight is unknown"
+        )
     );
 }
 
@@ -358,12 +370,15 @@ fn a_commit_refuses_a_bundle_whose_batch_could_never_be_proved() {
             &mut seeded_rng(8),
         );
 
-        match refused {
-            Err(ProxyAllocationError::AlreadyVoted { bundle_index: 1 }) if expect_vote => {}
-            Err(ProxyAllocationError::RegistrationUnusable { bundle_index: 1 }) if !expect_vote => {
-            }
-            other => panic!("{sql}: {other:?}"),
-        }
+        let expected = if expect_vote {
+            already_voted(1)
+        } else {
+            ProxyDelegationError::new(
+                ProxyDelegationErrorKind::RegistrationUnusable,
+                "bundle 1's registration cannot carry or fund a proxy batch",
+            )
+        };
+        assert_eq!(refused.unwrap_err(), expected, "{sql}");
         assert!(dump_table(&db, "proxy_slots").is_empty(), "{sql}");
     }
 

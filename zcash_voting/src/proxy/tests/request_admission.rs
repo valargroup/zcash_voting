@@ -1,15 +1,13 @@
-//! Every admission rule refuses with its own error before anything is
+//! Every admission rule refuses with its own reason before anything is
 //! planned.
 
 use super::fixtures::{bundles, choice, request};
-use crate::proxy::{
-    plan_allocation, AllocationPlanError, AllocationRequest, DcShareLayout, DelegateChoice,
-    MAX_PROXY_DELEGATES,
-};
+use crate::proxy::{plan_allocation, DcShareLayout};
+use crate::wire::{ProxyDelegateChoice, ProxyDelegationError};
 
 /// Plans `request` over bundles `0, 1, …` holding `weights`, returning the
 /// error it is refused with.
-fn refusal(request: &AllocationRequest, weights: &[u64]) -> AllocationPlanError {
+fn refusal(request: &[ProxyDelegateChoice], weights: &[u64]) -> ProxyDelegationError {
     plan_allocation(request, &bundles(weights), DcShareLayout::Standard)
         .expect_err("the request must be refused")
 }
@@ -19,7 +17,7 @@ fn refusal(request: &AllocationRequest, weights: &[u64]) -> AllocationPlanError 
 fn an_allocation_names_one_to_eight_delegates() {
     assert_eq!(
         refusal(&request(&[]), &[100]),
-        AllocationPlanError::NoDelegates
+        ProxyDelegationError::other("an allocation needs at least one delegate")
     );
 
     let eight: Vec<(u32, u16)> = (1..=8).map(|index| (index, 1_250)).collect();
@@ -29,9 +27,7 @@ fn an_allocation_names_one_to_eight_delegates() {
     let nine: Vec<(u32, u16)> = (1..=9).map(|index| (index, 1_000)).collect();
     assert_eq!(
         refusal(&request(&nine), &[100]),
-        AllocationPlanError::TooManyDelegates {
-            count: MAX_PROXY_DELEGATES + 1
-        }
+        ProxyDelegationError::other("an allocation names at most 8 delegates, got 9")
     );
 }
 
@@ -41,15 +37,15 @@ fn an_allocation_names_one_to_eight_delegates() {
 fn each_choice_names_a_distinct_real_delegate_with_a_share() {
     assert_eq!(
         refusal(&request(&[(0, 5_000)]), &[100]),
-        AllocationPlanError::ZeroDelegateIndex
+        ProxyDelegationError::other("delegate index 0 is not a registry entry")
     );
     assert_eq!(
         refusal(&request(&[(7, 2_000), (7, 3_000)]), &[100]),
-        AllocationPlanError::DuplicateDelegate { delegate_index: 7 }
+        ProxyDelegationError::other("delegate 7 is chosen more than once")
     );
     assert_eq!(
         refusal(&request(&[(7, 2_000), (8, 0)]), &[100]),
-        AllocationPlanError::ZeroBasisPoints { delegate_index: 8 }
+        ProxyDelegationError::other("delegate 8 needs a share of at least 1 basis point")
     );
 }
 
@@ -59,22 +55,20 @@ fn each_choice_names_a_distinct_real_delegate_with_a_share() {
 fn a_choice_names_a_canonical_handle_and_key() {
     let good = choice(5, 5_000);
     let malformed = [
-        DelegateChoice {
+        ProxyDelegateChoice {
             handle: "Delegate5".to_owned(),
             ..good.clone()
         },
-        DelegateChoice {
+        ProxyDelegateChoice {
             dk: "qqqs-yqcy-q5rq-wzqf".to_owned(),
             ..good
         },
     ];
     for choice in malformed {
-        let request = AllocationRequest {
-            choices: vec![choice.clone()],
-        };
+        let request = vec![choice.clone()];
         assert_eq!(
             refusal(&request, &[100]),
-            AllocationPlanError::InvalidDelegateIdentity { delegate_index: 5 },
+            ProxyDelegationError::other("delegate 5's handle or key is malformed"),
             "{choice:?}"
         );
     }
@@ -86,7 +80,7 @@ fn a_choice_names_a_canonical_handle_and_key() {
 fn shares_fit_the_round_and_the_rest_is_kept() {
     assert_eq!(
         refusal(&request(&[(1, 6_000), (2, 4_001)]), &[100]),
-        AllocationPlanError::BasisPointsExceedWhole { total_bps: 10_001 }
+        ProxyDelegationError::other("choices total 10001 basis points, more than 10000")
     );
     let quotas = |choices: &[(u32, u16)]| {
         let plan =
@@ -102,9 +96,12 @@ fn shares_fit_the_round_and_the_rest_is_kept() {
 #[test]
 fn bundles_exist_and_hold_weight() {
     let one_choice = request(&[(1, 5_000)]);
-    assert_eq!(refusal(&one_choice, &[]), AllocationPlanError::NoBundles);
+    assert_eq!(
+        refusal(&one_choice, &[]),
+        ProxyDelegationError::other("the round has no bundle to delegate from")
+    );
     assert_eq!(
         refusal(&one_choice, &[10, 0]),
-        AllocationPlanError::EmptyBundle { bundle_index: 1 }
+        ProxyDelegationError::other("bundle 1 holds no ballots")
     );
 }

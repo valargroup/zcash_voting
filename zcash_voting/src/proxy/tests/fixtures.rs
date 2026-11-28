@@ -11,12 +11,14 @@ use crate::{
     },
     governance::BALLOT_DIVISOR,
     proxy::{
-        commit_allocation, preview_allocation, AllocationRequest, BundleBallots,
-        CommittedAllocation, DcShareLayout, MAX_PROXY_DELEGATES, WHOLE_ALLOCATION_BPS,
+        commit_allocation, preview_allocation, BundleBallots, CommittedAllocation, DcShareLayout,
+        MAX_PROXY_DELEGATES, WHOLE_ALLOCATION_BPS,
     },
     storage::{queries, VotingDb},
     types::{Network, VotingRoundParams},
-    wire::ProxyAllocationPreview,
+    wire::{
+        ProxyAllocationPreview, ProxyDelegateChoice, ProxyDelegationError, ProxyDelegationErrorKind,
+    },
     ChainAdvancePolicy, RoundHostContext,
 };
 
@@ -28,14 +30,39 @@ pub(super) const WALLET_ID: &str = "proxy-wallet";
 
 pub(super) use super::submission_fixtures::delegate_choice as choice;
 
+/// The refusal of `delegates` delegates over `total_ballots` ballots, too few
+/// to give each one.
+pub(super) fn not_enough_voting_power(
+    total_ballots: u64,
+    delegates: usize,
+) -> ProxyDelegationError {
+    ProxyDelegationError::new(
+        ProxyDelegationErrorKind::NotEnoughVotingPower,
+        format!(
+            "{delegates} delegates need at least {delegates} ballots, the bundles hold \
+             {total_ballots}"
+        ),
+    )
+}
+
+/// The refusal of an allocation once a vote of `bundle_index` may have spent
+/// its VAN or saved a share plan.
+pub(super) fn already_voted(bundle_index: u32) -> ProxyDelegationError {
+    ProxyDelegationError::new(
+        ProxyDelegationErrorKind::AlreadyVoted,
+        format!(
+            "a vote of bundle {bundle_index} may already have spent its VAN or has a saved share \
+             plan, so the wallet cannot delegate"
+        ),
+    )
+}
+
 /// A request choosing each `(delegate_index, percent_bps)` in order.
-pub(super) fn request(choices: &[(u32, u16)]) -> AllocationRequest {
-    AllocationRequest {
-        choices: choices
-            .iter()
-            .map(|&(delegate_index, percent_bps)| choice(delegate_index, percent_bps))
-            .collect(),
-    }
+pub(super) fn request(choices: &[(u32, u16)]) -> Vec<ProxyDelegateChoice> {
+    choices
+        .iter()
+        .map(|&(delegate_index, percent_bps)| choice(delegate_index, percent_bps))
+        .collect()
 }
 
 /// Bundles `0, 1, …` holding `weights` ballots.
@@ -84,8 +111,8 @@ fn shares(delegates: usize, whole: bool) -> impl Strategy<Value = Vec<u16>> {
 /// A random request of 1 to 8 choices over 1 to 12 random bundles, with a
 /// random layout. Choice indices run against request order, so nothing can
 /// lean on index order to break ties.
-pub(super) fn planning_case() -> impl Strategy<Value = (AllocationRequest, Vec<u64>, DcShareLayout)>
-{
+pub(super) fn planning_case(
+) -> impl Strategy<Value = (Vec<ProxyDelegateChoice>, Vec<u64>, DcShareLayout)> {
     (1..=MAX_PROXY_DELEGATES, any::<bool>())
         .prop_flat_map(|(delegates, whole)| {
             (
@@ -98,13 +125,11 @@ pub(super) fn planning_case() -> impl Strategy<Value = (AllocationRequest, Vec<u
             )
         })
         .prop_map(|(shares, weights, layout)| {
-            let request = AllocationRequest {
-                choices: shares
-                    .iter()
-                    .enumerate()
-                    .map(|(position, &bps)| choice(50 - position as u32, bps))
-                    .collect(),
-            };
+            let request = shares
+                .iter()
+                .enumerate()
+                .map(|(position, &bps)| choice(50 - position as u32, bps))
+                .collect();
             (request, weights, layout)
         })
 }
@@ -269,7 +294,7 @@ pub(super) fn db_with_hotkey_setup(weights: &[u64]) -> VotingDb {
 /// CSPRNG.
 pub(super) fn commit(
     db: &VotingDb,
-    request: &AllocationRequest,
+    request: &Vec<ProxyDelegateChoice>,
     layout: DcShareLayout,
 ) -> CommittedAllocation {
     answer_roster(db, &db.wallet_id());

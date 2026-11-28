@@ -5,11 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::phases::{DelegationPhase, VotePhase};
-use crate::proxy::batch::ProxyBatchProgress;
 use crate::session::{
     CompletedVoteChoice, CompletedVoteDisplay, Decision, DelegationRecoveryWork,
-    DelegationRecoveryWorkKind, DelegationStatus, NextStep, ProxyBatchPlanStatus, ProxyBatchStage,
-    RoundPlan, RoundPlanAction, VoteRecoveryWork, VoteRecoveryWorkKind,
+    DelegationRecoveryWorkKind, DelegationStatus, NextStep, ProxyBatchPlanStatus, RoundPlan,
+    RoundPlanAction, VoteRecoveryWork, VoteRecoveryWorkKind,
 };
 use crate::share_policy::{
     immediate_share_bundle, round_immediate_share_key, VOTE_COMMITMENT_SHARE_COUNT,
@@ -233,37 +232,32 @@ pub(crate) fn project(
             _ => None,
         })
         .collect();
-    // Likewise a proxy batch whose first attempt carries the registration.
-    let signing_batches: BTreeSet<u32> = obligations
-        .obligations
-        .iter()
-        .filter_map(|obligation| match obligation {
-            Obligation::AdvanceProxyBatch {
-                bundle_index,
-                signs_registration: true,
-            } => Some(*bundle_index),
-            _ => None,
-        })
-        .collect();
     for step in &steps {
-        let signing_bundle = match step {
-            NextStep::CastVote { bundle_index, .. } if signing_casts.contains(bundle_index) => {
-                Some(*bundle_index)
+        if let NextStep::CastVote { bundle_index, .. } = step {
+            if signing_casts.contains(bundle_index) {
+                work_summary
+                    .delegation_bundles_needing_signing
+                    .push(*bundle_index);
+                work_summary
+                    .delegation_bundles_needing_work
+                    .push(*bundle_index);
             }
-            NextStep::AdvanceProxyBatch { bundle_index }
-                if signing_batches.contains(bundle_index) =>
-            {
-                Some(*bundle_index)
-            }
-            _ => None,
-        };
-        if let Some(bundle_index) = signing_bundle {
+        }
+    }
+    // Likewise a proxy batch whose first attempt carries the registration.
+    // Each such obligation projects its own `AdvanceProxyBatch` step.
+    for obligation in &obligations.obligations {
+        if let Obligation::AdvanceProxyBatch {
+            bundle_index,
+            signs_registration: true,
+        } = obligation
+        {
             work_summary
                 .delegation_bundles_needing_signing
-                .push(bundle_index);
+                .push(*bundle_index);
             work_summary
                 .delegation_bundles_needing_work
-                .push(bundle_index);
+                .push(*bundle_index);
         }
     }
     work_summary
@@ -332,13 +326,7 @@ pub(crate) fn project(
             .iter()
             .map(|(&bundle_index, status)| ProxyBatchPlanStatus {
                 bundle_index,
-                stage: match status.progress {
-                    ProxyBatchProgress::Planned => ProxyBatchStage::Planned,
-                    ProxyBatchProgress::Proved => ProxyBatchStage::Proved,
-                    ProxyBatchProgress::InFlight { refused: false } => ProxyBatchStage::Dispatched,
-                    ProxyBatchProgress::InFlight { refused: true } => ProxyBatchStage::Refused,
-                    ProxyBatchProgress::Landed => ProxyBatchStage::Landed,
-                },
+                stage: status.progress,
             })
             .collect(),
         fully_delegated_bundles: obligations

@@ -506,12 +506,7 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
                     request.identity().wallet_id(),
                     request.identity().bundle_index(),
                 )
-                .map_err(|error| {
-                    ChainSubmissionFailure::without_state(
-                        ChainSubmissionFailureKind::Storage,
-                        error.to_string(),
-                    )
-                })?
+                .map_err(map_generation_error)?
             {
                 return Err(ChainSubmissionFailure::without_state(
                     ChainSubmissionFailureKind::InvalidInput,
@@ -888,16 +883,13 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
                 ));
             }
             let durable_state = record.durable_state();
-            let diagnostic = retirement.diagnostic();
-            let registration_position = match retirement {
-                ProxyRetirement::RegistrationLanded {
-                    registration_position,
-                } => Some(registration_position),
-                ProxyRetirement::Expired(_) => None,
-            };
-            let retired = retired_proxy_record(record, diagnostic, now)?;
-            apply_proxy_retirement(tx, expected_generation.identity(), registration_position)
-                .map_err(|error| {
+            let retired = retired_proxy_record(record, retirement.diagnostic(), now)?;
+            if let ProxyRetirement::RegistrationLanded {
+                registration_position,
+            } = retirement
+            {
+                apply_proxy_retirement(tx, expected_generation.identity(), registration_position)
+                    .map_err(|error| {
                     ChainSubmissionFailure::with_durable_state(
                         match error {
                             crate::types::VotingError::InvalidInput { .. } => {
@@ -909,6 +901,7 @@ impl ChainSubmissionStore for SqliteChainSubmissionStore {
                         error.to_string(),
                     )
                 })?;
+            }
             tx.execute(
                 "DELETE FROM chain_submissions WHERE identity_key=?1",
                 [submission_identity_key(expected_generation.identity())],

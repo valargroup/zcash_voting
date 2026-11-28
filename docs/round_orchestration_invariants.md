@@ -310,8 +310,8 @@ persisted recovery bundles rather than from the constant.
 A committed proxy allocation places DCs on some of the round's bundles. Each
 such bundle owes one 0x09 batch, and the planner reads how far it has come from
 the same snapshot as everything else: `Planned` (committed slots and no proved
-batch), `Proved` (proved, nothing on the wire), `InFlight` (a lifecycle row is
-unresolved; `refused` while it records the chain's refusal) or `Landed`, with
+batch), `Proved` (proved, nothing on the wire), `Dispatched` (a lifecycle row is
+unresolved), `Refused` (it records the chain's refusal) or `Landed`, with
 whether the registration's signature is still needed
 (`the_snapshot_reads_each_batch_s_submission_state`).
 `docs/chain_submission_invariants.md` owns the batch's chain lifecycle and its
@@ -340,25 +340,22 @@ them.
   `the_hold_lifts_only_when_the_batch_lands`). Only landing lifts the hold: a
   landed batch's successor VAN is the bundle's. A refused batch may still
   land, so it holds until it does or voting ends. The acts re-read the hold
-  themselves (see Check-then-act): saving a vote, and a cast's first
-  broadcast reservation, refuse a bundle that has slots and no confirmed
-  0x09
-  (`a_bundle_held_by_its_proxy_batch_prepares_no_vote`,
+  themselves (see Check-then-act;
+  `a_bundle_held_by_its_proxy_batch_prepares_no_vote`,
   `a_bundle_held_by_its_proxy_batch_reserves_no_cast`). The other direction
   is settled before any slot exists: a commit refuses a bundle whose batch
   could never be proved, since every batch waits for every bundle's proof
   (`first_unprovable_proxy_batch`; `AlreadyVoted` for a vote that may have
   spent the VAN or reduced its proposal authority, `RegistrationUnusable`
   for a terminal or rejection-blocked registration;
-  `a_commit_refuses_a_bundle_whose_batch_could_never_be_proved`). An
-  undispatched vote without a saved share plan does not refuse a commit; the
-  commit holds its bundle. Once a vote's share plan is saved the commit
-  refuses with `AlreadyVoted`, because that plan fixed the round's immediate
-  share (see the helper specification's "Share count and identity", item 3).
+  `a_commit_refuses_a_bundle_whose_batch_could_never_be_proved`). Any saved
+  vote share plan of the round also refuses the commit with `AlreadyVoted`,
+  and an undispatched vote without one is held instead (see the helper
+  specification's "Share count and identity", item 3).
 - **`AdvanceProxyBatch`** is planned for a `Proved` batch once every bundle's
   batch is proved and no cast may have spent its VAN, so no batch lands while
-  another could still fail to prove; and for every `InFlight` batch, refused
-  or not (`every_batch_is_proved_before_any_is_broadcast`,
+  another could still fail to prove; and for every `Dispatched` or `Refused`
+  batch (`every_batch_is_proved_before_any_is_broadcast`,
   `a_cast_that_may_have_spent_the_van_holds_a_proved_batch`,
   `a_batch_on_the_wire_is_advanced_until_it_lands`).
   A batch whose first attempt carries the registration names its bundle in
@@ -371,11 +368,10 @@ them.
 - **The step.** With nothing on the wire, `AdvanceProxyBatch` refuses a new
   attempt after the authenticated vote end with `VoteEnded`, requires the
   bound hotkey, takes the registration's SpendAuth signature from the
-  delegation driver once when the batch carries it, signs D1 with an expiry
-  500 blocks past the highest height any endpoint reports, persists the
-  attempt and reports `ProxyBatchSigned` before the POST. It then runs one
-  exact-tree episode. An attempt answered expired is re-signed, with no new
-  proof or device signature, at most twice per step
+  delegation driver once when the batch carries it, signs and persists the
+  attempt as the chain specification's "Proxy delegation batches" says,
+  and reports `ProxyBatchSigned` before the POST. It then runs one exact-tree
+  episode, re-signing an attempt answered expired at most twice per step
   (`an_attempt_is_signed_and_durable_before_its_post_and_landing_lifts_the_hold`,
   `an_expired_attempt_is_re_signed_with_no_new_proof_or_device_signature`,
   `a_new_attempt_after_the_vote_end_is_refused`). Landing and a split-off
@@ -383,9 +379,8 @@ them.
   against the chain anchor
   (`a_lifted_registration_splits_the_batch_off_to_be_proved_again`).
 - **A refused batch.** A pause or any other refusal leaves the batch
-  `InFlight` and the step `Pending`, so the next step sends it again until it
-  lands or voting ends. A committed delegation is final, so nothing returns
-  its weight (`a_refused_batch_stays_pending_and_is_sent_again`,
+  `Refused` and the step `Pending`, so the next step sends it again until it
+  lands or voting ends (`a_refused_batch_stays_pending_and_is_sent_again`,
   `a_paused_batch_stays_recoverable_and_retries_once_the_pause_lifts`).
 - **The persisted batch layout.** The share layout is chosen once, from the
   last-moment window, when the allocation is committed: single share if and
@@ -427,8 +422,7 @@ them.
   proves the registration's ZKP1 through the host's delegation driver when the
   delegation is unregistered (proof only; it never signs), or syncs the vote
   tree for the confirmed VAN's witness, then builds every DC in slot order and
-  proves all ZKP4s. The ZKP4 proving key is loaded only for that phase and is
-  never warmed at startup. It stops at a stored, proved, unsigned batch
+  proves all ZKP4s. It stops at a stored, proved, unsigned batch
   (`the_registration_is_proved_before_any_dc`,
   `a_confirmed_registration_anchors_its_batch_in_the_vote_tree`,
   `a_batch_after_the_vote_end_is_refused`, `a_batch_needs_the_round_hotkey`;
@@ -480,12 +474,10 @@ exactly as before
   timing. The intents stay durable, the plan that
   `RoundExecutor::set_ballot_intents` returns carries the diagnostic
   (`nothing_left_to_vote`, `fully_delegated_bundles`).
-- **No immediate share.** The round's immediate share is designated on the
-  highest bundle that is not fully delegated (`immediate_share_bundle`, the
-  one rule round planning and helper planning share), so it never names a
-  share no vote will have; with every bundle fully delegated there is none. A
-  designation already persisted stands
-  (`the_immediate_share_skips_a_fully_delegated_higher_bundle`,
+- **No immediate share.** A fully delegated bundle never carries the round's
+  immediate share, so with every bundle fully delegated there is none (see
+  the helper specification's "Share count and identity", item 3;
+  `the_immediate_share_skips_a_fully_delegated_higher_bundle`,
   `a_lower_bundle_s_vote_carries_the_immediate_share_past_a_fully_delegated_one`).
 - **Work already on the chain lifecycle survives.** A submitted vote on a
   fully delegated bundle is still reconciled and a confirmed one still owes

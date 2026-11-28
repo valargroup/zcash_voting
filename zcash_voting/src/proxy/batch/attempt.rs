@@ -15,20 +15,16 @@ use zcash_vote_delegate::{
     ProxyDelegationBatchFields,
 };
 
-use super::{
-    batch_store,
-    slot_plan::{decode_round_id, load_planned_slots},
-    ProvedProxyBatch,
-};
+use super::{batch_store, slot_plan::decode_round_id, ProvedProxyBatch};
 use crate::{
     backend::orchard::primitives::redpallas::{Signature, SpendAuth, VerificationKey},
-    proxy::PROXY_BATCH_EXPIRY_BLOCKS,
+    proxy::{blob_array, PROXY_BATCH_EXPIRY_BLOCKS},
     storage::VotingDb,
     types::{Network, VotingError},
 };
 
 /// The newest signed attempt of a bundle's batch, as stored.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SignedBatchAttempt {
     /// D1 with expiry 0, the batch's identity across attempts.
     pub(crate) batch_digest: [u8; 32],
@@ -40,17 +36,6 @@ pub(crate) struct SignedBatchAttempt {
     pub(crate) expiry_height: u64,
     /// One D1 signature per DC, in slot order.
     pub(crate) dc_signatures: Vec<[u8; 64]>,
-}
-
-impl std::fmt::Debug for SignedBatchAttempt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignedBatchAttempt")
-            .field("batch_digest", &hex::encode(self.batch_digest))
-            .field("chain_id", &self.chain_id)
-            .field("expiry_height", &self.expiry_height)
-            .field("dc_count", &self.dc_signatures.len())
-            .finish_non_exhaustive()
-    }
 }
 
 /// What signing an attempt of one bundle's batch needs.
@@ -105,7 +90,7 @@ pub(crate) fn sign_batch_attempt(
             .ok_or_else(|| VotingError::InvalidInput {
                 message: format!("bundle {bundle_index} has no proved proxy batch to sign"),
             })?;
-        if batch_store::lifecycle_state(tx, request.round_id, &wallet_id, bundle_index)?.is_some() {
+        if batch_store::has_lifecycle_row(tx, request.round_id, &wallet_id, bundle_index)? {
             return Err(VotingError::InvalidInput {
                 message: format!(
                     "bundle {bundle_index}'s proxy batch has a submission that may be on the \
@@ -185,20 +170,13 @@ pub(crate) fn sign_batch_attempt(
             }
         }
         let d1 = proxy_batch_sighash(request.chain_id, &fields).map_err(digest_error)?;
-        let slots = load_planned_slots(tx, request.round_id, &wallet_id, bundle_index)?;
         let mut dc_signatures = Vec::with_capacity(batch.dcs.len());
         for dc in &batch.dcs {
-            let slot = slots
-                .iter()
-                .find(|slot| slot.dc_slot == dc.dc_slot)
-                .ok_or_else(|| VotingError::Internal {
-                    message: format!("proved DC in slot {} has no planned slot", dc.dc_slot),
-                })?;
             let signature = crate::vote_commitment::sign_cast_vote_digest(
                 request.hotkey_seed,
                 request.network,
                 &d1,
-                &slot.alpha_v,
+                &dc.alpha_v,
             )?
             .vote_auth_sig;
             let signature: [u8; 64] =
@@ -225,14 +203,7 @@ pub(crate) fn sign_batch_attempt(
             expiry_height,
             dc_signatures,
         };
-        write_attempt(
-            tx,
-            request.round_id,
-            &wallet_id,
-            bundle_index,
-            &attempt,
-            stored.is_some(),
-        )?;
+        write_attempt(tx, request.round_id, &wallet_id, bundle_index, &attempt)?;
         Ok(AttemptSigning {
             attempt,
             signed_now: true,
@@ -246,8 +217,8 @@ pub(crate) struct SubmissionState {
     pub(crate) carries_registration: bool,
     /// The newest signed attempt, if stored.
     pub(crate) attempt: Option<SignedBatchAttempt>,
-    /// The `state` of the batch's lifecycle row, if any.
-    pub(crate) lifecycle_state: Option<String>,
+    /// The batch has a lifecycle row, so an attempt may be on the wire.
+    pub(crate) has_lifecycle_row: bool,
 }
 
 /// Reads `bundle_index`'s submission state in one read transaction, refusing
@@ -259,14 +230,32 @@ pub(crate) fn load_submission_state(
 ) -> Result<SubmissionState, VotingError> {
     let wallet_id = db.wallet_id();
     db.read_transaction("load proxy batch submission state", |tx| {
-        let batch = batch_store::load_proved_batch(tx, round_id, &wallet_id, bundle_index)?
+        let anchor_height: i64 = tx
+            .query_row(
+                "SELECT anchor_height FROM proxy_batches
+                  WHERE round_id = :round_id AND wallet_id = :wallet_id
+                    AND bundle_index = :bundle_index",
+                named_params! {
+                    ":round_id": round_id,
+                    ":wallet_id": wallet_id,
+                    ":bundle_index": i64::from(bundle_index),
+                },
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| VotingError::from_sqlite("load proved proxy batch", &error))?
             .ok_or_else(|| VotingError::InvalidInput {
                 message: format!("bundle {bundle_index} has no proved proxy batch"),
             })?;
         Ok(SubmissionState {
-            carries_registration: batch.anchor_height == 0,
+            carries_registration: anchor_height == 0,
             attempt: load_signed_attempt(tx, round_id, &wallet_id, bundle_index)?,
-            lifecycle_state: batch_store::lifecycle_state(tx, round_id, &wallet_id, bundle_index)?,
+            has_lifecycle_row: batch_store::has_lifecycle_row(
+                tx,
+                round_id,
+                &wallet_id,
+                bundle_index,
+            )?,
         })
     })
 }
@@ -314,14 +303,11 @@ pub(crate) fn load_signed_attempt(
         return Err(corrupt("signatures that are not 64 bytes each"));
     }
     Ok(Some(SignedBatchAttempt {
-        batch_digest: digest
-            .try_into()
-            .map_err(|_| corrupt("a batch digest that is not 32 bytes"))?,
+        batch_digest: blob_array("batch digest", digest, corrupt)?,
         chain_id,
         registration_signature: registration
-            .map(|signature| signature.try_into())
-            .transpose()
-            .map_err(|_| corrupt("a registration signature that is not 64 bytes"))?,
+            .map(|signature| blob_array("registration signature", signature, corrupt))
+            .transpose()?,
         expiry_height: u64::try_from(expiry).map_err(|_| corrupt("a negative expiry height"))?,
         dc_signatures: dc_signatures.to_vec(),
     }))
@@ -407,14 +393,15 @@ pub(crate) fn verify_dc_signature(
         })
 }
 
-/// Writes `attempt`, inserting the batch's first or replacing the stored one.
+/// Writes `attempt`, inserting the batch's first or replacing the stored
+/// one's expiry and signatures. The caller read the stored attempt in its
+/// write transaction and checked its digest and chain id match.
 fn write_attempt(
     conn: &Connection,
     round_id: &str,
     wallet_id: &str,
     bundle_index: u32,
     attempt: &SignedBatchAttempt,
-    replaces_stored: bool,
 ) -> Result<(), VotingError> {
     let signatures: Vec<u8> = attempt.dc_signatures.iter().flatten().copied().collect();
     let params = named_params! {
@@ -430,34 +417,19 @@ fn write_attempt(
         ":dc_signatures": signatures,
         ":signed_at": i64::try_from(crate::proxy::unix_now()).unwrap_or(i64::MAX),
     };
-    let written = if replaces_stored {
-        conn.execute(
-            "UPDATE proxy_batch_attempts
-                SET expiry_height = :expiry_height, dc_signatures = :dc_signatures,
-                    signed_at = :signed_at
-              WHERE round_id = :round_id AND wallet_id = :wallet_id
-                AND bundle_index = :bundle_index AND batch_digest = :batch_digest
-                AND chain_id = :chain_id
-                AND registration_spend_auth_sig IS :registration",
-            params,
-        )
-    } else {
-        conn.execute(
-            "INSERT INTO proxy_batch_attempts
-                 (round_id, wallet_id, bundle_index, batch_digest, chain_id,
-                  registration_spend_auth_sig, expiry_height, dc_signatures, signed_at)
-             VALUES (:round_id, :wallet_id, :bundle_index, :batch_digest, :chain_id,
-                     :registration, :expiry_height, :dc_signatures, :signed_at)",
-            params,
-        )
-    }
-    .map_err(|error| VotingError::from_sqlite("persist proxy batch attempt", &error))?;
-    if written != 1 {
-        return Err(VotingError::Internal {
-            message: format!("bundle {bundle_index}'s proxy batch attempt changed while signing"),
-        });
-    }
-    Ok(())
+    conn.execute(
+        "INSERT INTO proxy_batch_attempts
+             (round_id, wallet_id, bundle_index, batch_digest, chain_id,
+              registration_spend_auth_sig, expiry_height, dc_signatures, signed_at)
+         VALUES (:round_id, :wallet_id, :bundle_index, :batch_digest, :chain_id,
+                 :registration, :expiry_height, :dc_signatures, :signed_at)
+         ON CONFLICT (round_id, wallet_id, bundle_index) DO UPDATE
+            SET expiry_height = excluded.expiry_height,
+                dc_signatures = excluded.dc_signatures, signed_at = excluded.signed_at",
+        params,
+    )
+    .map(|_| ())
+    .map_err(|error| VotingError::from_sqlite("persist proxy batch attempt", &error))
 }
 
 /// Maps a D1 digest failure to an input error.

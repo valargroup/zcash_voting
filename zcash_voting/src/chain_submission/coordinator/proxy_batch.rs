@@ -16,87 +16,68 @@ use crate::chain_submission::{
     ChainSubmissionPending, ChainSubmissionResult, ChainSubmissionState, ChainTransport,
 };
 
+/// A definite 0x09 failure a pass settles.
+pub(super) enum ProxyFailure<'a> {
+    /// The chain rejected a POST.
+    Rejected(ChainRejectionKind, ChainSubmissionDiagnostic),
+    /// The candidate committed unsuccessfully, read from a row in the given
+    /// state and classified on the codespace its lookup reported.
+    Committed(&'a CommittedTransaction, ChainSubmissionState),
+}
+
 impl<T, S, C> ChainSubmissionCoordinator<T, S, C>
 where
     T: ChainTransport,
     S: ChainSubmissionStore,
     C: ChainSubmissionClock,
 {
-    /// Settles a definite answer to a 0x09 POST.
+    /// Settles a definite 0x09 failure.
     ///
     /// An expiry retires the generation and spent nullifiers run one tree
     /// pass. Any other refusal leaves the row `Recovering` and pending,
     /// keeping any dispatch ambiguity it records, so a later step sends it
     /// again.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the settlement keeps each captured authority explicit"
-    )]
-    pub(super) async fn settle_proxy_rejection(
+    pub(super) async fn settle_proxy_failure(
         &self,
         request: &StoreAdvancementRequest,
         operation: &CapturedSubmissionOperation,
         lease: &SubmissionOperationLease,
         derived: &DerivedChainSubmission,
-        kind: ChainRejectionKind,
-        diagnostic: ChainSubmissionDiagnostic,
+        failure: ProxyFailure<'_>,
         control: &dyn SubmissionControl,
     ) -> Result<ChainSubmissionResult, ChainSubmissionFailure> {
-        match kind {
-            ChainRejectionKind::ProxyBatchExpired => self
-                .retire_proxy_after_post(request, derived, ProxyRetirement::Expired(diagnostic))?
-                .public_result(),
-            ChainRejectionKind::ProxyBatchPaused | ChainRejectionKind::Other => {
-                let refusal = refusal_diagnostic(kind, diagnostic);
-                self.classify_dispatched_post(
-                    derived.generation(),
-                    SubmissionObservation::DefiniteRejection(refusal.clone()),
-                )?;
-                Ok(ChainSubmissionResult::Pending(
-                    ChainSubmissionPending::Recovering {
-                        candidate_transaction_hash: None,
-                        diagnostic: refusal,
-                    },
-                ))
-            }
-            ChainRejectionKind::NullifierAlreadySpent => {
-                let current = self.classify_dispatched_post(
-                    derived.generation(),
-                    SubmissionObservation::DefiniteRejection(diagnostic.clone()),
-                )?;
-                self.settle_proxy_nullifier_spent(
-                    request, operation, lease, derived, current, control,
+        // The committed failure's row state, or `None` for a POST answer.
+        let (kind, diagnostic, durable_state) = match failure {
+            ProxyFailure::Rejected(kind, diagnostic) => (kind, diagnostic, None),
+            ProxyFailure::Committed(committed, durable_state) => {
+                let codespace = committed.codespace.as_deref().unwrap_or_default();
+                let message = format!(
+                    "proxy batch transaction committed unsuccessfully with {codespace} code {}",
+                    committed.code
+                );
+                (
+                    proxy_batch_rejection_kind(codespace, committed.code),
+                    ChainSubmissionDiagnostic::from_redacted_message(
+                        ChainSubmissionDiagnosticKind::ChainRejected,
+                        message,
+                    ),
+                    Some(durable_state),
                 )
-                .await
             }
-        }
-    }
-
-    /// Settles a 0x09 candidate that committed unsuccessfully, classified on
-    /// the codespace its lookup reported.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the settlement keeps each captured authority explicit"
-    )]
-    pub(super) async fn settle_proxy_committed_failure(
-        &self,
-        request: &StoreAdvancementRequest,
-        operation: &CapturedSubmissionOperation,
-        lease: &SubmissionOperationLease,
-        derived: &DerivedChainSubmission,
-        committed: &CommittedTransaction,
-        durable_state: ChainSubmissionState,
-        control: &dyn SubmissionControl,
-    ) -> Result<ChainSubmissionResult, ChainSubmissionFailure> {
-        let codespace = committed.codespace.as_deref().unwrap_or_default();
-        let diagnostic = ChainSubmissionDiagnostic::from_redacted_message(
-            ChainSubmissionDiagnosticKind::ChainRejected,
-            format!(
-                "proxy batch transaction committed unsuccessfully with {codespace} code {}",
-                committed.code
+        };
+        let record = |diagnostic: &ChainSubmissionDiagnostic| match durable_state {
+            None => self.classify_dispatched_post(
+                derived.generation(),
+                SubmissionObservation::DefiniteRejection(diagnostic.clone()),
             ),
-        );
-        match proxy_batch_rejection_kind(codespace, committed.code) {
+            Some(durable_state) => self.reconcile_with_durable_state(
+                derived.generation(),
+                SubmissionObservation::CandidateCommittedFailure(diagnostic.clone()),
+                Some(diagnostic.clone()),
+                durable_state,
+            ),
+        };
+        match kind {
             ChainRejectionKind::ProxyBatchExpired => self
                 .retire_proxy(
                     request,
@@ -105,25 +86,23 @@ where
                     durable_state,
                 )?
                 .public_result(),
-            kind @ (ChainRejectionKind::ProxyBatchPaused | ChainRejectionKind::Other) => {
+            ChainRejectionKind::ProxyBatchPaused | ChainRejectionKind::Other => {
                 let refusal = refusal_diagnostic(kind, diagnostic);
-                self.reconcile_with_durable_state(
-                    derived.generation(),
-                    SubmissionObservation::CandidateCommittedFailure(refusal.clone()),
-                    Some(refusal),
-                    durable_state,
-                )?
-                .public_result()
+                let recorded = record(&refusal)?;
+                if durable_state.is_some() {
+                    return recorded.public_result();
+                }
+                Ok(ChainSubmissionResult::Pending(
+                    ChainSubmissionPending::Recovering {
+                        candidate_transaction_hash: None,
+                        diagnostic: refusal,
+                    },
+                ))
             }
             // Spent nullifiers under a committed candidate prove something
             // spent them first: an earlier attempt or a lifted registration.
             ChainRejectionKind::NullifierAlreadySpent => {
-                let current = self.reconcile_with_durable_state(
-                    derived.generation(),
-                    SubmissionObservation::CandidateCommittedFailure(diagnostic.clone()),
-                    Some(diagnostic.clone()),
-                    durable_state,
-                )?;
+                let current = record(&diagnostic)?;
                 self.settle_proxy_nullifier_spent(
                     request, operation, lease, derived, current, control,
                 )
@@ -176,7 +155,7 @@ where
                     ProxyRetirement::RegistrationLanded {
                         registration_position: position,
                     },
-                    ChainSubmissionState::Recovering,
+                    Some(ChainSubmissionState::Recovering),
                 )?
                 .public_result(),
             RecoveryScan::NoMatch(_discarded_authorization) => current.public_result(),
@@ -185,38 +164,26 @@ where
         }
     }
 
-    /// Retires a 0x09 generation. A failure reports `durable_state`, since the
-    /// row is unchanged.
+    /// Retires a 0x09 generation. A failure leaves the row unchanged, so it
+    /// reports `durable_state`, or possible dispatch when that is `None`
+    /// after a POST answer.
     pub(super) fn retire_proxy(
         &self,
         request: &StoreAdvancementRequest,
         derived: &DerivedChainSubmission,
         retirement: ProxyRetirement,
-        durable_state: ChainSubmissionState,
+        durable_state: Option<ChainSubmissionState>,
     ) -> Result<StoredChainSubmission, ChainSubmissionFailure> {
-        let attach_state = |error: ChainSubmissionFailure| error.or_durable_state(durable_state);
+        let attach_state = |error: ChainSubmissionFailure| match durable_state {
+            Some(durable_state) => error.or_durable_state(durable_state),
+            None => {
+                ChainSubmissionFailure::with_known_possible_dispatch(error.kind(), error.message())
+            }
+        };
         let now = self.clock.now_seconds().map_err(attach_state)?;
         self.store
             .retire_proxy_generation(request, derived.generation(), retirement, now)
             .map_err(attach_state)
-    }
-
-    /// Retires after a POST answer. A failure reports possible dispatch,
-    /// since the reserved row is unchanged.
-    fn retire_proxy_after_post(
-        &self,
-        request: &StoreAdvancementRequest,
-        derived: &DerivedChainSubmission,
-        retirement: ProxyRetirement,
-    ) -> Result<StoredChainSubmission, ChainSubmissionFailure> {
-        let now = self.clock.now_seconds().map_err(|error| {
-            ChainSubmissionFailure::with_known_possible_dispatch(error.kind(), error.message())
-        })?;
-        self.store
-            .retire_proxy_generation(request, derived.generation(), retirement, now)
-            .map_err(|error| {
-                ChainSubmissionFailure::with_known_possible_dispatch(error.kind(), error.message())
-            })
     }
 }
 

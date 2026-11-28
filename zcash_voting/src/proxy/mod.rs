@@ -2,21 +2,16 @@
 //! delegates through delegation commitments (DCs), per proxy delegation
 //! contracts-v1.
 //!
-//! The feature is dormant (see [`PROXY_DELEGATION_ENABLED`]). No existing flow
-//! calls into this module, so the schema version 26 tables stay empty until a
-//! wallet commits an allocation.
+//! The feature is dormant (see [`PROXY_DELEGATION_ENABLED`]), so the schema
+//! version 26 tables stay empty until a wallet commits an allocation.
 //!
 //! A delegator's round runs in this order.
-//! 1. **Allocate.** [`preview_allocation`] turns 1 to [`MAX_PROXY_DELEGATES`]
-//!    percentage choices into whole-ballot quotas packed into the wallet's
-//!    bundles. [`commit_allocation`] re-plans under the write lock, refuses
-//!    a plan that moved since its preview or a kept share without answers,
-//!    and stores the round's one immutable allocation with every DC's slot,
-//!    so nothing a proof depends on is chosen later. From then on each
-//!    bundle with slots is frozen and held from casts until its batch
-//!    lands.
-//! 2. **Derive secrets.** [`ProxyRoundKey`] derives each DC's seed from the
-//!    round hotkey, never from wallet keys.
+//! 1. **Allocate.** [`preview_allocation`] packs 1 to [`MAX_PROXY_DELEGATES`]
+//!    percentage choices into the wallet's bundles, and [`commit_allocation`]
+//!    stores that plan once, with every DC's slot. From then on each bundle
+//!    with slots is frozen and held from casts until its batch lands.
+//! 2. **Derive secrets.** Each DC's seed comes from the round hotkey
+//!    (`proxy_round_key`), never from wallet keys.
 //! 3. **Plan and prove.** The `ProxyDelegate` step plans each bundle's batch
 //!    once and proves it (ZKP1 when it carries the registration, then every
 //!    ZKP4), stopping at a stored, proved, unsigned batch.
@@ -36,7 +31,6 @@ pub mod delegate;
 mod delegator;
 mod planner;
 pub mod registry;
-mod secrets;
 
 /// Whether this build offers proxy delegation to hosts.
 ///
@@ -68,6 +62,51 @@ pub(crate) fn unix_now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// Runs `body` in one transaction of `behavior`, committing only when it
+/// succeeds, for a body whose error type takes a
+/// [`VotingError`](crate::types::VotingError).
+pub(crate) fn in_transaction<T, E: From<crate::types::VotingError>>(
+    db: &crate::storage::VotingDb,
+    behavior: rusqlite::TransactionBehavior,
+    context: &str,
+    body: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, E>,
+) -> Result<T, E> {
+    let sqlite_error =
+        |error: rusqlite::Error| crate::types::VotingError::from_sqlite(context, &error);
+    let mut conn = db.conn();
+    let tx = conn
+        .transaction_with_behavior(behavior)
+        .map_err(sqlite_error)?;
+    let value = body(&tx)?;
+    tx.commit().map_err(sqlite_error)?;
+    Ok(value)
+}
+
+/// The round hotkey's proxy key `hrk` for one round (contract §11.1), the
+/// root of every DC secret in it, which [`zcash_vote_delegate::dc_seed`]
+/// expands into one DC's seed. `hotkey_secret` is the 32 bytes of the round
+/// hotkey's Orchard spending key, derived as the vote flow derives it for
+/// ZKP2. Nothing comes from the wallet seed, OVK or FVK, so a viewing-key
+/// holder cannot read a delegation. Zeroed on drop.
+pub(crate) fn proxy_round_key(
+    hotkey_secret: &[u8; 32],
+    network: crate::types::Network,
+    round_id: &[u8; 32],
+) -> zeroize::Zeroizing<[u8; 32]> {
+    use crate::types::Network;
+    // `net_u8` matches the chain-submission network rank.
+    let network = match network {
+        Network::Mainnet => zcash_vote_delegate::ZcashNetwork::Mainnet,
+        Network::Testnet => zcash_vote_delegate::ZcashNetwork::Testnet,
+        Network::Regtest => zcash_vote_delegate::ZcashNetwork::Regtest,
+    };
+    zeroize::Zeroizing::new(zcash_vote_delegate::hotkey_round_key(
+        hotkey_secret,
+        network,
+        round_id,
+    ))
+}
+
 /// The share layout a stored `layout` column names (`layout_u8`), if any.
 pub(crate) fn layout_from_column(value: i64) -> Option<DcShareLayout> {
     match value {
@@ -77,16 +116,27 @@ pub(crate) fn layout_from_column(value: i64) -> Option<DcShareLayout> {
     }
 }
 
+/// A stored BLOB as `[u8; N]`, refusing another length with
+/// `corrupt("a {name} that is not {N} bytes")`.
+pub(in crate::proxy) fn blob_array<const N: usize, E>(
+    name: &str,
+    bytes: impl AsRef<[u8]>,
+    corrupt: impl FnOnce(&str) -> E,
+) -> Result<[u8; N], E> {
+    bytes
+        .as_ref()
+        .try_into()
+        .map_err(|_| corrupt(&format!("a {name} that is not {N} bytes")))
+}
+
 pub use delegator::{
     availability, commit, preview, GovNullifierProof, ProxyAvailabilityInputs,
     CIRCUIT_FINGERPRINTS, PROXY_DELEGATION_CHAIN_VERSION, PROXY_DELEGATION_WALLET_VERSION,
 };
 pub use planner::{
     batch_layout, commit_allocation, load_allocation, plan_allocation, preview_allocation,
-    AllocationPlan, AllocationPlanError, AllocationRequest, BundleBallots, CommittedAllocation,
-    DelegateChoice, DelegateQuota, PlannedDc, ProxyAllocationError, ProxySlot,
+    AllocationPlan, BundleBallots, CommittedAllocation, PlannedDc, ProxySlot,
 };
-pub use secrets::{DcSeed, ProxyRoundKey};
 pub use zcash_vote_delegate::{DcSeedInputs, DcShareLayout, DelegateKey, POOL_PROPOSAL_ID};
 
 #[cfg(test)]

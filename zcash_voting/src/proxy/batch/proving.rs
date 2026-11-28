@@ -14,6 +14,7 @@ use super::{
 use crate::{
     backend::pasta_curves::group::ff::PrimeField,
     proving_runtime,
+    proxy::blob_array,
     storage::{queries, VotingDb},
     types::{Network, VotingError},
     ObservationScope,
@@ -53,32 +54,32 @@ pub(crate) fn load_chain_inputs(
     let missing = |what: &str| VotingError::InvalidInput {
         message: format!("bundle {bundle_index} has no stored {what}"),
     };
-    let bytes32 = |name: &str, bytes: Vec<u8>| {
-        <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| VotingError::Internal {
-            message: format!("bundle {bundle_index} stores a {name} that is not 32 bytes"),
-        })
+    let stores = |what: &str| VotingError::Internal {
+        message: format!("bundle {bundle_index} stores {what}"),
     };
     Ok(DcChainInputs {
         round_id: decode_round_id(round_id)?,
         network,
         van_ballots: van.remaining_ballots()?,
         address_index: van.address_index.ok_or_else(|| missing("address index"))?,
-        van_comm_rand: bytes32(
+        van_comm_rand: blob_array(
             "van_comm_rand",
             van.van_comm_rand.ok_or_else(|| missing("van_comm_rand"))?,
+            stores,
         )?,
-        ea_pk: bytes32("ea_pk", van.ea_pk)?,
-        registration_van: bytes32(
+        ea_pk: blob_array("ea_pk", van.ea_pk, stores)?,
+        registration_van: blob_array(
             "registration VAN",
             van.registration_van
                 .ok_or_else(|| missing("registration VAN"))?,
+            stores,
         )?,
         slots: load_planned_slots(conn, round_id, wallet_id, bundle_index)?,
     })
 }
 
 /// Proves `request.bundle_index`'s planned batch against `request.anchor` and
-/// persists it, returning the stored batch. Inputs are read in one
+/// persists it, returning it. Inputs are read in one
 /// transaction and DCs proved outside it, all with one ZKP4 prover loaded
 /// and prepared as an admitted CPU job and dropped, freeing its keys, before
 /// the batch is persisted. The write transaction first runs
@@ -163,6 +164,7 @@ pub(crate) fn prove_batch(
                     vote_authority_note_new: instance.vote_authority_note_new.to_repr(),
                     delegation_commitment: instance.delegation_commitment.to_repr(),
                     dc_slot_nullifier: instance.dc_slot_nullifier.to_repr(),
+                    alpha_v: dc.slot.alpha_v,
                     proof,
                 }
             })
@@ -176,19 +178,9 @@ pub(crate) fn prove_batch(
             &wallet_id,
             &batch,
             crate::proxy::unix_now(),
-        )?;
-        let stored =
-            batch_store::load_proved_batch(tx, request.round_id, &wallet_id, request.bundle_index)?;
-        match stored {
-            Some(stored) if stored == batch => Ok(stored),
-            _ => Err(VotingError::Internal {
-                message: format!(
-                    "bundle {}'s stored proxy batch does not read back as written",
-                    request.bundle_index
-                ),
-            }),
-        }
-    })
+        )
+    })?;
+    Ok(batch)
 }
 
 /// Re-verifies, on the persisting transaction's snapshot, that:

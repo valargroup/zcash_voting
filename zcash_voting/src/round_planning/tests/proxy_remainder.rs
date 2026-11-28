@@ -5,9 +5,8 @@
 
 use super::fixtures::*;
 use crate::phases::{DelegationPhase, VotePhase};
-use crate::proxy::batch::ProxyBatchProgress;
 use crate::round_planning::{classify_round, plan_from_snapshot, Obligation};
-use crate::session::{Decision, NextStep};
+use crate::session::{Decision, NextStep, ProxyBatchStage};
 use crate::share_policy::ImmediateShareKey;
 use crate::share_tracking::CommitmentRef;
 
@@ -18,7 +17,7 @@ const ROSTER: [u32; 2] = [1, 2];
 fn landed(builder: SnapshotBuilder, bundle_index: u32) -> SnapshotBuilder {
     builder
         .bundle(bundle_index, DelegationPhase::Confirmed)
-        .proxy_batch(bundle_index, ProxyBatchProgress::Landed)
+        .proxy_batch(bundle_index, ProxyBatchStage::Landed)
 }
 
 /// Records a choice for both roster proposals.

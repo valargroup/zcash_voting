@@ -6,15 +6,15 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::json;
 
 use super::fixtures::{
-    answered_db_with_bundle_weights, db_with_bundle_weights, host_at, request, seeded_rng,
-    FIXTURE_ROSTER, ROUND_ID, WALLET_ID,
+    already_voted, answered_db_with_bundle_weights, db_with_bundle_weights, host_at, request,
+    seeded_rng, FIXTURE_ROSTER, ROUND_ID, WALLET_ID,
 };
 use crate::{
     config::WalletCapabilities,
     proxy::{
         availability, commit_allocation, delegator::evaluate_availability, preview_allocation,
-        DcShareLayout, GovNullifierProof, ProxyAllocationError, ProxyAvailabilityInputs,
-        CIRCUIT_FINGERPRINTS, PROXY_DELEGATION_ENABLED, PROXY_DELEGATION_WALLET_VERSION,
+        DcShareLayout, GovNullifierProof, ProxyAvailabilityInputs, CIRCUIT_FINGERPRINTS,
+        PROXY_DELEGATION_ENABLED, PROXY_DELEGATION_WALLET_VERSION,
     },
     storage::{queries, VotingDb},
     vote_work::RoundHostContext,
@@ -241,11 +241,11 @@ fn a_saved_vote_share_plan_refuses_delegating() {
             .unwrap();
     }
 
-    assert!(matches!(
-        preview_allocation(&db, ROUND_ID, &request, DcShareLayout::Standard),
-        Err(ProxyAllocationError::AlreadyVoted { bundle_index: 0 })
-    ));
-    assert!(matches!(
+    assert_eq!(
+        preview_allocation(&db, ROUND_ID, &request, DcShareLayout::Standard).unwrap_err(),
+        already_voted(0)
+    );
+    assert_eq!(
         commit_allocation(
             &db,
             ROUND_ID,
@@ -254,9 +254,10 @@ fn a_saved_vote_share_plan_refuses_delegating() {
             &ProxyAllocationPreview::from(&preview),
             &FIXTURE_ROSTER,
             &mut seeded_rng(1),
-        ),
-        Err(ProxyAllocationError::AlreadyVoted { bundle_index: 0 })
-    ));
+        )
+        .unwrap_err(),
+        already_voted(0)
+    );
     assert_eq!(
         available().result(&db),
         ProxyAvailability::AlreadyVoted {

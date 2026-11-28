@@ -1338,12 +1338,11 @@ records; neither operation selectively clears those records from a live round.
 Round-wide reset may still clear independent unsigned setup bundles: its single
 atomic update excludes exactly the bundle indexes owned by any submission row,
 rather than letting evidence in one bundle block cleanup of every other bundle.
-A bundle that carries committed proxy delegation slots is not independent: its
-setup defines every slot's nullifier and the VAN its DCs spend, so a reset that
-would clear it refuses whole with `DelegationSetupFrozen`, as the unbroadcast
-discard, setup rebuild and bundle pruning do (see "Proxy delegation batches" in
-[`round_orchestration_invariants.md`](round_orchestration_invariants.md)). A
-proved proxy batch is broadcast evidence for every path that checks it.
+A bundle that carries committed proxy delegation slots is not independent: a
+reset that would clear it refuses whole with `DelegationSetupFrozen`, and a
+proved proxy batch is broadcast evidence for every path that checks it (see
+"Frozen setup" in
+[`round_orchestration_invariants.md`](round_orchestration_invariants.md)).
 Version-17 round ids that cannot form a canonical native lifecycle identity
 have no possible in-process lifecycle holder; pruning and explicit round
 deletion skip that impossible gate and remain available.
@@ -2350,11 +2349,10 @@ no device signs again
 Derivation rebuilds the request from the proved batch and the newest attempt.
 The batch must hash to the identity's digest under the attempt's chain id,
 every D1 signature must verify under its DC's `r_vpk`, and a carried
-registration's signature must verify. The generation digest binds the identity, the anchor
-height, the layout, the carried registration's complete delegation inputs
-and every DC: slot, delegate, weight, `alpha_v`, VAN nullifier, `r_vpk`,
-successor VAN, delegation commitment, slot nullifier and proof. It excludes
-the expiry, the D1 signatures, the registration's SpendAuth signature and the
+registration's signature must verify. The generation digest binds the
+identity, the anchor height, the layout, the carried registration's complete
+delegation inputs and every DC field, `alpha_v` included. It excludes the
+expiry, the D1 signatures, the registration's SpendAuth signature and the
 chain id, so every attempt of a batch is one generation
 (`proxy_batch_generation_matches_its_frozen_vectors`,
 `proxy_batch_generation_binds_every_dc_field_and_the_registration`,
@@ -2371,8 +2369,7 @@ on its own, so recovery looks for it as the batch's split-off leaf.
 ### Classification
 
 The endpoint's answer always carries `codespace` and the batch digest, so it
-has its own response type; the legacy response keeps `deny_unknown_fields`,
-with `codespace` its one optional addition (see Reservation and transport
+has its own response type, not the legacy one (see Reservation and transport
 classification). An answer without a codespace, or without the matching
 canonical digest, is not evidence and stays possibly dispatched
 (`a_proxy_batch_answer_needs_its_codespace_and_matching_digest`). Every
@@ -2396,10 +2393,9 @@ expiry answer proof of absence.
 
 `ProxyGenerationRetired` is admitted from every live state, whatever ambiguity
 preceded, and from no terminal one
-(`transition_matrix_covers_every_state_and_observation_edge`). A refusal does
-not clear an earlier attempt's ambiguity, and every 0x09 code 2 scans, so a
-lagging answer cannot turn a landed batch into a refusal without a tree pass
-first.
+(`transition_matrix_covers_every_state_and_observation_edge`). Since a refusal
+keeps any earlier ambiguity and every 0x09 code 2 scans, a lagging answer
+cannot turn a landed batch into a refusal without a tree pass first.
 
 Coverage, over the SQLite store and real derivation:
 `an_accepted_batch_confirms_by_hash_and_lands_its_dcs`,
@@ -2409,9 +2405,7 @@ Coverage, over the SQLite store and real derivation:
 `a_spent_nullifier_with_the_batch_in_the_tree_confirms_from_the_tree`,
 `any_other_refusal_leaves_the_batch_pending_and_sends_it_again`,
 `another_rejection_after_an_ambiguous_attempt_keeps_the_batch_recoverable`,
-and `a_committed_failure_is_classified_on_its_codespace`. A 0x09 candidate
-lookup sends `X-Svote-Codespace: 1`, as every lookup does
-(`every_submission_and_lookup_asks_for_the_codespace`).
+and `a_committed_failure_is_classified_on_its_codespace`.
 
 ### Recovery, landing and split-off
 
@@ -2429,12 +2423,12 @@ DC's leaf in `proxy_dc_landings`, stores the hash as the delegation's when
 the batch carried the registration, and retires the bundle's undispatched
 votes, which were proved against the VAN the batch spent.
 
-A split-off deletes the row, records the registration's own leaf as the
-bundle's VAN, retires the undispatched votes and deletes the proved batch, so
-the same DCs are proved again against the chain anchor from their persisted
-slots. A landing and a split-off each retire the undispatched votes in their
-own transaction (`an_undispatched_vote_is_retired_when_the_batch_lands_or_splits_off`). A confirmed proxy batch, like a confirmed vote, supersedes the
-bundle's delegation.
+A split-off, in one transaction, deletes the row, records the registration's
+own leaf as the bundle's VAN, retires the undispatched votes as a landing does
+(`an_undispatched_vote_is_retired_when_the_batch_lands_or_splits_off`) and
+deletes the proved batch, so the same DCs are proved again against the chain
+anchor from their persisted slots. A confirmed proxy batch, like a confirmed
+vote, supersedes the bundle's delegation.
 
 ### Resending
 

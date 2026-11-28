@@ -21,6 +21,7 @@ mod vote_units;
 #[cfg(test)]
 pub(crate) use classify::BlockedReason;
 pub(crate) use classify::{CastDraft, Obligation, RoundObligations};
+pub(crate) use lifecycle::vote_phase_holds_proxy_batch;
 #[cfg(test)]
 pub(crate) use lifecycle::LifecyclePosition;
 pub(crate) use lifecycle::{intent_is_lifecycle_owned, vote_phase_is_lifecycle_owned};

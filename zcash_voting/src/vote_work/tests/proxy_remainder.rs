@@ -10,6 +10,7 @@ use std::{
 };
 
 use super::fixtures::{host, RecordingProgress};
+use crate::wire::ProxyDelegateChoice;
 use crate::{
     chain_submission::tests::scripted_chain::{accepted, chain_height, landed, ScriptedChain},
     helper::transport::{HelperFuture, HelperResponse, HelperTransport},
@@ -18,7 +19,7 @@ use crate::{
             batch_digest, bound_executor, delegate_choice, proved_batch_for, scripted_chain_config,
             FixtureAnchor, ProvedBatchFixture,
         },
-        AllocationRequest, DcShareLayout,
+        DcShareLayout,
     },
     round_drive::{NoopRoundDriveReporter, RoundDriver, RoundHostSourceBridge, RoundQuiescence},
     session::{Decision, NextStep, ProxyBatchStage, RoundPlan},
@@ -129,7 +130,7 @@ impl LandedRound {
 
 /// The fixture bundle's 100 ballots allocated by `request`, its batch proved,
 /// submitted and landed through its own step.
-async fn landed_round(request: AllocationRequest) -> LandedRound {
+async fn landed_round(request: Vec<ProxyDelegateChoice>) -> LandedRound {
     let fixture = proved_batch_for(FixtureAnchor::Chain, DcShareLayout::Standard, request);
     let chain = Arc::new(ScriptedChain::default());
     let helpers = Arc::new(Helpers::default());
@@ -177,10 +178,8 @@ async fn landed_round(request: AllocationRequest) -> LandedRound {
 }
 
 /// One delegate for the round's whole weight.
-fn delegate_everything() -> AllocationRequest {
-    AllocationRequest {
-        choices: vec![delegate_choice(17, 10_000)],
-    }
+fn delegate_everything() -> Vec<ProxyDelegateChoice> {
+    vec![delegate_choice(17, 10_000)]
 }
 
 /// Every `(bundle, proposal)` the plan casts.

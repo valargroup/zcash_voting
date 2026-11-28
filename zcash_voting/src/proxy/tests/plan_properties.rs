@@ -7,11 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
-use super::fixtures::{bundles, planning_case};
-use crate::proxy::{
-    plan_allocation, AllocationPlan, AllocationPlanError, AllocationRequest, MAX_PROXY_DELEGATES,
-    WHOLE_ALLOCATION_BPS,
-};
+use super::fixtures::{bundles, not_enough_voting_power, planning_case};
+use crate::proxy::{plan_allocation, AllocationPlan, MAX_PROXY_DELEGATES, WHOLE_ALLOCATION_BPS};
+use crate::wire::ProxyDelegateChoice;
 
 /// `T · bps` in ten-thousandths of a ballot: a delegate's exact share scaled
 /// so it is an integer.
@@ -20,16 +18,15 @@ fn exact_share_scaled(total_ballots: u64, bps: u16) -> u128 {
 }
 
 /// Checks every planner property for one planned case.
-fn check_plan(request: &AllocationRequest, weights: &[u64], plan: &AllocationPlan) {
+fn check_plan(request: &[ProxyDelegateChoice], weights: &[u64], plan: &AllocationPlan) {
     let total: u64 = weights.iter().sum();
-    let delegates = request.choices.len();
+    let delegates = request.len();
     let whole = u128::from(WHOLE_ALLOCATION_BPS);
 
     // Conservation: quotas and the kept remainder make up the whole weight,
     // the DCs make up each quota, and no bundle gives more than it holds.
     let quota_sum: u64 = plan.quotas().iter().map(|quota| quota.ballots).sum();
     assert_eq!(quota_sum + plan.kept_ballots(), total);
-    assert_eq!(plan.total_ballots(), total);
     let mut per_delegate: BTreeMap<u32, u64> = BTreeMap::new();
     let mut per_bundle: BTreeMap<u32, u64> = BTreeMap::new();
     for dc in plan.dcs() {
@@ -50,14 +47,14 @@ fn check_plan(request: &AllocationRequest, weights: &[u64], plan: &AllocationPla
         unused += weight - used;
     }
     assert_eq!(unused, plan.kept_ballots());
-    let chosen_bps: u16 = request.choices.iter().map(|c| c.percent_bps).sum();
+    let chosen_bps: u16 = request.iter().map(|c| c.percent_bps).sum();
     if chosen_bps == WHOLE_ALLOCATION_BPS {
         assert_eq!(plan.kept_ballots(), 0);
     }
 
     // D ≤ #DC ≤ D + B − 1.
-    assert!(plan.dc_count() >= delegates);
-    assert!(plan.dc_count() < delegates + weights.len());
+    assert!(plan.dcs().len() >= delegates);
+    assert!(plan.dcs().len() < delegates + weights.len());
 
     // Quotas against exact shares. Every quota is at least the floor of one
     // ballot and less than one ballot above its exact share. When every exact
@@ -66,7 +63,6 @@ fn check_plan(request: &AllocationRequest, weights: &[u64], plan: &AllocationPla
     // floor funding can push a quota further below its exact share, by at
     // most the number of delegates whose exact share is under one ballot.
     let exact: Vec<u128> = request
-        .choices
         .iter()
         .map(|choice| exact_share_scaled(total, choice.percent_bps))
         .collect();
@@ -105,7 +101,7 @@ fn check_plan(request: &AllocationRequest, weights: &[u64], plan: &AllocationPla
         .iter()
         .map(|dc| (dc.bundle_index, dc.delegate_index))
         .collect();
-    assert_eq!(pairs.len(), plan.dc_count());
+    assert_eq!(pairs.len(), plan.dcs().len());
 }
 
 proptest! {
@@ -120,16 +116,13 @@ proptest! {
         let total: u64 = weights.iter().sum();
         match plan_allocation(&request, &bundles(&weights), layout) {
             Ok(plan) => {
-                prop_assert!(total >= request.choices.len() as u64);
+                prop_assert!(total >= request.len() as u64);
                 prop_assert_eq!(plan.layout(), layout);
                 check_plan(&request, &weights, &plan);
             }
             Err(error) => prop_assert_eq!(
                 error,
-                AllocationPlanError::InsufficientWeight {
-                    total_ballots: total,
-                    delegates: request.choices.len(),
-                }
+                not_enough_voting_power(total, request.len())
             ),
         }
     }

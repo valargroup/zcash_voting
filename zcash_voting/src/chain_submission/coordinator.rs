@@ -23,6 +23,7 @@ use super::{
     ChainSubmissionFailure, ChainSubmissionFailureKind, ChainSubmissionResult,
     ChainSubmissionState, ChainTransport,
 };
+use proxy_batch::ProxyFailure;
 
 const MAX_POST_ATTEMPTS_PER_PASS: usize = 8;
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(10 * 60);
@@ -387,9 +388,10 @@ where
                     kind, diagnostic, ..
                 } => {
                     if derived.proxy().is_some() {
+                        let failure = ProxyFailure::Rejected(kind, diagnostic);
                         return self
-                            .settle_proxy_rejection(
-                                request, operation, lease, &derived, kind, diagnostic, control,
+                            .settle_proxy_failure(
+                                request, operation, lease, &derived, failure, control,
                             )
                             .await;
                     }
@@ -738,13 +740,12 @@ where
                     LookupProgress::Observed(TransactionStatusObservation::CommittedFailure(
                         committed,
                     )) if derived.proxy().is_some() && committed.codespace.is_some() => {
-                        self.settle_proxy_committed_failure(
+                        self.settle_proxy_failure(
                             request,
                             operation,
                             lease,
                             &derived,
-                            &committed,
-                            ChainSubmissionState::Tracking,
+                            ProxyFailure::Committed(&committed, ChainSubmissionState::Tracking),
                             control,
                         )
                         .await
@@ -872,13 +873,12 @@ where
                     LookupProgress::Observed(TransactionStatusObservation::CommittedFailure(
                         committed,
                     )) if derived.proxy().is_some() && committed.codespace.is_some() => {
-                        self.settle_proxy_committed_failure(
+                        self.settle_proxy_failure(
                             request,
                             operation,
                             lease,
                             &derived,
-                            &committed,
-                            ChainSubmissionState::Recovering,
+                            ProxyFailure::Committed(&committed, ChainSubmissionState::Recovering),
                             control,
                         )
                         .await
@@ -1079,7 +1079,7 @@ where
                     ProxyRetirement::RegistrationLanded {
                         registration_position: position,
                     },
-                    ChainSubmissionState::Recovering,
+                    Some(ChainSubmissionState::Recovering),
                 )?
                 .public_result(),
             RecoveryScan::NoMatch(authorization) => {
@@ -1392,10 +1392,9 @@ where
                 kind, diagnostic, ..
             } => {
                 if derived.proxy().is_some() {
+                    let failure = ProxyFailure::Rejected(kind, diagnostic);
                     return self
-                        .settle_proxy_rejection(
-                            request, operation, lease, &derived, kind, diagnostic, control,
-                        )
+                        .settle_proxy_failure(request, operation, lease, &derived, failure, control)
                         .await;
                 }
                 if ambiguity_preceded && kind == ChainRejectionKind::NullifierAlreadySpent {

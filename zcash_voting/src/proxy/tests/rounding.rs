@@ -1,8 +1,8 @@
 //! Hamilton rounding: floors, leftover ballots by largest remainder, and the
 //! one-ballot floor with its funding order.
 
-use super::fixtures::{bundles, request};
-use crate::proxy::{plan_allocation, AllocationPlanError, DcShareLayout};
+use super::fixtures::{bundles, not_enough_voting_power, request};
+use crate::proxy::{plan_allocation, DcShareLayout};
 
 /// The quotas, in request order, and kept ballots of `choices` over one
 /// bundle of `total_ballots`.
@@ -59,11 +59,5 @@ fn fewer_ballots_than_delegates_cannot_meet_the_floor() {
         DcShareLayout::Standard,
     )
     .unwrap_err();
-    assert_eq!(
-        refusal,
-        AllocationPlanError::InsufficientWeight {
-            total_ballots: 2,
-            delegates: 3
-        }
-    );
+    assert_eq!(refusal, not_enough_voting_power(2, 3));
 }

@@ -28,6 +28,7 @@ fn synthetic_batch(anchor_height: u32) -> ProvedProxyBatch {
         vote_authority_note_new: [0x50 + slot; 32],
         delegation_commitment: [0x60 + slot; 32],
         dc_slot_nullifier: [0x70 + slot; 32],
+        alpha_v: [0x90 + slot; 32],
         proof: vec![0x80 + slot; 48],
     };
     ProvedProxyBatch {
@@ -46,15 +47,7 @@ fn generation_of(
     batch: &ProvedProxyBatch,
     registration: Option<&DelegationGenerationInputs>,
 ) -> ChainSubmissionGenerationDigest {
-    let dcs = batch
-        .dcs
-        .iter()
-        .map(|dc| ProxyGenerationDc {
-            dc,
-            alpha_v: [0x90 + dc.dc_slot; 32],
-        })
-        .collect::<Vec<_>>();
-    proxy_batch_generation(&proxy_identity([0x5d; 32]), batch, registration, &dcs).digest()
+    proxy_batch_generation(&proxy_identity([0x5d; 32]), batch, registration).digest()
 }
 
 #[test]

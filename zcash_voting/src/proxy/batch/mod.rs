@@ -22,7 +22,7 @@ use std::fmt;
 
 use zcash_vote_delegate::DcShareLayout;
 
-use crate::vote::VanWitness;
+use crate::{session::ProxyBatchStage, vote::VanWitness};
 
 #[cfg(test)]
 pub(crate) use attempt::SignedBatchAttempt;
@@ -44,27 +44,14 @@ pub(crate) use dc_chain::{build_dc_chain, BuiltDc};
 #[cfg(test)]
 pub(crate) use proving::load_chain_inputs;
 pub(crate) use proving::{prove_batch, ProveBatchRequest};
-pub(crate) use slot_plan::{load_planned_slots, plan_batch_slots, PlannedSlot};
-
-/// How far a bundle's proxy batch has come.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProxyBatchProgress {
-    /// The allocation places DCs on the bundle and no batch is proved yet.
-    Planned,
-    /// The batch is proved and nothing of it is on the wire.
-    Proved,
-    /// A submission may be on the wire and is unresolved. `refused` while
-    /// the chain refused its last attempt, which is sent again until it
-    /// lands or voting ends.
-    InFlight { refused: bool },
-    /// The batch landed and its successor VAN is the bundle's.
-    Landed,
-}
+pub(crate) use slot_plan::{plan_batch_slots, PlannedSlot};
 
 /// One bundle's proxy batch as round planning reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProxyBatchStatus {
-    pub(crate) progress: ProxyBatchProgress,
+    /// How far the batch has come. `Refused` while the chain refused the
+    /// last attempt, which is sent again until it lands or voting ends.
+    pub(crate) progress: ProxyBatchStage,
     /// The first attempt needs the voter's SpendAuth signature for the
     /// carried registration.
     pub(crate) needs_registration_signature: bool,
@@ -73,7 +60,7 @@ pub(crate) struct ProxyBatchStatus {
 impl ProxyBatchStatus {
     /// A status at `progress` with every flag false.
     #[cfg(test)]
-    pub(crate) fn at(progress: ProxyBatchProgress) -> Self {
+    pub(crate) fn at(progress: ProxyBatchStage) -> Self {
         Self {
             progress,
             needs_registration_signature: false,
@@ -121,6 +108,8 @@ pub(crate) struct ProvedProxyDc {
     pub(crate) delegation_commitment: [u8; 32],
     /// The slot nullifier the proof publishes.
     pub(crate) dc_slot_nullifier: [u8; 32],
+    /// The slot's spend-auth randomizer, which `Debug` never prints.
+    pub(crate) alpha_v: [u8; 32],
     pub(crate) proof: Vec<u8>,
 }
 

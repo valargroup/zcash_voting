@@ -4,11 +4,10 @@
 
 use super::fixtures::*;
 use crate::phases::{DelegationPhase, VotePhase};
-use crate::proxy::batch::ProxyBatchProgress;
 use crate::round_planning::{
     blocking_prerequisite, classify_round, plan_from_snapshot, Obligation,
 };
-use crate::session::{Decision, NextStep, RoundPlanAction};
+use crate::session::{Decision, NextStep, ProxyBatchStage, RoundPlanAction};
 
 /// The bundles `obligations` plan a proxy batch for.
 fn proxy_bundles(obligations: &[Obligation]) -> Vec<u32> {
@@ -37,7 +36,7 @@ fn reconciles(obligations: &[Obligation], bundle: u32) -> bool {
 fn a_proxy_only_round_plans_its_batch_without_a_ballot() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Prepared)
-        .proxy_batch(0, ProxyBatchProgress::Planned)
+        .proxy_batch(0, ProxyBatchStage::Planned)
         .build();
 
     let plan = plan_from_snapshot(&snapshot, &[1, 2]).unwrap();
@@ -61,7 +60,7 @@ fn a_pending_batch_holds_an_undispatched_vote() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::Confirmed)
         .vote(0, 1, 1, VotePhase::Committed)
-        .proxy_batch(0, ProxyBatchProgress::Planned)
+        .proxy_batch(0, ProxyBatchStage::Planned)
         .intent(1, Decision::Choice(1))
         .build();
 
@@ -87,7 +86,7 @@ fn a_cast_that_may_have_spent_the_van_holds_the_batch() {
         let snapshot = snapshot()
             .bundle(0, DelegationPhase::Confirmed)
             .vote(0, 1, 1, phase)
-            .proxy_batch(0, ProxyBatchProgress::Planned)
+            .proxy_batch(0, ProxyBatchStage::Planned)
             .intent(1, Decision::Choice(1))
             .build();
 
@@ -123,7 +122,7 @@ fn a_delegation_in_flight_holds_the_batch_until_it_resolves() {
     ] {
         let snapshot = snapshot()
             .bundle(0, phase)
-            .proxy_batch(0, ProxyBatchProgress::Planned)
+            .proxy_batch(0, ProxyBatchStage::Planned)
             .build();
 
         let obligations = classify_round(&snapshot, &[1]).unwrap();
@@ -143,7 +142,7 @@ fn a_proxy_step_resolves_to_its_obligation() {
     let snapshot = snapshot()
         .bundle(0, DelegationPhase::PcztBuilt)
         .bundle(1, DelegationPhase::Confirmed)
-        .proxy_batch(0, ProxyBatchProgress::Planned)
+        .proxy_batch(0, ProxyBatchStage::Planned)
         .intent(1, Decision::Choice(1))
         .build();
     let obligations = classify_round(&snapshot, &[1]).unwrap();
@@ -223,10 +222,7 @@ fn the_snapshot_reads_each_bundle_s_batch_progress() {
     };
     assert_eq!(
         progress(),
-        vec![
-            (0, ProxyBatchProgress::Planned),
-            (1, ProxyBatchProgress::Planned)
-        ],
+        vec![(0, ProxyBatchStage::Planned), (1, ProxyBatchStage::Planned)],
         "bundle 2 carries no slot"
     );
 }

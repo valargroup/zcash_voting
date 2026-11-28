@@ -5,10 +5,9 @@
 //! [`commit`]), [`preview`], then [`commit`].
 //! Every call fails with a [`ProxyDelegationError`](crate::wire::ProxyDelegationError).
 
-mod allocation;
 mod availability;
 
-pub use allocation::{commit, preview};
+pub use super::planner::{commit, preview};
 pub use availability::{
     availability, GovNullifierProof, ProxyAvailabilityInputs, CIRCUIT_FINGERPRINTS,
     PROXY_DELEGATION_CHAIN_VERSION, PROXY_DELEGATION_WALLET_VERSION,

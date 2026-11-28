@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 
 use crate::chain_submission::planning::LifecycleTransactionHashes;
 use crate::phases::{DelegationPhase, DelegationSubmissionStatus, SharePhase, VotePhase};
-use crate::proxy::batch::{ProxyBatchProgress, ProxyBatchStatus};
+use crate::proxy::batch::ProxyBatchStatus;
 use crate::round_planning::{BundleSnapshot, RoundSnapshot, VoteSnapshot};
 use crate::session::Decision;
+use crate::session::ProxyBatchStage;
 use crate::types::{EncryptedShare, ShareDelegationRecord};
 use crate::vote::{VoteBatchRecovery, VoteRecoveryBundle};
 
@@ -204,7 +205,7 @@ impl SnapshotBuilder {
 
     /// The round's committed proxy allocation places DCs on `bundle_index`,
     /// whose batch has come as far as `progress`.
-    pub(super) fn proxy_batch(self, bundle_index: u32, progress: ProxyBatchProgress) -> Self {
+    pub(super) fn proxy_batch(self, bundle_index: u32, progress: ProxyBatchStage) -> Self {
         self.proxy_status(bundle_index, ProxyBatchStatus::at(progress))
     }
 

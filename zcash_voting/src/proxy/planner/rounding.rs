@@ -11,8 +11,10 @@
 
 use std::cmp::Reverse;
 
-use super::{AllocationPlanError, AllocationRequest};
-use crate::proxy::WHOLE_ALLOCATION_BPS;
+use crate::{
+    proxy::WHOLE_ALLOCATION_BPS,
+    wire::{ProxyDelegateChoice, ProxyDelegationError, ProxyDelegationErrorKind},
+};
 
 /// Whole-ballot quotas for a request.
 pub(super) struct Apportionment {
@@ -23,18 +25,18 @@ pub(super) struct Apportionment {
 }
 
 /// Apportions `total_ballots` among an admitted request's choices and kept
-/// remainder. Fails with [`AllocationPlanError::InsufficientWeight`] when
-/// there are fewer ballots than delegates.
+/// remainder. Fails with [`ProxyDelegationErrorKind::NotEnoughVotingPower`]
+/// when there are fewer ballots than delegates, so the one-ballot floor
+/// fails.
 pub(super) fn apportion(
     total_ballots: u64,
-    request: &AllocationRequest,
-) -> Result<Apportionment, AllocationPlanError> {
-    let delegates = request.choices.len();
+    choices: &[ProxyDelegateChoice],
+) -> Result<Apportionment, ProxyDelegationError> {
+    let delegates = choices.len();
     let whole = u128::from(WHOLE_ALLOCATION_BPS);
     let total = u128::from(total_ballots);
 
-    let mut shares: Vec<u128> = request
-        .choices
+    let mut shares: Vec<u128> = choices
         .iter()
         .map(|choice| u128::from(choice.percent_bps))
         .collect();
@@ -72,9 +74,14 @@ pub(super) fn apportion(
             _ => (0..delegates)
                 .filter(|&candidate| seats[candidate] > 1)
                 .max_by_key(|&candidate| (seats[candidate], Reverse(candidate)))
-                .ok_or(AllocationPlanError::InsufficientWeight {
-                    total_ballots,
-                    delegates,
+                .ok_or_else(|| {
+                    ProxyDelegationError::new(
+                        ProxyDelegationErrorKind::NotEnoughVotingPower,
+                        format!(
+                            "{delegates} delegates need at least {delegates} ballots, the \
+                             bundles hold {total_ballots}"
+                        ),
+                    )
                 })?,
         };
         seats[donor] -= 1;

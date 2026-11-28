@@ -10,7 +10,7 @@ use vote_commitment_tree::{MerkleHashVote, TREE_CAPACITY, TREE_DEPTH};
 use super::{
     coordination::{CapturedSubmissionOperation, SubmissionOperationLease},
     generation::DerivedChainSubmission,
-    protocol::{ChainProtocolClient, LookupFailure},
+    protocol::{ChainProtocolClient, LookupFailure, ValidatorSetJson, LATEST_VALIDATOR_SET_PATH},
     CandidateTransactionHash, ChainHttpRequest, ChainSubmissionDiagnostic,
     ChainSubmissionDiagnosticKind, ChainTransport, ChainTransportError,
 };
@@ -117,12 +117,6 @@ struct LatestResponse {
     tree: Option<TreeState>,
     #[serde(default)]
     block_height: Option<String>,
-}
-
-/// The height of a Cosmos SDK validator-set answer.
-#[derive(Deserialize)]
-struct ValidatorSetResponse {
-    block_height: String,
 }
 
 #[derive(Deserialize)]
@@ -364,11 +358,8 @@ async fn scan_replica<T: ChainTransport>(
     // A lower bound for a snapshot without its own `block_height`. Best
     // effort, so a replica without the route still confirms and splits off.
     let height_before_snapshot = if probe.read_replica_height {
-        let url = format!(
-            "{}/cosmos/base/tendermint/v1beta1/validatorsets/latest?pagination.limit=1",
-            replica.endpoint
-        );
-        match get_json::<_, ValidatorSetResponse>(
+        let url = format!("{}/{LATEST_VALIDATOR_SET_PATH}", replica.endpoint);
+        match get_json::<_, ValidatorSetJson>(
             transport,
             url,
             replica.endpoint_index,

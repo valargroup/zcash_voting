@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::phases::{DelegationPhase, VotePhase};
-use crate::proxy::batch::ProxyBatchProgress;
 use crate::session::Decision;
+use crate::session::ProxyBatchStage;
 
 /// Coarse position of a vote in the chain lifecycle, an exhaustive
 /// coarsening of [`VotePhase`].
@@ -120,8 +120,8 @@ pub(crate) fn delegation_phase_admits_proxy_batch(phase: DelegationPhase) -> boo
 
 /// Whether a proxy batch in `progress` holds its bundle from casts, because
 /// it spends the VAN at full authority. Only landing lifts the hold.
-pub(crate) fn proxy_batch_holds_bundle(progress: ProxyBatchProgress) -> bool {
-    progress != ProxyBatchProgress::Landed
+pub(crate) fn proxy_batch_holds_bundle(progress: ProxyBatchStage) -> bool {
+    progress != ProxyBatchStage::Landed
 }
 
 /// Whether a delegation in `phase` reserves its bundle against a fresh cast:

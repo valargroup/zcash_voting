@@ -21,7 +21,7 @@ pub(crate) fn assign_dc_slots<R: RngCore + CryptoRng>(
         by_bundle.entry(dc.bundle_index).or_default().push(dc);
     }
 
-    let mut slots = Vec::with_capacity(plan.dc_count());
+    let mut slots = Vec::with_capacity(plan.dcs().len());
     for (bundle_index, dcs) in by_bundle {
         // Packing gives a bundle at most one DC per delegate, so at most
         // eight, which fits the circuit's 3-bit slot.

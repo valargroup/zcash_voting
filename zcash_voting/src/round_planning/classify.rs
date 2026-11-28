@@ -19,7 +19,7 @@ use super::lifecycle::{
 };
 use super::snapshot::RoundSnapshot;
 use super::vote_units::{VoteUnit, VoteUnitId};
-use crate::proxy::batch::ProxyBatchProgress;
+use crate::session::ProxyBatchStage;
 
 /// One proposal's draft in a fresh cast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -635,14 +635,14 @@ pub(crate) fn classify(
     let every_batch_proved = snapshot
         .proxy_batches
         .values()
-        .all(|status| status.progress != ProxyBatchProgress::Planned);
+        .all(|status| status.progress != ProxyBatchStage::Planned);
     for (&bundle_index, status) in &snapshot.proxy_batches {
         let advance = |signs_registration| Obligation::AdvanceProxyBatch {
             bundle_index,
             signs_registration,
         };
         match status.progress {
-            ProxyBatchProgress::Planned => {
+            ProxyBatchStage::Planned => {
                 let admitted = delegation
                     .get(&bundle_index)
                     .is_some_and(|phase| delegation_phase_admits_proxy_batch(*phase));
@@ -655,13 +655,15 @@ pub(crate) fn classify(
                     obligations.push(Obligation::ProxyDelegate { bundle_index });
                 }
             }
-            ProxyBatchProgress::Proved => {
+            ProxyBatchStage::Proved => {
                 if every_batch_proved && !cast_spent_bundles.contains(&bundle_index) {
                     obligations.push(advance(status.needs_registration_signature));
                 }
             }
-            ProxyBatchProgress::InFlight { .. } => obligations.push(advance(false)),
-            ProxyBatchProgress::Landed => {}
+            ProxyBatchStage::Dispatched | ProxyBatchStage::Refused => {
+                obligations.push(advance(false))
+            }
+            ProxyBatchStage::Landed => {}
         }
     }
 

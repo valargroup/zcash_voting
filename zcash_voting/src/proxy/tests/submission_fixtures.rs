@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use rand::SeedableRng;
 
+use crate::wire::ProxyDelegateChoice;
 use crate::{
     backend::{
         orchard::primitives::redpallas::{SpendAuth, VerificationKey},
@@ -26,7 +27,7 @@ use crate::{
             build_dc_chain, insert_proved_batch, load_chain_inputs, plan_batch_slots, BatchAnchor,
             ProvedProxyBatch, ProvedProxyDc,
         },
-        commit_allocation, preview_allocation, AllocationRequest, DcShareLayout, DelegateChoice,
+        commit_allocation, preview_allocation, DcShareLayout,
     },
     storage::{queries, VotingDb},
     types::{Network, VotingRoundParams},
@@ -171,9 +172,9 @@ pub(crate) fn bound_executor<T: ChainTransport>(
 
 /// A choice of `delegate_index` for `percent_bps`: `delegate<index>` on X,
 /// with the key of a secret seed made of the index's low byte.
-pub(crate) fn delegate_choice(delegate_index: u32, percent_bps: u16) -> DelegateChoice {
+pub(crate) fn delegate_choice(delegate_index: u32, percent_bps: u16) -> ProxyDelegateChoice {
     let seed = [delegate_index as u8; 32];
-    DelegateChoice {
+    ProxyDelegateChoice {
         delegate_index,
         percent_bps,
         provider: crate::wire::ProxyDelegateProvider::X,
@@ -185,17 +186,15 @@ pub(crate) fn delegate_choice(delegate_index: u32, percent_bps: u16) -> Delegate
 }
 
 /// The two delegates of the fixture allocation, keeping the rest.
-pub(crate) fn two_delegates() -> AllocationRequest {
-    AllocationRequest {
-        choices: vec![delegate_choice(17, 2_300), delegate_choice(5, 1_700)],
-    }
+pub(crate) fn two_delegates() -> Vec<ProxyDelegateChoice> {
+    vec![delegate_choice(17, 2_300), delegate_choice(5, 1_700)]
 }
 
 /// A round whose bundle 0 holds a complete, hotkey-bound delegation setup and
 /// `request` committed under `layout`, its batch planned but not proved.
 pub(crate) fn committed_round_for(
     layout: DcShareLayout,
-    request: AllocationRequest,
+    request: Vec<ProxyDelegateChoice>,
 ) -> (Arc<VotingDb>, [u8; 64]) {
     let params = VotingRoundParams {
         vote_round_id: ROUND_ID.to_string(),
@@ -308,7 +307,7 @@ pub(crate) fn proved_batch_with(
 pub(crate) fn proved_batch_for(
     anchor: FixtureAnchor,
     layout: DcShareLayout,
-    request: AllocationRequest,
+    request: Vec<ProxyDelegateChoice>,
 ) -> ProvedBatchFixture {
     let (db, registration_signature) = committed_round_for(layout, request);
     plan_batch_slots(&db, ROUND_ID, 0, &HOTKEY_SECRET, NETWORK).unwrap();
@@ -347,6 +346,7 @@ pub(crate) fn proved_batch_for(
                     vote_authority_note_new: instance.vote_authority_note_new.to_repr(),
                     delegation_commitment: instance.delegation_commitment.to_repr(),
                     dc_slot_nullifier: instance.dc_slot_nullifier.to_repr(),
+                    alpha_v: dc.slot.alpha_v,
                     proof: vec![0x77; 64],
                 }
             })

@@ -4,8 +4,8 @@
 
 use crate::{
     session::{NextStep, RoundPlan},
-    ChainAdvanceOutcome, ChainSubmissionFailure, ChainSubmissionFailureKind, ChainTransport,
-    VotingError, VotingErrorKind,
+    ChainAdvanceOutcome, ChainSubmissionDiagnosticKind, ChainSubmissionFailure,
+    ChainSubmissionFailureKind, ChainTransport, VotingError, VotingErrorKind,
 };
 
 use super::{
@@ -27,6 +27,19 @@ impl<T: ChainTransport> RoundExecutor<T> {
             ChainAdvanceOutcome::Confirmed(_) => RoundStepDisposition::Advanced,
             ChainAdvanceOutcome::StillPending(_) => RoundStepDisposition::Pending,
             ChainAdvanceOutcome::Cancelled => RoundStepDisposition::Cancelled,
+            // Only a proxy batch is rejected with these. A split-off
+            // registration advances it (the batch is proved again), and an
+            // expiry again within the step leaves it for a later re-sign.
+            ChainAdvanceOutcome::Rejected(diagnostic)
+                if diagnostic.kind() == ChainSubmissionDiagnosticKind::ProxyRegistrationLanded =>
+            {
+                RoundStepDisposition::Advanced
+            }
+            ChainAdvanceOutcome::Rejected(diagnostic)
+                if diagnostic.kind() == ChainSubmissionDiagnosticKind::ProxyBatchExpired =>
+            {
+                RoundStepDisposition::Pending
+            }
             ChainAdvanceOutcome::SubmittedWithoutHash(_) | ChainAdvanceOutcome::Rejected(_) => {
                 RoundStepDisposition::ChainTerminal
             }

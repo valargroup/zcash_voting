@@ -10,10 +10,10 @@ use serde::Deserialize;
 
 use crate::{
     config::WalletCapabilities,
-    phases::VotePhase,
     proxy::PROXY_DELEGATION_ENABLED,
+    round_planning::vote_phase_holds_proxy_batch,
     share_tracking::lowest_bundle_with_vote_share_plan,
-    storage::{queries, VotingDb},
+    storage::VotingDb,
     types::validate_vote_round_id_hex,
     vote_work::RoundHostContext,
     wire::{ProxyAvailability, ProxyDelegationError, ProxyDelegationErrorKind},
@@ -77,27 +77,17 @@ pub struct ProxyAvailabilityInputs<'a> {
 }
 
 /// Whether the current wallet may preview and commit a new allocation in
-/// `round_id`, as the first contract §11.4 result that applies:
+/// `round_id`: the first contract §11.4 result that applies, in the order
+/// `Unsupported` (build, chain fields 4 and 5, or round flag), `Paused`,
+/// `AlreadyVoted`, `TimingUnavailable`, `VoteEnded`, `Available`.
 ///
-/// 1. `Unsupported` when the build ([`PROXY_DELEGATION_ENABLED`],
-///    [`PROXY_DELEGATION_WALLET_VERSION`]), the chain's field 4
-///    ([`PROXY_DELEGATION_CHAIN_VERSION`]), any field 5 fingerprint
-///    ([`CIRCUIT_FINGERPRINTS`]) or the round's `proxy_delegation.enabled`
-///    does not match.
-/// 2. `Paused` when `proxy_dc_paused` is set.
-/// 3. `AlreadyVoted` when a cast is on the wire, hashless or confirmed, or a
-///    vote's share plan is saved (`used_elsewhere = false`), or the
-///    governance nullifiers are spent with no local broadcast evidence
-///    (`used_elsewhere = true`). An undispatched vote without a saved plan
-///    does not count, since a commit holds the bundle from casts.
-/// 4. `TimingUnavailable` without `ceremony_start_seconds` or
-///    `vote_end_time_seconds`.
-/// 5. `VoteEnded` at or past the vote end.
-/// 6. `Available`.
-///
-/// Writes nothing. Fails with [`ProxyDelegationErrorKind::CannotVerify`]
-/// when step 3 needs an unavailable nullifier proof, and otherwise for
-/// malformed inputs or an answer about another round.
+/// `AlreadyVoted` has `used_elsewhere = false` for a cast on the wire,
+/// hashless or confirmed, or a saved vote share plan (not an undispatched
+/// vote without one, since a commit holds its bundle), and `true` for spent
+/// governance nullifiers with no local broadcast evidence. Writes nothing.
+/// Fails with [`ProxyDelegationErrorKind::CannotVerify`] when that check
+/// needs an unavailable nullifier proof, and otherwise for malformed inputs
+/// or an answer about another round.
 pub fn availability(
     db: &VotingDb,
     round_id: &str,
@@ -210,15 +200,10 @@ fn already_voted(
     round_id: &str,
     gov_nullifiers: GovNullifierProof,
 ) -> Result<Option<ProxyAvailability>, ProxyDelegationError> {
-    let cast = db.vote_phases(round_id)?.into_iter().any(|(_, _, phase)| {
-        matches!(
-            phase,
-            VotePhase::Submitted
-                | VotePhase::SubmissionManaged
-                | VotePhase::SubmittedWithoutHash
-                | VotePhase::Confirmed
-        )
-    });
+    let cast = db
+        .vote_phases(round_id)?
+        .into_iter()
+        .any(|(_, _, phase)| vote_phase_holds_proxy_batch(phase));
     if cast || lowest_bundle_with_vote_share_plan(&db.conn(), round_id, &db.wallet_id())?.is_some()
     {
         return Ok(Some(ProxyAvailability::AlreadyVoted {
@@ -231,19 +216,12 @@ fn already_voted(
             ProxyDelegationErrorKind::CannotVerify,
             "the account's governance nullifiers could not be proven unspent",
         )),
-        GovNullifierProof::Spent => {
-            let evidence = queries::delegation_broadcast_evidence(
-                &db.conn(),
-                round_id,
-                &db.wallet_id(),
-                None,
-            )?;
-            Ok(evidence
-                .is_none()
-                .then_some(ProxyAvailability::AlreadyVoted {
-                    used_elsewhere: true,
-                }))
-        }
+        GovNullifierProof::Spent => Ok(db
+            .delegation_broadcast_evidence(round_id, None)?
+            .is_none()
+            .then_some(ProxyAvailability::AlreadyVoted {
+                used_elsewhere: true,
+            })),
     }
 }
 

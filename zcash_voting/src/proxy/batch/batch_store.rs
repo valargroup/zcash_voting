@@ -6,8 +6,10 @@ use std::collections::BTreeMap;
 
 use rusqlite::{named_params, Connection, OptionalExtension};
 
-use super::{ProvedProxyBatch, ProvedProxyDc, ProxyBatchProgress, ProxyBatchStatus};
-use crate::{storage::queries::PROXY_BATCH_SUBMISSION_KIND, types::VotingError};
+use super::{ProvedProxyBatch, ProvedProxyDc, ProxyBatchStatus};
+use crate::{
+    session::ProxyBatchStage, storage::queries::PROXY_BATCH_SUBMISSION_KIND, types::VotingError,
+};
 
 /// Each bundle of `round_id` with committed slots and its batch status. Reads
 /// only on `conn`, so round planning can call it inside its snapshot.
@@ -41,54 +43,43 @@ pub(crate) fn proxy_batch_statuses_on(
               ORDER BY slot.bundle_index"
         ))
         .map_err(|error| VotingError::from_sqlite("prepare proxy batch progress", &error))?;
-    type Row = (i64, Option<i64>, bool, Option<String>, Option<String>);
-    let rows: Vec<Row> = statement
-        .query_map(
-            named_params! { ":round_id": round_id, ":wallet_id": wallet_id },
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-        .map_err(|error| VotingError::from_sqlite("load proxy batch progress", &error))?;
-    rows.into_iter()
-        .map(
-            |(bundle_index, anchor_height, signed, state, diagnostic_kind)| {
-                let bundle_index =
-                    u32::try_from(bundle_index).map_err(|_| VotingError::Internal {
-                        message: format!(
-                            "stored proxy slot bundle {bundle_index} does not fit in u32"
-                        ),
-                    })?;
-                let progress = match (state.as_deref(), anchor_height) {
-                    (Some("confirmed"), _) => ProxyBatchProgress::Landed,
-                    // The chain's answer to the last POST: a pause, another
-                    // rejection, or spent nullifiers with no landing found.
-                    (Some(_), _) => ProxyBatchProgress::InFlight {
-                        refused: matches!(
-                            diagnostic_kind.as_deref(),
-                            Some(
-                                "proxy_batch_paused" | "chain_rejected" | "nullifier_already_spent"
-                            )
-                        ),
-                    },
-                    (None, Some(_)) => ProxyBatchProgress::Proved,
-                    (None, None) => ProxyBatchProgress::Planned,
-                };
-                let status = ProxyBatchStatus {
-                    progress,
-                    needs_registration_signature: anchor_height == Some(0) && !signed,
-                };
-                Ok((bundle_index, status))
-            },
-        )
-        .collect()
+    let sqlite = |error| VotingError::from_sqlite("load proxy batch progress", &error);
+    let mut rows = statement
+        .query(named_params! { ":round_id": round_id, ":wallet_id": wallet_id })
+        .map_err(sqlite)?;
+    let mut statuses = BTreeMap::new();
+    while let Some(row) = rows.next().map_err(sqlite)? {
+        let bundle_index: i64 = row.get(0).map_err(sqlite)?;
+        let anchor_height: Option<i64> = row.get(1).map_err(sqlite)?;
+        let signed: bool = row.get(2).map_err(sqlite)?;
+        let state: Option<String> = row.get(3).map_err(sqlite)?;
+        let diagnostic_kind: Option<String> = row.get(4).map_err(sqlite)?;
+        let bundle_index = u32::try_from(bundle_index).map_err(|_| VotingError::Internal {
+            message: format!("stored proxy slot bundle {bundle_index} does not fit in u32"),
+        })?;
+        let progress = match (state.as_deref(), anchor_height) {
+            (Some("confirmed"), _) => ProxyBatchStage::Landed,
+            // The chain's answer to the last POST: a pause, another
+            // rejection, or spent nullifiers with no landing found.
+            (Some(_), _)
+                if matches!(
+                    diagnostic_kind.as_deref(),
+                    Some("proxy_batch_paused" | "chain_rejected" | "nullifier_already_spent")
+                ) =>
+            {
+                ProxyBatchStage::Refused
+            }
+            (Some(_), _) => ProxyBatchStage::Dispatched,
+            (None, Some(_)) => ProxyBatchStage::Proved,
+            (None, None) => ProxyBatchStage::Planned,
+        };
+        let status = ProxyBatchStatus {
+            progress,
+            needs_registration_signature: anchor_height == Some(0) && !signed,
+        };
+        statuses.insert(bundle_index, status);
+    }
+    Ok(statuses)
 }
 
 /// Whether the bundle already has a proved batch.
@@ -184,8 +175,8 @@ pub(crate) fn load_proved_batch(
     let mut statement = conn
         .prepare(
             "SELECT slot.dc_slot, slot.delegate_index, slot.weight_ballots, slot.layout,
-                    slot.dc_slot_nf, dc.van_nullifier, dc.r_vpk, dc.vote_authority_note_new,
-                    dc.delegation_commitment, dc.proof
+                    slot.dc_slot_nf, slot.alpha_v, dc.van_nullifier, dc.r_vpk,
+                    dc.vote_authority_note_new, dc.delegation_commitment, dc.proof
                FROM proxy_batch_dcs dc
                JOIN proxy_slots slot
                  ON slot.round_id = dc.round_id AND slot.wallet_id = dc.wallet_id
@@ -195,35 +186,7 @@ pub(crate) fn load_proved_batch(
               ORDER BY dc.dc_slot",
         )
         .map_err(|error| VotingError::from_sqlite("prepare proved proxy DC query", &error))?;
-    type Row = (
-        i64,
-        i64,
-        i64,
-        i64,
-        Option<Vec<u8>>,
-        Vec<u8>,
-        Vec<u8>,
-        Vec<u8>,
-        Vec<u8>,
-        Vec<u8>,
-    );
-    let rows: Vec<Row> = statement
-        .query_map(params, |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-                row.get(8)?,
-                row.get(9)?,
-            ))
-        })
-        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-        .map_err(|error| VotingError::from_sqlite("load proved proxy DCs", &error))?;
+    let sqlite = |error| VotingError::from_sqlite("load proved proxy DCs", &error);
     let corrupt = |what: String| VotingError::Internal {
         message: format!("stored proved proxy batch of bundle {bundle_index}: {what}"),
     };
@@ -231,41 +194,37 @@ pub(crate) fn load_proved_batch(
         <[u8; 32]>::try_from(bytes.as_slice())
             .map_err(|_| corrupt(format!("{name} is not 32 bytes")))
     };
+    let mut rows = statement.query(params).map_err(sqlite)?;
+    // `proxy_slots_one_layout_per_batch` gives every slot the batch's layout.
     let mut layout = None;
-    let mut dcs = Vec::with_capacity(rows.len());
-    for (
-        dc_slot,
-        delegate_index,
-        weight_ballots,
-        slot_layout,
-        dc_slot_nullifier,
-        van_nullifier,
-        r_vpk,
-        van_new,
-        delegation_commitment,
-        proof,
-    ) in rows
-    {
+    let mut dcs = Vec::new();
+    while let Some(row) = rows.next().map_err(sqlite)? {
+        let integer = |index| row.get::<_, i64>(index).map_err(sqlite);
+        let blob = |index| row.get::<_, Vec<u8>>(index).map_err(sqlite);
+        let (dc_slot, delegate_index, weight_ballots) = (integer(0)?, integer(1)?, integer(2)?);
+        let slot_layout = integer(3)?;
+        // Batch planning writes both, together, before the first proof.
+        let (Some(dc_slot_nullifier), Some(alpha_v)) =
+            (row.get(4).map_err(sqlite)?, row.get(5).map_err(sqlite)?)
+        else {
+            return Err(corrupt("a DC without its nullifier".into()));
+        };
         let slot_layout = crate::proxy::layout_from_column(slot_layout)
             .ok_or_else(|| corrupt(format!("unknown layout {slot_layout}")))?;
-        if *layout.get_or_insert(slot_layout) != slot_layout {
-            return Err(corrupt("slots disagree on the batch layout".to_string()));
-        }
+        layout.get_or_insert(slot_layout);
         dcs.push(ProvedProxyDc {
             dc_slot: u8::try_from(dc_slot).map_err(|_| corrupt(format!("slot {dc_slot}")))?,
             delegate_index: u32::try_from(delegate_index)
                 .map_err(|_| corrupt(format!("delegate index {delegate_index}")))?,
             weight_ballots: u64::try_from(weight_ballots)
                 .map_err(|_| corrupt(format!("weight {weight_ballots}")))?,
-            van_nullifier: bytes32("van_nullifier", van_nullifier)?,
-            r_vpk: bytes32("r_vpk", r_vpk)?,
-            vote_authority_note_new: bytes32("vote_authority_note_new", van_new)?,
-            delegation_commitment: bytes32("delegation_commitment", delegation_commitment)?,
-            dc_slot_nullifier: bytes32(
-                "dc_slot_nf",
-                dc_slot_nullifier.ok_or_else(|| corrupt("a DC without its nullifier".into()))?,
-            )?,
-            proof,
+            van_nullifier: bytes32("van_nullifier", blob(6)?)?,
+            r_vpk: bytes32("r_vpk", blob(7)?)?,
+            vote_authority_note_new: bytes32("vote_authority_note_new", blob(8)?)?,
+            delegation_commitment: bytes32("delegation_commitment", blob(9)?)?,
+            dc_slot_nullifier: bytes32("dc_slot_nf", dc_slot_nullifier)?,
+            alpha_v: bytes32("alpha_v", alpha_v)?,
+            proof: blob(10)?,
         });
     }
     Ok(Some(ProvedProxyBatch {
@@ -355,43 +314,37 @@ pub(crate) fn batch_holds_casts(
     .map_err(|error| VotingError::from_sqlite("check the proxy batch's hold on casts", &error))
 }
 
-/// The `state` of the bundle's 0x09 lifecycle row, if any. There is at most
-/// one, since a split-off deletes it before the digest changes.
-pub(super) fn lifecycle_state(
+/// Whether the bundle has a 0x09 lifecycle row. There is at most one, since a
+/// split-off deletes it before the digest changes.
+pub(super) fn has_lifecycle_row(
     conn: &Connection,
     round_id: &str,
     wallet_id: &str,
     bundle_index: u32,
-) -> Result<Option<String>, VotingError> {
-    let mut statement = conn
+) -> Result<bool, VotingError> {
+    let rows: i64 = conn
         .prepare(&format!(
-            "SELECT state FROM chain_submissions
+            "SELECT COUNT(*) FROM chain_submissions
               WHERE round_id = :round_id AND wallet_id = :wallet_id
                 AND bundle_index = :bundle_index
                 AND kind = '{PROXY_BATCH_SUBMISSION_KIND}'"
         ))
-        .map_err(|error| VotingError::from_sqlite("prepare proxy batch lifecycle query", &error))?;
-    let states = statement
-        .query_map(
+        .map_err(|error| VotingError::from_sqlite("prepare proxy batch lifecycle query", &error))?
+        .query_row(
             named_params! {
                 ":round_id": round_id,
                 ":wallet_id": wallet_id,
                 ":bundle_index": i64::from(bundle_index),
             },
-            |row| row.get::<_, String>(0),
+            |row| row.get(0),
         )
-        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
         .map_err(|error| VotingError::from_sqlite("load proxy batch lifecycle state", &error))?;
-    match <[String; 1]>::try_from(states) {
-        Ok([state]) => Ok(Some(state)),
-        Err(states) if states.is_empty() => Ok(None),
-        Err(states) => Err(VotingError::Internal {
-            message: format!(
-                "bundle {bundle_index} has {} proxy batch lifecycle rows",
-                states.len()
-            ),
-        }),
+    if rows > 1 {
+        return Err(VotingError::Internal {
+            message: format!("bundle {bundle_index} has {rows} proxy batch lifecycle rows"),
+        });
     }
+    Ok(rows == 1)
 }
 
 /// Deletes the bundle's proved batch with its DCs, attempt and landings, so

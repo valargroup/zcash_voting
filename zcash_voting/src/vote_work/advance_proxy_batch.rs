@@ -13,8 +13,8 @@ use crate::{
 
 use super::{
     round_lock::HeldRoundLock, step_ledger::StepLedger, step_scope::StepScope,
-    steps::persisted_policy, RoundExecutor, RoundStepDisposition, RoundStepFailure,
-    RoundStepFailureKind, RoundStepOutcome, RoundStepProgress, RoundStepProgressReporter,
+    steps::persisted_policy, RoundExecutor, RoundStepFailure, RoundStepFailureKind,
+    RoundStepOutcome, RoundStepProgress, RoundStepProgressReporter,
 };
 
 /// Re-signs per step after expired answers before reporting pending. Each
@@ -45,7 +45,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
         let ledger = StepLedger::default();
         let state = load_submission_state(&self.database, &scope.round_id, bundle_index)
             .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
-        let batch_digest = match (&state.attempt, state.lifecycle_state.is_some()) {
+        let batch_digest = match (&state.attempt, state.has_lifecycle_row) {
             (Some(attempt), true) => attempt.batch_digest,
             (None, true) => {
                 return Err(self.step_failure(
@@ -104,26 +104,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
             }
         };
 
-        let disposition = match &outcome {
-            ChainAdvanceOutcome::Confirmed(_) => RoundStepDisposition::Advanced,
-            ChainAdvanceOutcome::Rejected(diagnostic) => match diagnostic.kind() {
-                // Split off. The batch is proved again against the chain.
-                ChainSubmissionDiagnosticKind::ProxyRegistrationLanded => {
-                    RoundStepDisposition::Advanced
-                }
-                // Expired again within this step. A later step re-signs.
-                ChainSubmissionDiagnosticKind::ProxyBatchExpired => RoundStepDisposition::Pending,
-                _ => RoundStepDisposition::ChainTerminal,
-            },
-            ChainAdvanceOutcome::SubmittedWithoutHash(_) => RoundStepDisposition::ChainTerminal,
-            ChainAdvanceOutcome::StillPending(_) => RoundStepDisposition::Pending,
-            ChainAdvanceOutcome::Cancelled => RoundStepDisposition::Cancelled,
-        };
-        let mut ledger = ledger;
-        let result = outcome.into_result();
-        progress.report(RoundStepProgress::ChainOutcome(result.clone()));
-        ledger.record_chain_outcome(result);
-        self.outcome(scope, disposition, ledger)
+        self.chain_step_outcome(scope, outcome, ledger, progress)
     }
 
     /// Signs and persists an attempt at the highest chain height any endpoint

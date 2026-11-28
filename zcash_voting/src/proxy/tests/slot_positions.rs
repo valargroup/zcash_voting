@@ -25,7 +25,7 @@ proptest! {
         };
         let slots = assign_dc_slots(&plan, &mut seeded_rng(slot_seed));
 
-        prop_assert_eq!(slots.len(), plan.dc_count());
+        prop_assert_eq!(slots.len(), plan.dcs().len());
         let mut slots_by_bundle: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
         for slot in &slots {
             prop_assert!(slot.dc_slot < MAX_DC_SLOTS);

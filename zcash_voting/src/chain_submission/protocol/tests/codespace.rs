@@ -69,25 +69,21 @@ async fn every_submission_and_lookup_asks_for_the_codespace() {
 /// that omits it is keyed on the code alone, as before.
 #[tokio::test]
 async fn a_legacy_answer_classifies_on_its_codespace_when_it_has_one() {
-    for (body, codespace, kind) in [
+    for (body, kind) in [
         (
             r#"{"code":2,"codespace":"vote","log":"spent"}"#,
-            Some("vote"),
             ChainRejectionKind::NullifierAlreadySpent,
         ),
         (
             r#"{"code":2,"codespace":"sdk","log":"tx parse error"}"#,
-            Some("sdk"),
             ChainRejectionKind::Other,
         ),
         (
             r#"{"code":7,"codespace":"vote","log":"round closed"}"#,
-            Some("vote"),
             ChainRejectionKind::Other,
         ),
         (
             r#"{"code":2,"log":"spent"}"#,
-            None,
             ChainRejectionKind::NullifierAlreadySpent,
         ),
     ] {
@@ -98,14 +94,11 @@ async fn a_legacy_answer_classifies_on_its_codespace_when_it_has_one() {
         let outcome = client.submit_vote(0, &vote()).await;
 
         let PostAttemptOutcome::Rejected {
-            codespace: observed,
-            kind: classified,
-            ..
+            kind: classified, ..
         } = outcome
         else {
             panic!("{body}: {outcome:?}");
         };
-        assert_eq!(observed.as_deref(), codespace, "{body}");
         assert_eq!(classified, kind, "{body}");
     }
 

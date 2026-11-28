@@ -61,14 +61,13 @@ impl<T: ChainTransport> RoundExecutor<T> {
             .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
         let anchor = match phase {
             DelegationPhase::Prepared | DelegationPhase::PcztBuilt => {
-                let proof_status = self
+                if self
                     .prepare_delegation_proof(scope, bundle_index, lock, progress)
-                    .await?;
-                if scope.interrupted() {
+                    .await?
+                    .is_none()
+                {
                     return self.step_cancelled(scope, ledger);
                 }
-                proof_status
-                    .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
                 BatchAnchor::Registration
             }
             DelegationPhase::Proved => BatchAnchor::Registration,

@@ -9,18 +9,19 @@
 
 use std::cmp::Reverse;
 
-use super::{BundleBallots, DelegateQuota, PlannedDc};
+use super::{BundleBallots, PlannedDc};
+use crate::wire::ProxyPreviewDelegation;
 
 /// Lays `quotas` (request order) into `bundles` and returns the DCs in fill
 /// order. The quotas must fit the bundles and every bundle must hold a
 /// ballot, as admission and rounding guarantee.
 pub(super) fn sequential_fill(
     bundles: &[BundleBallots],
-    quotas: &[DelegateQuota],
+    quotas: &[ProxyPreviewDelegation],
 ) -> Vec<PlannedDc> {
     let mut bundle_order = bundles.to_vec();
     bundle_order.sort_by_key(|bundle| (Reverse(bundle.ballots), bundle.bundle_index));
-    let mut delegate_order: Vec<&DelegateQuota> = quotas.iter().collect();
+    let mut delegate_order: Vec<&ProxyPreviewDelegation> = quotas.iter().collect();
     // A stable sort keeps request order among equal quotas.
     delegate_order.sort_by_key(|quota| Reverse(quota.ballots));
 

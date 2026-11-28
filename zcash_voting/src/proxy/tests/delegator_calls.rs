@@ -5,9 +5,7 @@
 
 use super::fixtures::{answered_db_with_bundle_weights, choice, host_at, FIXTURE_ROSTER, ROUND_ID};
 use crate::{
-    proxy::{
-        batch_layout, commit, load_allocation, preview, preview_allocation, AllocationRequest,
-    },
+    proxy::{batch_layout, commit, load_allocation, preview, preview_allocation},
     storage::VotingDb,
     vote_work::RoundHostContext,
     wire::{
@@ -53,13 +51,8 @@ fn a_preview_is_the_planner_s_split_and_records_nothing() {
     for host in [early(), host_at(90_000, Some(0), Some(VOTE_END))] {
         let previewed = preview(&db, &request(), &host).unwrap();
 
-        let plan = preview_allocation(
-            &db,
-            ROUND_ID,
-            &AllocationRequest::from(&request()),
-            batch_layout(&host),
-        )
-        .unwrap();
+        let plan =
+            preview_allocation(&db, ROUND_ID, &request().choices, batch_layout(&host)).unwrap();
         assert_eq!(previewed, ProxyAllocationPreview::from(&plan));
         let delegations: Vec<_> = previewed
             .delegations
@@ -73,7 +66,7 @@ fn a_preview_is_the_planner_s_split_and_records_nothing() {
             .collect();
         assert_eq!(delegations, quotas);
         assert_eq!(previewed.kept_ballots, plan.kept_ballots());
-        assert_eq!(previewed.dc_count as usize, plan.dc_count());
+        assert_eq!(previewed.dc_count as usize, plan.dcs().len());
         assert_eq!(previewed.bundle_count as usize, plan.bundle_count());
         assert_eq!(previewed.single_share, host.is_last_moment());
     }
@@ -117,9 +110,17 @@ fn a_commit_records_the_previewed_plan_once() {
 
     let allocation = load_allocation(&db, ROUND_ID).unwrap().unwrap();
     let quotas: Vec<_> = allocation
-        .quotas()
+        .choices()
         .iter()
-        .map(|quota| (quota.delegate_index, quota.ballots))
+        .map(|choice| {
+            let ballots: u64 = allocation
+                .slots()
+                .iter()
+                .filter(|slot| slot.delegate_index == choice.delegate_index)
+                .map(|slot| slot.weight_ballots)
+                .sum();
+            (choice.delegate_index, ballots)
+        })
         .collect();
     assert_eq!(
         quotas,

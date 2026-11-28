@@ -33,7 +33,7 @@ const CODESPACE_HEADER: &str = "x-svote-codespace";
 const CHAIN_HEIGHT_PATH: &str = "shielded-vote/v1/height";
 /// The Cosmos SDK validator-set route, the height fallback for a node without
 /// [`CHAIN_HEIGHT_PATH`].
-const LATEST_VALIDATOR_SET_PATH: &str =
+pub(super) const LATEST_VALIDATOR_SET_PATH: &str =
     "cosmos/base/tendermint/v1beta1/validatorsets/latest?pagination.limit=1";
 // CheckTx may use its complete 120-second server budget to verify a proof. The
 // client default leaves time for connection setup and response delivery.
@@ -146,8 +146,6 @@ pub(super) enum PostAttemptOutcome {
     Accepted(CandidateTransactionHash),
     Rejected {
         code: u32,
-        /// The answer's ABCI codespace, if the endpoint reported one.
-        codespace: Option<String>,
         kind: ChainRejectionKind,
         diagnostic: ChainSubmissionDiagnostic,
         candidate_transaction_hash: Option<CandidateTransactionHash>,
@@ -570,16 +568,6 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
         outcome
     }
 
-    /// Looks up a candidate on every endpoint (see `lookup_transaction`).
-    pub(super) async fn transaction_status(
-        &self,
-        transaction_hash: CandidateTransactionHash,
-        observations: &crate::ObservationScope,
-    ) -> Result<TransactionStatusObservation, LookupFailure> {
-        self.lookup_transaction(transaction_hash, observations)
-            .await
-    }
-
     /// The highest latest block height any endpoint reports, failing only when
     /// none answers. Each endpoint is read from [`CHAIN_HEIGHT_PATH`], then
     /// from [`LATEST_VALIDATOR_SET_PATH`] when that gives no height.
@@ -658,7 +646,7 @@ impl<T: ChainTransport> ChainProtocolClient<T> {
 
     /// Polls every endpoint for `transaction_hash`, preferring committed
     /// evidence over pending.
-    async fn lookup_transaction(
+    pub(super) async fn transaction_status(
         &self,
         transaction_hash: CandidateTransactionHash,
         observations: &crate::ObservationScope,
@@ -912,7 +900,6 @@ fn classify_broadcast_result(
             PostAttemptOutcome::Rejected {
                 code,
                 kind,
-                codespace: parsed.codespace,
                 // The response log is the only thing that says *why* the chain
                 // refused, and a bare numeric code leaves an operator with
                 // nothing to act on. It is server-controlled text, so it is
@@ -954,14 +941,16 @@ fn parse_chain_height_response(
     parse_height_response(response, "height", |parsed: ChainHeightJson| parsed.height)
 }
 
+/// The height of a [`LATEST_VALIDATOR_SET_PATH`] answer.
+#[derive(Deserialize)]
+pub(super) struct ValidatorSetJson {
+    pub(super) block_height: String,
+}
+
 /// Reads the decimal `block_height` from a validator-set answer.
 fn parse_block_height_response(
     response: &ChainHttpResponse,
 ) -> Result<u64, ChainSubmissionDiagnostic> {
-    #[derive(Deserialize)]
-    struct ValidatorSetJson {
-        block_height: String,
-    }
     parse_height_response(response, "block height", |parsed: ValidatorSetJson| {
         parsed.block_height
     })

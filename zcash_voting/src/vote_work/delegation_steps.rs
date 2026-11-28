@@ -23,33 +23,30 @@ impl<T: ChainTransport> RoundExecutor<T> {
         progress: &dyn RoundStepProgressReporter,
     ) -> Result<RoundStepOutcome, RoundStepFailure> {
         let ledger = StepLedger::default();
-        let proof_status = self
+        if self
             .prepare_delegation_proof(scope, bundle_index, lock, progress)
-            .await?;
-        if scope.interrupted() {
-            return self.step_cancelled(scope, ledger);
-        }
-        proof_status
-            .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
-        if scope.interrupted() {
+            .await?
+            .is_none()
+        {
             return self.step_cancelled(scope, ledger);
         }
         self.outcome(scope, super::RoundStepDisposition::Advanced, ledger)
     }
 
     /// Runs the driver's proof-only ZKP1 preparation of `bundle_index` on a
-    /// blocking thread, forwarding its progress, and returns its result.
+    /// blocking thread, forwarding its progress.
     ///
     /// The thread holds `lock` until preparation has persisted, even if this
     /// future is dropped, so no competing proof starts for the bundle.
+    /// Returns `Ok(None)` when the host interrupted the step at either
+    /// boundary around the result, so the caller ends it as cancelled.
     pub(super) async fn prepare_delegation_proof(
         &self,
         scope: &StepScope<'_>,
         bundle_index: u32,
         lock: &HeldRoundLock,
         progress: &dyn RoundStepProgressReporter,
-    ) -> Result<Result<crate::delegate::DelegationProofStatus, crate::VotingError>, RoundStepFailure>
-    {
+    ) -> Result<Option<()>, RoundStepFailure> {
         let ledger = StepLedger::default();
         let inputs = self.delegation_inputs(scope)?;
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -125,7 +122,15 @@ impl<T: ChainTransport> RoundExecutor<T> {
                 progress: update,
             });
         }
-        Ok(proof_status)
+        if scope.interrupted() {
+            return Ok(None);
+        }
+        proof_status
+            .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))?;
+        if scope.interrupted() {
+            return Ok(None);
+        }
+        Ok(Some(()))
     }
 
     pub(super) async fn run_advance_delegation(

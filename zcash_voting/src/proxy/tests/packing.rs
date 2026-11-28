@@ -3,18 +3,16 @@
 //! bundle and spills into the next.
 
 use super::fixtures::{bundles, choice};
-use crate::proxy::{plan_allocation, AllocationRequest, DcShareLayout};
+use crate::proxy::{plan_allocation, DcShareLayout};
 
 /// The DCs of `percent_bps`, in request order, over `bundle_ballots`, as
 /// `(bundle index, choice position, weight)` in fill order. Delegate indices
 /// run opposite to request order, so a tie broken by index would show.
 fn packed(bundle_ballots: &[u64], percent_bps: &[u16]) -> Vec<(u32, u32, u64)> {
-    let request = AllocationRequest {
-        choices: (0..)
-            .zip(percent_bps)
-            .map(|(position, &bps)| choice(100 - position, bps))
-            .collect(),
-    };
+    let request: Vec<_> = (0..)
+        .zip(percent_bps)
+        .map(|(position, &bps)| choice(100 - position, bps))
+        .collect();
     plan_allocation(&request, &bundles(bundle_ballots), DcShareLayout::Standard)
         .unwrap()
         .dcs()

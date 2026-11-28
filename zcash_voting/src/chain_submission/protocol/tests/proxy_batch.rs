@@ -149,7 +149,6 @@ async fn proxy_batch_rejections_classify_on_codespace_and_code() {
         let (outcome, _) = submit(answer(422, code, codespace)).await;
         let PostAttemptOutcome::Rejected {
             code: observed_code,
-            codespace: observed_codespace,
             kind,
             diagnostic,
             candidate_transaction_hash,
@@ -159,7 +158,6 @@ async fn proxy_batch_rejections_classify_on_codespace_and_code() {
         };
         assert_eq!(kind, expected, "{codespace} {code}");
         assert_eq!(observed_code, code);
-        assert_eq!(observed_codespace.as_deref(), Some(codespace));
         assert_eq!(
             diagnostic.kind(),
             ChainSubmissionDiagnosticKind::ChainRejected

@@ -717,39 +717,36 @@ pub(super) fn apply_confirmed_generation(
     }
 }
 
-/// Applies the domain effect of retiring a 0x09 generation in the caller's
-/// lifecycle transaction.
+/// Applies the domain effect of a 0x09 generation's registration landing
+/// alone in the caller's lifecycle transaction.
 ///
-/// A `registration_position` becomes the bundle's VAN, retires its
-/// undispatched votes and deletes the proved batch so it is proved again
-/// from its persisted slots.
+/// `registration_position` becomes the bundle's VAN, its undispatched votes
+/// retire and the proved batch is deleted so it is proved again from its
+/// persisted slots.
 pub(super) fn apply_proxy_retirement(
     conn: &rusqlite::Transaction<'_>,
     identity: &super::ChainSubmissionIdentity,
-    registration_position: Option<u64>,
+    registration_position: u64,
 ) -> Result<(), VotingError> {
     let round_id = hex::encode(identity.vote_round_id());
     let wallet_id = identity.wallet_id();
     let bundle_index = identity.bundle_index();
-    if let Some(position) = registration_position {
-        crate::confirmation::apply_delegation_confirmation_with_conn(
-            conn,
-            wallet_id,
-            &round_id,
-            bundle_index,
-            None,
-            position,
-        )?;
-        crate::vote::retire_undispatched_votes_outside_roster_with_conn(
-            conn,
-            wallet_id,
-            &round_id,
-            bundle_index,
-            &[],
-        )?;
-        crate::proxy::batch::delete_proved_batch(conn, &round_id, wallet_id, bundle_index)?;
-    }
-    Ok(())
+    crate::confirmation::apply_delegation_confirmation_with_conn(
+        conn,
+        wallet_id,
+        &round_id,
+        bundle_index,
+        None,
+        registration_position,
+    )?;
+    crate::vote::retire_undispatched_votes_outside_roster_with_conn(
+        conn,
+        wallet_id,
+        &round_id,
+        bundle_index,
+        &[],
+    )?;
+    crate::proxy::batch::delete_proved_batch(conn, &round_id, wallet_id, bundle_index)
 }
 
 #[cfg(test)]
