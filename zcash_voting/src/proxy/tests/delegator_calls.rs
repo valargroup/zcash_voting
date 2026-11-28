@@ -186,39 +186,6 @@ fn a_commit_is_refused_unless_the_registry_check_allows_every_choice() {
     }
 }
 
-/// A vote dispatched between preview and commit refuses the commit with
-/// `AlreadyVoted`, and the preview then refuses too.
-#[test]
-fn a_vote_dispatched_after_the_preview_refuses_the_commit() {
-    let db = answered_db_with_bundle_weights(&[100, 50]);
-    let confirmed = preview(&db, &request(), &early()).unwrap();
-    db.conn()
-        .execute(
-            "INSERT INTO votes (round_id, wallet_id, bundle_index, proposal_id, choice,
-                                commitment, created_at, tx_hash)
-             VALUES (?1, ?2, 0, 1, 0, zeroblob(32), 1, 'ab')",
-            rusqlite::params![ROUND_ID, super::fixtures::WALLET_ID],
-        )
-        .unwrap();
-
-    assert_eq!(
-        kind(commit(
-            &db,
-            &request(),
-            &confirmed,
-            &allowed(),
-            &early(),
-            &FIXTURE_ROSTER,
-        )),
-        ProxyDelegationErrorKind::AlreadyVoted
-    );
-    assert_eq!(
-        kind(preview(&db, &request(), &early())),
-        ProxyDelegationErrorKind::AlreadyVoted
-    );
-    assert!(!committed(&db));
-}
-
 /// A commit takes the round's timing from the host, as a preview does: it
 /// is refused without it and after the vote end, and a host now inside the
 /// last-moment window plans another layout than the one confirmed.

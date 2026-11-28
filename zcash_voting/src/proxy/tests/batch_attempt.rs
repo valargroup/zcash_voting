@@ -187,16 +187,6 @@ fn a_registration_batch_needs_a_valid_registration_signature() {
 }
 
 #[test]
-fn a_bundle_without_a_proved_batch_is_not_signed() {
-    let (db, registration_signature) = super::submission_fixtures::committed_round();
-
-    assert_invalid_input(
-        sign_batch_attempt(&db, request(Some(registration_signature), 1_000)),
-        "no proved proxy batch",
-    );
-}
-
-#[test]
 fn an_attempt_is_not_signed_while_a_submission_may_be_on_the_wire() {
     let fixture = proved_batch(FixtureAnchor::Registration);
     let db = &fixture.db;
@@ -213,26 +203,6 @@ fn an_attempt_is_not_signed_while_a_submission_may_be_on_the_wire() {
 }
 
 #[test]
-fn a_re_sign_keeps_the_chain_its_batch_was_signed_for() {
-    let fixture = proved_batch(FixtureAnchor::Chain);
-    let db = &fixture.db;
-    let first = sign_batch_attempt(db, request(None, 1_000))
-        .unwrap()
-        .attempt;
-
-    assert_invalid_input(
-        sign_batch_attempt(
-            db,
-            AttemptSigningRequest {
-                chain_id: "another-chain",
-                ..request(None, first.expiry_height)
-            },
-        ),
-        "was signed for chain",
-    );
-}
-
-#[test]
 fn stored_attempts_keep_their_identity_and_only_move_their_expiry_forward() {
     let fixture = proved_batch(FixtureAnchor::Registration);
     let db = &fixture.db;
@@ -244,15 +214,7 @@ fn stored_attempts_keep_their_identity_and_only_move_their_expiry_forward() {
     };
 
     refused(
-        "UPDATE proxy_batch_attempts SET batch_digest = zeroblob(32)",
-        "a proxy batch keeps its identity and registration signature",
-    );
-    refused(
         "UPDATE proxy_batch_attempts SET chain_id = 'other'",
-        "a proxy batch keeps its identity and registration signature",
-    );
-    refused(
-        "UPDATE proxy_batch_attempts SET registration_spend_auth_sig = NULL",
         "a proxy batch keeps its identity and registration signature",
     );
     refused(

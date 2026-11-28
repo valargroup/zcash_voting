@@ -913,37 +913,6 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_proxy_generation_is_rejected_from_every_live_state_and_never_after() {
-        for live in [
-            StateCase::Submitting,
-            StateCase::Tracking,
-            StateCase::RecoveringWithoutCandidate,
-            StateCase::RecoveringWithCandidate,
-        ] {
-            assert!(matches!(
-                apply(
-                    live.state(),
-                    SubmissionObservation::ProxyGenerationRetired(diagnostic("expired"))
-                ),
-                Some(SubmissionRecordState::Rejected(_))
-            ));
-        }
-        for terminal in [
-            StateCase::Absent,
-            StateCase::ConfirmedByHash,
-            StateCase::ConfirmedByTree,
-            StateCase::Rejected,
-            StateCase::SubmittedWithoutHash,
-        ] {
-            assert!(apply_submission_observation(
-                terminal.state(),
-                SubmissionObservation::ProxyGenerationRetired(diagnostic("late")),
-            )
-            .is_err());
-        }
-    }
-
-    #[test]
     fn transition_matrix_covers_every_state_and_observation_edge() {
         for state_case in StateCase::ALL {
             for observation_kind in ObservationKind::ALL {

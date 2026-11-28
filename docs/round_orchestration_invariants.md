@@ -335,8 +335,7 @@ them.
   `SubmissionManaged`, `SubmittedWithoutHash` or `Confirmed` — holds the batch:
   no `ProxyDelegate` is planned while the vote's own work continues. A
   `SubmissionRejected` vote spent nothing and holds nothing
-  (`a_planned_batch_owes_its_proof_and_holds_its_bundle_from_casts`,
-  `a_pending_batch_holds_an_undispatched_vote`,
+  (`a_pending_batch_holds_an_undispatched_vote`,
   `a_cast_that_may_have_spent_the_van_holds_the_batch`,
   `the_hold_lifts_only_when_the_batch_lands`). Only landing lifts the hold: a
   landed batch's successor VAN is the bundle's. A refused batch may still
@@ -351,8 +350,7 @@ them.
   (`first_unprovable_proxy_batch`; `AlreadyVoted` for a vote that may have
   spent the VAN or reduced its proposal authority, `RegistrationUnusable`
   for a terminal or rejection-blocked registration;
-  `a_commit_refuses_a_bundle_whose_batch_could_never_be_proved`,
-  `a_vote_dispatched_after_the_preview_refuses_the_commit`). An
+  `a_commit_refuses_a_bundle_whose_batch_could_never_be_proved`). An
   undispatched vote without a saved share plan does not refuse a commit; the
   commit holds its bundle. Once a vote's share plan is saved the commit
   refuses with `AlreadyVoted`, because that plan fixed the round's immediate

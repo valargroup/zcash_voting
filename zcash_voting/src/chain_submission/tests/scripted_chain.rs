@@ -57,9 +57,6 @@ pub(crate) fn sign_attempt(
 /// One scripted answer.
 pub(crate) type Reply = Result<ChainHttpResponse, ChainTransportError>;
 
-/// One recorded request: method, URL and headers.
-pub(crate) type Recorded = (&'static str, String, Vec<(String, String)>);
-
 /// A check run inside every POST, before it is answered.
 type PostHook = Box<dyn Fn() + Send + Sync>;
 
@@ -68,7 +65,8 @@ type PostHook = Box<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 pub(crate) struct ScriptedChain {
     replies: Mutex<VecDeque<(&'static str, &'static str, Reply)>>,
-    requests: Mutex<Vec<Recorded>>,
+    /// The method of every request made, in order.
+    methods: Mutex<Vec<&'static str>>,
     post_bodies: Mutex<Vec<serde_json::Value>>,
     before_post: Mutex<Option<PostHook>>,
 }
@@ -86,11 +84,7 @@ impl ScriptedChain {
     /// Records `request` and returns the next scripted answer, checking it
     /// was the request the script expected.
     fn answer(&self, method: &'static str, request: &ChainHttpRequest) -> Reply {
-        self.requests.lock().unwrap().push((
-            method,
-            request.url().to_string(),
-            request.headers().to_vec(),
-        ));
+        self.methods.lock().unwrap().push(method);
         let (expected_method, fragment, reply) = self
             .replies
             .lock()
@@ -118,17 +112,12 @@ impl ScriptedChain {
 
     /// How many POSTs were made.
     pub(crate) fn posts(&self) -> usize {
-        self.requests
+        self.methods
             .lock()
             .unwrap()
             .iter()
-            .filter(|(method, ..)| *method == "POST")
+            .filter(|method| **method == "POST")
             .count()
-    }
-
-    /// Every request made, in order.
-    pub(crate) fn requests(&self) -> Vec<Recorded> {
-        self.requests.lock().unwrap().clone()
     }
 
     /// Asserts every scripted answer was used.

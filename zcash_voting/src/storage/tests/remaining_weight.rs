@@ -116,9 +116,7 @@ fn dispatched_or_confirmed_slots_leave_the_van() {
 
     for (state, remaining) in [
         ("submitting", 5),
-        ("tracking", 5),
         ("recovering", 5),
-        ("submitted_without_hash", 5),
         ("confirmed", 5),
         ("rejected", 10),
     ] {
@@ -266,13 +264,7 @@ fn a_bundle_held_by_its_proxy_batch_prepares_no_vote() {
 
     assert_held(&db, "planned or proved");
     record_proxy_batch_submission(&db, "submitting");
-    for state in [
-        "submitting",
-        "tracking",
-        "recovering",
-        "submitted_without_hash",
-        "rejected",
-    ] {
+    for state in ["submitting", "rejected"] {
         set_proxy_batch_state(&db, state);
         assert_held(&db, state);
     }

@@ -148,11 +148,16 @@ fn a_batch_on_the_wire_is_advanced_until_it_lands() {
 }
 
 /// The hold on the bundle's casts lifts only when the batch lands: until
-/// then the bundle's share of a choice is withheld.
+/// then the bundle's share of a choice is withheld, and a held bundle plans
+/// no delegation prerequisite either.
 #[test]
 fn the_hold_lifts_only_when_the_batch_lands() {
     for (progress, phase, casts_now) in [
-        (ProxyBatchProgress::Planned, DelegationPhase::Proved, false),
+        (
+            ProxyBatchProgress::Planned,
+            DelegationPhase::PcztBuilt,
+            false,
+        ),
         (ProxyBatchProgress::Proved, DelegationPhase::Proved, false),
         (
             ProxyBatchProgress::InFlight { refused: false },
@@ -182,6 +187,14 @@ fn the_hold_lifts_only_when_the_batch_lands() {
         assert_eq!(
             obligations.withheld_casts.contains(&1),
             !casts_now,
+            "{progress:?}"
+        );
+        assert!(
+            casts_now
+                || !obligations
+                    .obligations
+                    .iter()
+                    .any(|obligation| matches!(obligation, Obligation::Delegate { .. })),
             "{progress:?}"
         );
     }

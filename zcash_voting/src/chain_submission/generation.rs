@@ -212,13 +212,6 @@ impl DerivedChainSubmission {
         self
     }
 
-    /// Attaches 0x09 facts to a synthetic proxy batch generation.
-    #[cfg(test)]
-    pub(super) fn with_proxy(mut self, binding: ProxyBatchBinding) -> Self {
-        self.bound.proxy = Some(binding);
-        self
-    }
-
     /// Returns the identity-bound semantic generation.
     pub(super) fn generation(&self) -> &ChainSubmissionGeneration {
         self.bound.generation()

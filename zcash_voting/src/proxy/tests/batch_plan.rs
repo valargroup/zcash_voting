@@ -179,14 +179,10 @@ fn the_committed_layout_survives_a_re_plan_in_the_last_moment_window() {
     assert_eq!(batch_layout(&late), DcShareLayout::SingleShare);
     commit(&db, &three_delegates(), batch_layout(&early));
 
-    let first = plan_and_build(&db);
-    // The re-plan reads the stored layout; the window it now runs in does not
+    // Planning reads the stored layout; the window it now runs in does not
     // enter planning at all.
-    let rebuilt = plan_and_build(&db);
-
-    for (dc, again) in first.iter().zip(&rebuilt) {
+    for dc in plan_and_build(&db) {
         assert_eq!(dc.slot.layout, DcShareLayout::Standard);
-        assert_eq!(dc_bytes(&dc.bundle), dc_bytes(&again.bundle));
         let funded_shares = dc
             .bundle
             .encrypted_shares

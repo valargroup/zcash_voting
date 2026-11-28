@@ -192,18 +192,7 @@ pub(crate) fn two_delegates() -> AllocationRequest {
 }
 
 /// A round whose bundle 0 holds a complete, hotkey-bound delegation setup and
-/// a committed two-delegate allocation, its batch planned but not proved.
-pub(crate) fn committed_round() -> (Arc<VotingDb>, [u8; 64]) {
-    committed_round_with(DcShareLayout::Standard)
-}
-
-/// [`committed_round`] with the allocation committed under `layout`.
-pub(crate) fn committed_round_with(layout: DcShareLayout) -> (Arc<VotingDb>, [u8; 64]) {
-    committed_round_for(layout, two_delegates())
-}
-
-/// [`committed_round_with`], committing `request` in place of
-/// [`two_delegates`].
+/// `request` committed under `layout`, its batch planned but not proved.
 pub(crate) fn committed_round_for(
     layout: DcShareLayout,
     request: AllocationRequest,
@@ -300,7 +289,7 @@ pub(crate) fn committed_round_for(
     (db, registration_signature)
 }
 
-/// [`committed_round`] with bundle 0's batch planned, built and stored as
+/// [`committed_round_for`] with bundle 0's batch planned, built and stored as
 /// proved against `anchor`.
 pub(crate) fn proved_batch(anchor: FixtureAnchor) -> ProvedBatchFixture {
     proved_batch_with(anchor, DcShareLayout::Standard)

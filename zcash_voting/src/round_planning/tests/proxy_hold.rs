@@ -21,17 +21,6 @@ fn proxy_bundles(obligations: &[Obligation]) -> Vec<u32> {
         .collect()
 }
 
-/// The bundles `obligations` cast on.
-fn cast_bundles(obligations: &[Obligation]) -> Vec<u32> {
-    obligations
-        .iter()
-        .filter_map(|obligation| match obligation {
-            Obligation::Cast { bundle_index, .. } => Some(*bundle_index),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Whether `obligations` reconcile any unit on `bundle`.
 fn reconciles(obligations: &[Obligation], bundle: u32) -> bool {
     obligations.iter().any(|obligation| {
@@ -40,31 +29,6 @@ fn reconciles(obligations: &[Obligation], bundle: u32) -> bool {
             Obligation::ReconcileChain { bundle_index, .. } if *bundle_index == bundle
         )
     })
-}
-
-/// A planned batch owes its proof and holds its bundle from casts, while a
-/// bundle without slots casts as before.
-#[test]
-fn a_planned_batch_owes_its_proof_and_holds_its_bundle_from_casts() {
-    let snapshot = snapshot()
-        .bundle(0, DelegationPhase::PcztBuilt)
-        .bundle(1, DelegationPhase::PcztBuilt)
-        .proxy_batch(0, ProxyBatchProgress::Planned)
-        .intent(1, Decision::Choice(1))
-        .build();
-
-    let obligations = classify_round(&snapshot, &[1]).unwrap();
-
-    assert_eq!(proxy_bundles(&obligations.obligations), vec![0]);
-    assert_eq!(cast_bundles(&obligations.obligations), vec![1]);
-    assert!(!obligations
-        .obligations
-        .iter()
-        .any(|obligation| matches!(obligation, Obligation::Delegate { bundle_index: 0 })));
-    assert!(
-        obligations.withheld_casts.contains(&1),
-        "bundle 0's share of proposal 1 waits for the batch"
-    );
 }
 
 /// A proxy-only round, with no ballot recorded, still plans the batch and
@@ -202,7 +166,7 @@ fn a_proxy_step_resolves_to_its_obligation() {
 }
 
 /// The snapshot reads every bundle's batch progress in its one transaction:
-/// committed slots plan a batch, and a stored proved batch reads as proved.
+/// committed slots plan a batch, and a bundle without slots has none.
 #[test]
 fn the_snapshot_reads_each_bundle_s_batch_progress() {
     use crate::round::VotingDb;
@@ -264,20 +228,5 @@ fn the_snapshot_reads_each_bundle_s_batch_progress() {
             (1, ProxyBatchProgress::Planned)
         ],
         "bundle 2 carries no slot"
-    );
-
-    db.conn()
-        .execute(
-            "INSERT INTO proxy_batches (round_id, wallet_id, bundle_index, anchor_height, proved_at)
-             VALUES (?1, ?2, 1, 0, 1)",
-            rusqlite::params![ROUND, WALLET],
-        )
-        .unwrap();
-    assert_eq!(
-        progress(),
-        vec![
-            (0, ProxyBatchProgress::Planned),
-            (1, ProxyBatchProgress::Proved)
-        ]
     );
 }

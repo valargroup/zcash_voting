@@ -2344,9 +2344,7 @@ no device signs again
 `a_live_attempt_is_kept_until_its_expiry_passes`,
 `an_expired_answer_re_signs_past_the_stored_expiry_even_from_a_lagging_height`,
 `a_registration_batch_needs_a_valid_registration_signature`,
-`a_bundle_without_a_proved_batch_is_not_signed`,
 `an_attempt_is_not_signed_while_a_submission_may_be_on_the_wire`,
-`a_re_sign_keeps_the_chain_its_batch_was_signed_for`,
 `stored_attempts_keep_their_identity_and_only_move_their_expiry_forward`).
 
 Derivation rebuilds the request from the proved batch and the newest attempt.
@@ -2398,8 +2396,7 @@ expiry answer proof of absence.
 
 `ProxyGenerationRetired` is admitted from every live state, whatever ambiguity
 preceded, and from no terminal one
-(`a_retired_proxy_generation_is_rejected_from_every_live_state_and_never_after`,
-`transition_matrix_covers_every_state_and_observation_edge`). A refusal does
+(`transition_matrix_covers_every_state_and_observation_edge`). A refusal does
 not clear an earlier attempt's ambiguity, and every 0x09 code 2 scans, so a
 lagging answer cannot turn a landed batch into a refusal without a tree pass
 first.
@@ -2414,7 +2411,7 @@ Coverage, over the SQLite store and real derivation:
 `another_rejection_after_an_ambiguous_attempt_keeps_the_batch_recoverable`,
 and `a_committed_failure_is_classified_on_its_codespace`. A 0x09 candidate
 lookup sends `X-Svote-Codespace: 1`, as every lookup does
-(`a_proxy_batch_lookup_asks_for_the_codespace`).
+(`every_submission_and_lookup_asks_for_the_codespace`).
 
 ### Recovery, landing and split-off
 

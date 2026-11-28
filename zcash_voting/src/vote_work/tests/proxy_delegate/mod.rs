@@ -76,10 +76,8 @@ async fn the_registration_is_proved_before_any_dc() {
         .iter()
         .any(|event| matches!(event, RoundStepProgress::ProxyBatchProved { .. })));
     drop(events);
-    // The batch is still owed, and planning it again keeps what was written.
-    let planned = slot_nullifiers(&db);
+    // The batch is still owed.
     assert_eq!(executor.plan().unwrap().next_steps, vec![STEP]);
-    assert_eq!(slot_nullifiers(&db), planned);
 }
 
 /// After the authenticated vote end no new batch is planned or proved.

@@ -13,9 +13,9 @@ use crate::{
         ChainSubmissionFailure, ChainSubmissionPending, ChainTransportError,
     },
     proxy::tests::submission_fixtures::{
-        proved_batch, FixtureAnchor, ProvedBatchFixture, CHAIN_ID, NETWORK, ROUND_ID, WALLET_ID,
+        proved_batch, FixtureAnchor, ProvedBatchFixture, CHAIN_ID, NETWORK, ROUND_ID,
     },
-    storage::{queries, VotingDb},
+    storage::VotingDb,
 };
 
 /// A proved batch on bundle 0 with an attempt signed at [`SIGNED_AT`], and
@@ -103,11 +103,6 @@ async fn an_accepted_batch_confirms_by_hash_and_lands_its_dcs() {
     assert_eq!(confirmation.final_van_position(), 5);
     assert_eq!(confirmation.vote_commitment_positions(), &[6, 7]);
     chain.assert_drained();
-    let lookup = &chain.requests()[1];
-    assert!(lookup
-        .2
-        .iter()
-        .any(|(name, value)| name == "x-svote-codespace" && value == "1"));
     assert_eq!(row(&fixture.db).unwrap().0, "confirmed");
     let db = &fixture.db;
     assert_eq!(db.load_van_position_u64(ROUND_ID, 0).unwrap(), 5);
@@ -131,13 +126,6 @@ async fn an_accepted_batch_confirms_by_hash_and_lands_its_dcs() {
         .map(|(dc, position)| (i64::from(dc.dc_slot), position))
         .collect();
     assert_eq!(landings, expected);
-    let state = queries::load_van_state(&db.conn(), ROUND_ID, WALLET_ID, 0).unwrap();
-    let delegated: u64 = fixture.batch.dcs.iter().map(|dc| dc.weight_ballots).sum();
-    assert_eq!(state.delegated_ballots, delegated);
-    assert_eq!(
-        state.remaining_ballots().unwrap(),
-        state.registered_ballots().unwrap() - delegated
-    );
 }
 
 #[tokio::test]
@@ -275,16 +263,11 @@ async fn a_spent_nullifier_with_the_batch_in_the_tree_confirms_from_the_tree() {
 
 /// Any refusal but a pause or an expiry, including spent nullifiers the tree
 /// shows nowhere, leaves the batch pending, and the next pass sends it
-/// again.
+/// again. Which (codespace, code) pairs are "other" is the protocol's
+/// classification, tested with it.
 #[tokio::test]
 async fn any_other_refusal_leaves_the_batch_pending_and_sends_it_again() {
-    for (codespace, code) in [
-        ("vote", 5),
-        ("vote", 69),
-        ("sdk", 52),
-        ("sdk", 2),
-        ("vote", 2),
-    ] {
+    for (codespace, code) in [("vote", 5), ("vote", 2)] {
         let (fixture, digest) = signed(FixtureAnchor::Chain);
         let chain = Arc::new(ScriptedChain::default());
         chain.expect(

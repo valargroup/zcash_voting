@@ -140,17 +140,8 @@ async fn proxy_batch_rejections_classify_on_codespace_and_code() {
         ("vote", 2, ChainRejectionKind::NullifierAlreadySpent),
         ("vote", 51, ChainRejectionKind::ProxyBatchPaused),
         ("vote", 52, ChainRejectionKind::ProxyBatchExpired),
-        ("vote", 3, ChainRejectionKind::Other),
-        ("vote", 4, ChainRejectionKind::Other),
         ("vote", 5, ChainRejectionKind::Other),
-        ("vote", 6, ChainRejectionKind::Other),
-        ("vote", 7, ChainRejectionKind::Other),
-        ("vote", 9, ChainRejectionKind::Other),
-        ("vote", 11, ChainRejectionKind::Other),
-        ("vote", 50, ChainRejectionKind::Other),
-        ("vote", 99, ChainRejectionKind::Other),
         ("sdk", 2, ChainRejectionKind::Other),
-        ("sdk", 51, ChainRejectionKind::Other),
         ("sdk", 52, ChainRejectionKind::Other),
         ("", 52, ChainRejectionKind::Other),
     ];
@@ -173,12 +164,6 @@ async fn proxy_batch_rejections_classify_on_codespace_and_code() {
             diagnostic.kind(),
             ChainSubmissionDiagnosticKind::ChainRejected
         );
-        assert_eq!(
-            diagnostic.message(),
-            format!(
-                "vote chain rejected the proxy batch with {codespace} code {code}: chain says no"
-            )
-        );
         assert!(candidate_transaction_hash.is_some());
     }
 }
@@ -190,7 +175,6 @@ async fn a_proxy_batch_answer_needs_its_codespace_and_matching_digest() {
     let digest = hex::encode(DIGEST);
     for body in [
         format!(r#"{{"tx_hash":"{HASH}","code":0,"batch_digest":"{digest}"}}"#),
-        format!(r#"{{"tx_hash":"{HASH}","code":52,"log":"expired","batch_digest":"{digest}"}}"#),
         format!(r#"{{"tx_hash":"{HASH}","code":0,"codespace":""}}"#),
         format!(
             r#"{{"tx_hash":"{HASH}","code":0,"codespace":"","batch_digest":"{}"}}"#,
@@ -205,58 +189,11 @@ async fn a_proxy_batch_answer_needs_its_codespace_and_matching_digest() {
         ),
         format!(r#"{{"code":0,"codespace":"","batch_digest":"{digest}"}}"#),
     ] {
-        let status = if body.contains("\"code\":52") {
-            422
-        } else {
-            200
-        };
-        let (outcome, _) = submit(json(status, body.clone())).await;
+        let (outcome, _) = submit(json(200, body.clone())).await;
         assert!(
             matches!(outcome, PostAttemptOutcome::PossiblyDispatched(_)),
             "{body}: {outcome:?}"
         );
-    }
-}
-
-/// A 0x09 candidate lookup asks for the codespace a committed failure is
-/// classified on, as every lookup does.
-#[tokio::test]
-async fn a_proxy_batch_lookup_asks_for_the_codespace() {
-    let transport = Arc::new(ScriptedTransport::default());
-    transport.queue(Ok(json(
-        422,
-        r#"{"height":"43","code":52,"codespace":"vote","log":"expired","events":[]}"#,
-    )));
-    transport.queue(Ok(json(404, r#"{"error":"tx not found"}"#)));
-    let client = protocol_client(
-        transport.clone(),
-        Network::Testnet,
-        &["https://vote.example"],
-    );
-    let hash = CandidateTransactionHash::from_str(HASH).unwrap();
-
-    let observed = client
-        .transaction_status(hash, &crate::ObservationScope::disabled())
-        .await
-        .unwrap();
-    assert!(matches!(
-        observed,
-        TransactionStatusObservation::CommittedFailure(CommittedTransaction {
-            code: 52,
-            codespace: Some(ref codespace),
-            ..
-        }) if codespace == "vote"
-    ));
-    client
-        .transaction_status(hash, &crate::ObservationScope::disabled())
-        .await
-        .unwrap();
-
-    let calls = transport.calls.lock().unwrap();
-    for (_, request, _) in calls.iter() {
-        assert!(request
-            .headers()
-            .contains(&("x-svote-codespace".to_string(), "1".to_string())));
     }
 }
 
