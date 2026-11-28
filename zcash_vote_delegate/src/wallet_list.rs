@@ -29,10 +29,6 @@ pub const MAX_RESERVED_NAMES: usize = 1_000;
 pub const MAX_RESERVED_NAME_BYTES: usize = 64;
 /// The longest display name, in Unicode scalar values.
 pub const MAX_LIST_NAME_CHARS: usize = 50;
-/// The longest statement, in Unicode scalar values.
-pub const MAX_LIST_STATEMENT_CHARS: usize = 280;
-/// The largest picture, in bytes of WebP.
-pub const MAX_LIST_PICTURE_BYTES: usize = 12_288;
 /// The most signatures one wallet list carries.
 pub const MAX_WALLET_LIST_SIGNATURES: usize = 8;
 const MAX_WALLET_ID_BYTES: usize = 32;
@@ -67,12 +63,8 @@ pub struct WalletListRow {
     pub handle: String,
     /// The entry's key the wallet reviewed, as its canonical `zvdk1…` string.
     pub dk: String,
-    /// The display name.
+    /// The display name the wallet's signer chose.
     pub name: String,
-    /// The statement, if the delegate sent one.
-    pub statement: Option<String>,
-    /// The picture's WebP bytes, if the delegate sent one.
-    pub picture: Option<Vec<u8>>,
 }
 
 impl WalletListRow {
@@ -98,10 +90,9 @@ impl WalletList {
 
     /// Checks the field rules and builds `WalletListPayloadV1`, the bytes every
     /// signature covers: the domain, then each field raw or little-endian in
-    /// list order, the key as its 32 bytes, and absent statements and pictures
-    /// empty. Each field is checked just before it is written, which is the
-    /// contract's table order, so the error is the first rule broken, row by
-    /// row.
+    /// list order, and the key as its 32 bytes. Each field is checked just
+    /// before it is written, which is the contract's table order, so the error
+    /// is the first rule broken, row by row.
     pub fn payload(&self) -> Result<Vec<u8>, WalletListError> {
         if !is_wallet_id(&self.wallet_id) {
             return Err(WalletListError::InvalidWalletId);
@@ -152,32 +143,14 @@ impl WalletList {
                 return Err(WalletListError::InvalidHandle);
             }
             let dk = decode_key_string(&row.dk).map_err(|_| WalletListError::InvalidKey)?;
-            if !is_display_text(&row.name, MAX_LIST_NAME_CHARS, false) {
+            if !is_display_text(&row.name, MAX_LIST_NAME_CHARS) {
                 return Err(WalletListError::InvalidName);
-            }
-            if let Some(statement) = &row.statement {
-                if !is_display_text(statement, MAX_LIST_STATEMENT_CHARS, true) {
-                    return Err(WalletListError::InvalidStatement);
-                }
-            }
-            if let Some(picture) = &row.picture {
-                if picture.len() > MAX_LIST_PICTURE_BYTES {
-                    return Err(WalletListError::PictureTooLarge);
-                }
-                if !is_webp_container(picture) {
-                    return Err(WalletListError::InvalidPicture);
-                }
             }
             payload.extend_from_slice(&row.index.to_le_bytes());
             payload.extend_from_slice(&row.provider.to_le_bytes());
             push_lp8(&mut payload, row.handle.as_bytes());
             payload.extend_from_slice(&dk);
             push_lp8(&mut payload, row.name.as_bytes());
-            push_lp16(
-                &mut payload,
-                row.statement.as_deref().unwrap_or_default().as_bytes(),
-            );
-            push_lp16(&mut payload, row.picture.as_deref().unwrap_or_default());
         }
         Ok(payload)
     }
@@ -240,7 +213,7 @@ pub fn verify_wallet_list(
     let wire: WalletListWire =
         serde_json::from_slice(document).map_err(|_| WalletListError::Malformed)?;
     let signatures = wire.signatures()?;
-    let list = wire.into_list()?;
+    let list = wire.into_list();
     let payload = list.payload()?;
     if list.wallet_id != wallet_id {
         return Err(WalletListError::WrongWallet);
@@ -269,7 +242,7 @@ pub enum WalletListError {
     /// The document is longer than [`MAX_WALLET_LIST_BYTES`].
     TooLarge,
     /// Not the contract's shape: not JSON, a repeated, unknown or absent
-    /// member, `null`, a wrong type, non-canonical base64, or bad `signatures`.
+    /// member, `null`, a wrong type, or bad `signatures`.
     Malformed,
     /// `format` is not [`WALLET_LIST_FORMAT`].
     UnsupportedFormat,
@@ -304,12 +277,6 @@ pub enum WalletListError {
     InvalidKey,
     /// A row's name is not 1 to 50 scalar values of NFC display text.
     InvalidName,
-    /// A row's statement is not 1 to 280 scalar values of NFC display text.
-    InvalidStatement,
-    /// A row's picture is larger than [`MAX_LIST_PICTURE_BYTES`].
-    PictureTooLarge,
-    /// A row's picture is not a WebP container whose size field covers it.
-    InvalidPicture,
     /// The list belongs to another wallet.
     WrongWallet,
     /// The list is for another chain.
@@ -339,9 +306,6 @@ impl WalletListError {
             Self::InvalidHandle => "InvalidHandle",
             Self::InvalidKey => "InvalidKey",
             Self::InvalidName => "InvalidName",
-            Self::InvalidStatement => "InvalidStatement",
-            Self::PictureTooLarge => "PictureTooLarge",
-            Self::InvalidPicture => "InvalidPicture",
             Self::WrongWallet => "WrongWallet",
             Self::WrongChain => "WrongChain",
             Self::NoPinnedSignature => "NoPinnedSignature",
@@ -372,7 +336,7 @@ struct WalletListWire {
     signatures: Vec<SignatureWire>,
 }
 
-/// One row as published. `picture` is canonical base64.
+/// One row as published.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WalletListRowWire {
@@ -381,10 +345,6 @@ struct WalletListRowWire {
     handle: String,
     dk: String,
     name: String,
-    #[serde(default, deserialize_with = "present_string")]
-    statement: Option<String>,
-    #[serde(default, deserialize_with = "present_string")]
-    picture: Option<String>,
 }
 
 /// One signature, in the dynamic config's signature shape.
@@ -422,39 +382,27 @@ impl WalletListWire {
             .collect()
     }
 
-    /// The signed content. A non-canonical base64 picture is malformed.
-    fn into_list(self) -> Result<WalletList, WalletListError> {
+    /// The signed content.
+    fn into_list(self) -> WalletList {
         let delegates = self
             .delegates
             .into_iter()
-            .map(|row| {
-                let picture = row
-                    .picture
-                    .map(|text| {
-                        STANDARD
-                            .decode(&text)
-                            .map_err(|_| WalletListError::Malformed)
-                    })
-                    .transpose()?;
-                Ok(WalletListRow {
-                    index: row.index,
-                    provider: row.provider,
-                    handle: row.handle,
-                    dk: row.dk,
-                    name: row.name,
-                    statement: row.statement,
-                    picture,
-                })
+            .map(|row| WalletListRow {
+                index: row.index,
+                provider: row.provider,
+                handle: row.handle,
+                dk: row.dk,
+                name: row.name,
             })
-            .collect::<Result<_, WalletListError>>()?;
-        Ok(WalletList {
+            .collect();
+        WalletList {
             wallet_id: self.wallet_id,
             chain_id: self.chain_id,
             version: self.version,
             issued_at: self.issued_at,
             reserved_names: self.reserved_names,
             delegates,
-        })
+        }
     }
 }
 
@@ -491,38 +439,19 @@ fn is_bidi_formatting(character: char) -> bool {
 }
 
 /// Whether `text` is display text: 1 to `max_chars` scalar values in NFC, with
-/// no bidi formatting or control character (a line feed only if allowed).
-fn is_display_text(text: &str, max_chars: usize, allow_line_feed: bool) -> bool {
+/// no bidi formatting or control character.
+fn is_display_text(text: &str, max_chars: usize) -> bool {
     (1..=max_chars).contains(&text.chars().count())
         && is_nfc(text)
-        && text.chars().all(|character| {
-            !is_bidi_formatting(character)
-                && (!character.is_control() || (allow_line_feed && character == '\n'))
-        })
-}
-
-/// Whether `picture` is a WebP container: `RIFF`, a size field equal to the
-/// length minus 8, then `WEBP`. The wallet decodes the image itself.
-fn is_webp_container(picture: &[u8]) -> bool {
-    let (Some(riff), Some(size), Some(form)) =
-        (picture.get(..4), picture.get(4..8), picture.get(8..12))
-    else {
-        return false;
-    };
-    let size = u32::from_le_bytes(size.try_into().expect("a 4-byte slice"));
-    riff == b"RIFF" && form == b"WEBP" && usize::try_from(size).ok() == picture.len().checked_sub(8)
+        && text
+            .chars()
+            .all(|character| !is_bidi_formatting(character) && !character.is_control())
 }
 
 /// Appends `lp8(bytes)`. The field rules keep the length below 256.
 fn push_lp8(payload: &mut Vec<u8>, bytes: &[u8]) {
     let length = u8::try_from(bytes.len()).expect("the field rules bound every one-byte count");
     payload.push(length);
-    payload.extend_from_slice(bytes);
-}
-
-/// Appends `lp16(bytes)` (a `u16le` length). The field rules bound it.
-fn push_lp16(payload: &mut Vec<u8>, bytes: &[u8]) {
-    push_count16(payload, bytes.len());
     payload.extend_from_slice(bytes);
 }
 
@@ -577,10 +506,4 @@ impl<'de> Deserialize<'de> for TopLevel {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_map(TopLevelVisitor)
     }
-}
-
-/// Deserializes an optional string member, refusing `null` so absence is the
-/// only way to omit it. Use with `#[serde(default)]`.
-fn present_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
-    String::deserialize(deserializer).map(Some)
 }

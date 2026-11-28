@@ -76,15 +76,6 @@ pub(super) fn cache(entries: Vec<ProxyDelegateEntry>) -> RegistryCache {
     )
 }
 
-/// A WebP container of 20 bytes; only its structure is valid.
-pub(super) fn picture() -> Vec<u8> {
-    let mut picture = b"RIFF".to_vec();
-    picture.extend_from_slice(&12u32.to_le_bytes());
-    picture.extend_from_slice(b"WEBPVP8L");
-    picture.extend_from_slice(&[0; 4]);
-    picture
-}
-
 /// The key that signs the wallet's list.
 pub(super) fn list_signer() -> SigningKey {
     SigningKey::from_bytes(&[9; 32])
@@ -110,8 +101,6 @@ pub(super) fn row(entry: &ProxyDelegateEntry) -> WalletListRow {
         handle: entry.handle.clone(),
         dk: entry.dk.encode(),
         name: format!("Delegate {}", entry.index),
-        statement: Some(format!("Statement of {}.", entry.index)),
-        picture: Some(picture()),
     }
 }
 
@@ -141,20 +130,13 @@ pub(super) fn list_document(list: &WalletList, signer: &SigningKey, key_id: &str
         .delegates
         .iter()
         .map(|row| {
-            let mut value = json!({
+            json!({
                 "index": row.index,
                 "provider": row.provider,
                 "handle": row.handle,
                 "dk": row.dk,
                 "name": row.name,
-            });
-            if let Some(statement) = &row.statement {
-                value["statement"] = json!(statement);
-            }
-            if let Some(picture) = &row.picture {
-                value["picture"] = json!(BASE64.encode(picture));
-            }
-            value
+            })
         })
         .collect();
     json!({

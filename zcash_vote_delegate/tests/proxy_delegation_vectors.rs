@@ -23,7 +23,7 @@ use zcash_vote_delegate::{
 const WRITE_VECTORS_ENV: &str = "ZCASH_VOTE_DELEGATE_WRITE_VECTORS";
 
 /// The file's SHA-256, recorded in contracts-v1 §13.
-const VECTORS_SHA256: &str = "4371f5db2a2b830cc3bcc198473cd3b2a4d18a2b71d67167e0fd84bf4c73490f";
+const VECTORS_SHA256: &str = "e50fb0e6978b82a114c8c26ff84648cf35e77400505bb2a3584e39b37262a918";
 
 /// The Pallas base field modulus p, big-endian.
 const PALLAS_BASE_MODULUS: &str =

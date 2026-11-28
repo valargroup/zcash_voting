@@ -43,8 +43,6 @@ fn a_row_reviews_only_its_active_entry() {
         handle: "alice".to_owned(),
         dk: entry.dk.encode(),
         name: "Alice".to_owned(),
-        statement: None,
-        picture: None,
     };
     assert!(row.reviews(&entry));
     let other_key = DelegateSigningKey::from_secret_seed([2; 32]).delegate_key();

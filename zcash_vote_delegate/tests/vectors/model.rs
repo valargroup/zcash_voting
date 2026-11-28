@@ -351,8 +351,7 @@ pub struct WalletListPayloadInputs {
     pub signer_secret_seed: String,
 }
 
-/// One wallet list row; `dk` is a `zvdk1…` string and `picture` is the WebP
-/// bytes as hex.
+/// One wallet list row; `dk` is a `zvdk1…` string.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalletListRowInputs {
     pub index: u32,
@@ -360,8 +359,6 @@ pub struct WalletListRowInputs {
     pub handle: String,
     pub dk: String,
     pub name: String,
-    pub statement: Option<String>,
-    pub picture: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

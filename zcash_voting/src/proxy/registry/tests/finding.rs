@@ -3,7 +3,7 @@
 
 use zcash_vote_delegate::{DelegateStatus, IdentityProvider, ProxyDelegateEntry};
 
-use super::fixtures::{cache, dk, entry, picture, row, verified, wallet_list, with_status};
+use super::fixtures::{cache, dk, entry, row, verified, wallet_list, with_status};
 use crate::{
     proxy::registry::{RegistryCache, RegistryView, VerifiedWalletList},
     wire::{
@@ -82,8 +82,6 @@ fn alice() -> ProxyDelegateListing {
         },
         reviewed: true,
         display_name: Some("Delegate 17".to_owned()),
-        statement: Some("Statement of 17.".to_owned()),
-        picture: Some(picture()),
         new_this_round: false,
         status: DelegateEntryStatus::Active,
         lookalike_of: None,
@@ -99,7 +97,7 @@ fn found(lookup: DelegateLookup) -> ProxyDelegateListing {
 }
 
 /// Browse shows, in list order, each row the cache holds an entry for,
-/// with the row's content. Only an active entry with the row's key, provider
+/// with the row's name. Only an active entry with the row's key, provider
 /// and handle is reviewed.
 #[test]
 fn browse_shows_the_list_rows_the_cache_holds_with_their_reviewed_status() {

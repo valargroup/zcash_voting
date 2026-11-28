@@ -59,10 +59,6 @@ pub struct ProxyDelegateListing {
     pub reviewed: bool,
     /// The name in the wallet list's row for this index, if it has one.
     pub display_name: Option<String>,
-    /// The wallet list row's statement.
-    pub statement: Option<String>,
-    /// The wallet list row's WebP picture; the identicon shows without one.
-    pub picture: Option<Vec<u8>>,
     /// The entry was registered after the round was created. Display only.
     pub new_this_round: bool,
     /// Whether the entry is active, suspended or retired.

@@ -7,12 +7,7 @@ use zcash_vote_delegate::{DelegateSigningKey, WalletList, WalletListRow};
 
 /// The SHA-256 of the payload vote-sdk's `internal/votingconfig` tests and
 /// its signing page compute for [`go_test_list`].
-const GO_PAYLOAD_SHA256: &str = "a16b7b13f55d8a0a9d2f396c3a4f272c81a5f86f33b46c3f17e1093c35e897b2";
-
-/// A 128 × 128 lossless WebP of 82 bytes.
-const PICTURE_WEBP: &str = "524946464a000000574542505650384c3d0000002f7fc01f000f708fcc7b58df457ffe\
-                            030f8ada3692cc9f7400ecd16f44ff27a1a028d88bcef6004541517b511414839def\
-                            ef3bde03d0d91ea028286a2f00";
+const GO_PAYLOAD_SHA256: &str = "39981de7f3ad357c18048c141ac2359955485d12945dbc3670e4b5a9d036989c";
 
 /// The `zvdk1` key vote-sdk's tests derive for `label`: the public key of
 /// the seed `SHA-256("votingconfig wallet list test/" || label)`.
@@ -23,8 +18,8 @@ fn go_test_key(label: &str) -> String {
         .encode()
 }
 
-/// vote-sdk's two-row test list: alice on X with a statement and a picture,
-/// and bob on GitHub with a non-ASCII NFC name.
+/// vote-sdk's two-row test list: alice on X, and bob on GitHub with a
+/// non-ASCII NFC name.
 fn go_test_list() -> WalletList {
     WalletList {
         wallet_id: "vizor".to_owned(),
@@ -41,10 +36,6 @@ fn go_test_list() -> WalletList {
                 handle: "alice".to_owned(),
                 dk: go_test_key("alice"),
                 name: "Alice Example".to_owned(),
-                statement: Some(
-                    "I vote for privacy first.\nAsk me anything about my ballots.".to_owned(),
-                ),
-                picture: Some(hex::decode(PICTURE_WEBP).unwrap()),
             },
             WalletListRow {
                 index: 23,
@@ -52,8 +43,6 @@ fn go_test_list() -> WalletList {
                 handle: "bob-dev".to_owned(),
                 dk: go_test_key("bob"),
                 name: "B\u{f3}b \u{d1}and\u{fa}".to_owned(),
-                statement: None,
-                picture: None,
             },
         ],
     }

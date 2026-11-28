@@ -10,7 +10,7 @@ use crate::wire::{
     DelegateEntryStatus, DelegateKeyInfo, ProxyDelegateListing, ProxyDelegateProvider,
 };
 
-/// The listing of `entry`, with the content of the wallet list's row for its
+/// The listing of `entry`, with the name in the wallet list's row for its
 /// index. `first_new_index` is the round's `next_delegate_index_at_creation`,
 /// when the host knows it.
 pub(super) fn listing(
@@ -29,8 +29,6 @@ pub(super) fn listing(
         },
         reviewed: row.is_some_and(|row| row.reviews(entry)),
         display_name: row.map(|row| row.name.clone()),
-        statement: row.and_then(|row| row.statement.clone()),
-        picture: row.and_then(|row| row.picture.clone()),
         new_this_round: first_new_index.is_some_and(|first_new| entry.index >= first_new),
         status: match entry.status {
             DelegateStatus::Active => DelegateEntryStatus::Active,

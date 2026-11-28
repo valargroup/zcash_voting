@@ -379,7 +379,7 @@ fn pair(inputs: &PairInputs) -> PairExpected {
     }
 }
 
-/// The wallet list a payload case describes; its pictures are hex.
+/// The wallet list a payload case describes.
 pub fn wallet_list(inputs: &WalletListPayloadInputs) -> WalletList {
     WalletList {
         wallet_id: inputs.wallet_id.clone(),
@@ -396,8 +396,6 @@ pub fn wallet_list(inputs: &WalletListPayloadInputs) -> WalletList {
                 handle: row.handle.clone(),
                 dk: row.dk.clone(),
                 name: row.name.clone(),
-                statement: row.statement.clone(),
-                picture: row.picture.as_deref().map(decode_hex),
             })
             .collect(),
     }
@@ -416,7 +414,7 @@ struct PublishedWalletList {
     signatures: Vec<PublishedSignature>,
 }
 
-/// One published row; an absent statement or picture is omitted.
+/// One published row.
 #[derive(Serialize)]
 struct PublishedWalletListRow {
     index: u32,
@@ -424,10 +422,6 @@ struct PublishedWalletListRow {
     handle: String,
     dk: String,
     name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    statement: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    picture: Option<String>,
 }
 
 /// One published signature.
@@ -457,11 +451,6 @@ pub fn render_wallet_list(list: &WalletList, signatures: &[(&str, [u8; 64])]) ->
                 handle: row.handle.clone(),
                 dk: row.dk.clone(),
                 name: row.name.clone(),
-                statement: row.statement.clone(),
-                picture: row
-                    .picture
-                    .as_deref()
-                    .map(|picture| STANDARD.encode(picture)),
             })
             .collect(),
         signatures: signatures
