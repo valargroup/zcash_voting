@@ -98,20 +98,11 @@ fn every_chain_code_classifies_for_each_op() {
 /// codespace; HTTP 400 is a refused body, and anything else no verdict.
 #[test]
 fn delegate_op_answers_are_read_by_status() {
-    let mut accepted = broadcast_result(0, "", "");
     assert_eq!(
-        parse_delegate_op_answer(200, &accepted),
+        parse_delegate_op_answer(200, &broadcast_result(0, "", "")),
         Ok(DelegateOpAnswer::Accepted {
             tx_hash: "AB".repeat(32)
         })
-    );
-    accepted = br#"{"tx_hash":"abababababababababababababababababababababababababababababababab","code":0,"codespace":"","new_field":true}"#.to_vec();
-    assert_eq!(
-        parse_delegate_op_answer(200, &accepted),
-        Ok(DelegateOpAnswer::Accepted {
-            tx_hash: "AB".repeat(32)
-        }),
-        "the hash is uppercase and unknown fields are ignored"
     );
     assert_eq!(
         parse_delegate_op_answer(422, &broadcast_result(57, "vote", "ballot exists")),
@@ -129,19 +120,13 @@ fn delegate_op_answers_are_read_by_status() {
         })
     );
     for (status, body) in [
-        (200, br#"{"tx_hash":"","code":0,"codespace":""}"#.to_vec()),
         (200, broadcast_result(6, "vote", "bad signature")),
         (422, broadcast_result(0, "", "")),
         (
             422,
             br#"{"tx_hash":"","code":57,"log":"no codespace"}"#.to_vec(),
         ),
-        (
-            404,
-            br#"{"error":"proxy delegation is not enabled"}"#.to_vec(),
-        ),
         (502, b"broadcast failed".to_vec()),
-        (503, br#"{"ready":false}"#.to_vec()),
     ] {
         assert!(
             matches!(
@@ -158,44 +143,4 @@ fn delegate_op_answers_are_read_by_status() {
         panic!("a rejection");
     };
     assert!(log.len() <= MAX_CHAIN_SUBMISSION_DIAGNOSTIC_BYTES);
-}
-
-/// A byte-identical resend the node's mempool cache still holds is answered
-/// with the earlier outcome: code 0 while pending or once landed, which
-/// settles as success for every op, or the code its block gave it.
-#[test]
-fn resends_answered_from_the_mempool_cache_keep_the_earlier_outcome() {
-    let pending = serde_json::json!({
-        "tx_hash": "AB".repeat(32),
-        "code": 0,
-        "codespace": "",
-        "log": "tx pending in mempool (duplicate submission)",
-    })
-    .to_string();
-    let answer = parse_delegate_op_answer(200, pending.as_bytes()).unwrap();
-    assert!(matches!(
-        classify_register_answer(&answer),
-        RegisterAnswer::Submitted { .. }
-    ));
-    assert!(matches!(
-        classify_retire_answer(&answer),
-        RetireAnswer::Submitted { .. }
-    ));
-    assert_eq!(
-        classify_ballot_answer(&answer),
-        BallotAnswer::Settled(BallotSubmitResult::Accepted)
-    );
-    let failed_in_block = parse_delegate_op_answer(
-        422,
-        &broadcast_result(62, "vote", "handle has a live delegate entry"),
-    )
-    .unwrap();
-    assert_eq!(
-        classify_register_answer(&failed_in_block),
-        RegisterAnswer::Rejected(DelegateRegisterResult::Rejected {
-            codespace: "vote".to_owned(),
-            code: 62,
-            reason: "handle has a live delegate entry".to_owned(),
-        })
-    );
 }

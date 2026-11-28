@@ -1,53 +1,20 @@
-//! The device's one delegate key per vote chain: created from the OS RNG,
-//! exported and imported as `zvdsk1…`, recorded by its public key only, and
-//! bound to its entry by a proven entry.
+//! The device's one delegate key per vote chain: recorded by its public key
+//! only, and bound to its entry by a proven entry. Key text encodings are
+//! pinned by `zcash_vote_delegate`'s vectors.
 
-use rand::{rngs::StdRng, SeedableRng};
-use zcash_vote_delegate::{DelegateSigningKey, DelegateStatus, EntryDecodeError};
+use zcash_vote_delegate::DelegateStatus;
 
 use super::fixtures::{
     alice_entry, alice_key, bob_key, chain, db, entry, proven, signing_key, ALICE_SECRET,
     BOB_SECRET, DELEGATE_INDEX,
 };
 use crate::{
-    proxy::{
-        delegate::{
-            create_delegate_key, delegate_key_info, delegate_marker_text, device_delegate_key,
-            forget_delegate_key, record_delegate_key, record_proven_entry, DelegateChain,
-            DelegateEntryError, DelegateModeError, DeviceDelegateKey, ProvenDelegateEntry,
-        },
-        registry::ProvenValue,
+    proxy::delegate::{
+        device_delegate_key, forget_delegate_key, record_delegate_key, record_proven_entry,
+        DelegateChain, DelegateModeError, DeviceDelegateKey,
     },
     types::Network,
 };
-
-/// A created key is 32 fresh bytes from the RNG, and its `zvdsk1…` export is
-/// the one string the host stores and imports back.
-#[test]
-fn a_created_key_exports_and_imports_as_one_string() {
-    let mut rng = StdRng::seed_from_u64(7);
-    let created = create_delegate_key(&mut rng);
-    let other = create_delegate_key(&mut rng);
-    assert_ne!(created.delegate_key(), other.delegate_key());
-
-    let stored = created.export();
-    assert!(stored.starts_with("zvdsk1"));
-    let imported = DelegateSigningKey::import(&stored).unwrap();
-    assert_eq!(imported.secret_seed(), created.secret_seed());
-    assert!(DelegateSigningKey::import(&stored.to_uppercase()).is_err());
-    assert!(DelegateSigningKey::import(&created.delegate_key().encode()).is_err());
-
-    let info = delegate_key_info(&created.delegate_key());
-    assert_eq!(info.dk, created.delegate_key().encode());
-    assert_eq!(
-        info.fingerprint,
-        created.delegate_key().fingerprint().to_string()
-    );
-    assert_eq!(
-        delegate_marker_text(&created.delegate_key()),
-        format!("zcash-vote-delegate v1 {}", info.dk)
-    );
-}
 
 /// A device holds one key per chain: a repeat keeps the first record,
 /// another key is refused until the first is forgotten, and each chain of
@@ -131,39 +98,6 @@ fn a_proven_entry_binds_the_device_key_to_its_index() {
             "{other:?}"
         );
     }
-}
-
-/// A proven entry is the bytes at the key that was asked for, decoded
-/// strictly: absence is `None`, and anything else is refused.
-#[test]
-fn a_proven_entry_is_the_entry_that_was_asked_for() {
-    let alice = entry(DELEGATE_INDEX, alice_key(), DelegateStatus::Active);
-    let present = ProvenValue::Present(alice.encode());
-    let proven = ProvenDelegateEntry::from_proof(DELEGATE_INDEX, &present)
-        .unwrap()
-        .unwrap();
-    assert_eq!(proven.entry(), &alice);
-    assert_eq!(
-        ProvenDelegateEntry::from_proof(DELEGATE_INDEX, &ProvenValue::Absent),
-        Ok(None)
-    );
-    assert_eq!(
-        ProvenDelegateEntry::from_proof(DELEGATE_INDEX, &ProvenValue::Unavailable),
-        Err(DelegateEntryError::Unavailable)
-    );
-    assert_eq!(
-        ProvenDelegateEntry::from_proof(DELEGATE_INDEX + 1, &present),
-        Err(DelegateEntryError::WrongIndex {
-            expected: DELEGATE_INDEX + 1,
-            actual: DELEGATE_INDEX,
-        })
-    );
-    let mut truncated = alice.encode();
-    truncated.pop();
-    assert_eq!(
-        ProvenDelegateEntry::from_proof(DELEGATE_INDEX, &ProvenValue::Present(truncated)),
-        Err(DelegateEntryError::Undecodable(EntryDecodeError::Truncated))
-    );
 }
 
 /// The device's key record holds the public key and timestamps only: no

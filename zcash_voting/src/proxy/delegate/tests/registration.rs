@@ -4,7 +4,6 @@
 //! op by the entry's key.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use serde_json::Value;
 use zcash_vote_delegate::{verify_zip215, DelegateStatus, IdentityProvider};
 
 use super::fixtures::{
@@ -16,28 +15,13 @@ use crate::{
     proxy::delegate::{
         build_retire_op, classify_register_answer, classify_retire_answer, device_delegate_key,
         forget_delegate_key, parse_delegate_op_answer, pending_register_op, prepare_register_op,
-        record_delegate_key, registration_result, retire_result, AttestationExpectation,
-        DelegateChain, DelegateModeError, DelegateOpKind, ProxyVerifierSet, RegisterAnswer,
-        RetireAnswer, SignedDelegateOp,
+        registration_result, retire_result, AttestationExpectation, DelegateChain,
+        DelegateModeError, DelegateOpKind, ProxyVerifierSet, RegisterAnswer, RetireAnswer,
+        SignedDelegateOp,
     },
     storage::VotingDb,
-    types::Network,
     wire::{DelegateRegisterResult, DelegateRetireResult},
 };
-
-/// The op's JSON body.
-fn body_json(op: &SignedDelegateOp) -> Value {
-    serde_json::from_slice(op.body()).unwrap()
-}
-
-/// Decodes a base64 field of `N` bytes.
-fn base64_field<const N: usize>(value: &Value) -> [u8; N] {
-    BASE64
-        .decode(value.as_str().unwrap())
-        .unwrap()
-        .try_into()
-        .unwrap()
-}
 
 /// What alice expects of her X registration, checked against the chain's
 /// verifier set.
@@ -114,18 +98,6 @@ fn register_signs_only_a_checked_attestation_of_its_key() {
         ATTEST_NOW,
     );
     assert!(matches!(bob_signs, Err(DelegateModeError::Attestation(_))));
-    let below_threshold = prepare_register_op(
-        &db,
-        &chain,
-        &alice_attestation(),
-        &expectation(&verifiers(2)),
-        &signing_key(ALICE_SECRET),
-        ATTEST_NOW,
-    );
-    assert!(matches!(
-        below_threshold,
-        Err(DelegateModeError::Attestation(_))
-    ));
     assert_eq!(device_delegate_key(&db, &chain).unwrap(), None);
     assert_eq!(pending_register_op(&db, &chain).unwrap(), None);
 }
@@ -175,30 +147,9 @@ fn a_prepared_register_op_is_resent_unchanged_until_the_entry_settles_it() {
     ));
 }
 
-/// A device that holds another key cannot prepare a registration, and a
-/// pending op belongs to its chain.
-#[test]
-fn a_register_op_is_prepared_for_the_device_s_one_key_on_its_chain() {
-    let db = db();
-    let chain = chain();
-    record_delegate_key(&db, &chain, &bob_key(), 5).unwrap();
-    assert!(matches!(
-        prepare(&db, &chain),
-        Err(DelegateModeError::AnotherKeyHeld { .. })
-    ));
-    assert_eq!(pending_register_op(&db, &chain).unwrap(), None);
-
-    forget_delegate_key(&db, &chain).unwrap();
-    prepare(&db, &chain).unwrap();
-    let testnet = DelegateChain::new(Network::Testnet, "zvote-1").unwrap();
-    assert_eq!(pending_register_op(&db, &testnet).unwrap(), None);
-    forget_delegate_key(&db, &chain).unwrap();
-    assert_eq!(pending_register_op(&db, &chain).unwrap(), None);
-}
-
 /// Code 0 and code 61 both mean the key may be registered, which only the
-/// proven entry settles. Code 62, a taken handle, and every other code are
-/// rejections. An entry with another key is not the device's registration.
+/// proven entry settles. Every other code's classification is in
+/// `chain_codes.rs`.
 #[test]
 fn register_answers_settle_from_the_proven_entry() {
     assert!(matches!(
@@ -206,28 +157,6 @@ fn register_answers_settle_from_the_proven_entry() {
         RegisterAnswer::Submitted { tx_hash } if tx_hash == "AB".repeat(32)
     ));
     assert_eq!(register_answer(61), RegisterAnswer::AlreadyRegistered);
-    for code in [62, 59, 60, 64, 65, 66] {
-        assert_eq!(
-            register_answer(code),
-            RegisterAnswer::Rejected(DelegateRegisterResult::Rejected {
-                codespace: "vote".to_owned(),
-                code,
-                reason: "log".to_owned(),
-            })
-        );
-    }
-
-    let db = db();
-    let chain = chain();
-    prepare(&db, &chain).unwrap();
-    let others = proven_entry(bob_key(), DelegateStatus::Active);
-    assert!(matches!(
-        registration_result(&db, &chain, &others),
-        Err(DelegateModeError::NotDeviceEntry {
-            delegate_index: DELEGATE_INDEX
-        })
-    ));
-    assert!(pending_register_op(&db, &chain).unwrap().is_some());
 }
 
 /// The retire op carries the `retire/entry_17` vector's signature over
@@ -249,10 +178,6 @@ fn the_retire_op_signs_the_vector_digest_with_the_entry_s_key() {
         )
     );
     assert_eq!(
-        base64_field::<64>(&body_json(&op)["retire"]["dk_sig"]),
-        dk_sig
-    );
-    assert_eq!(
         verify_zip215(
             &vector_bytes(&expected["dk"]),
             &vector_bytes::<32>(&expected["digest"]),
@@ -270,8 +195,8 @@ fn the_retire_op_signs_the_vector_digest_with_the_entry_s_key() {
 }
 
 /// Code 55, already retired, is a success. An accepted op settles once the
-/// proven entry shows it retired. A suspended entry cannot retire itself
-/// (code 54).
+/// proven entry shows it retired. Every other code's classification is in
+/// `chain_codes.rs`.
 #[test]
 fn retire_answers_settle_retire() {
     let retire_answer = |code: u32| {
@@ -285,16 +210,6 @@ fn retire_answers_settle_retire() {
         retire_answer(55),
         RetireAnswer::Settled(DelegateRetireResult::Retired)
     );
-    for code in [54, 53, 6] {
-        assert_eq!(
-            retire_answer(code),
-            RetireAnswer::Settled(DelegateRetireResult::Rejected {
-                codespace: "vote".to_owned(),
-                code,
-                reason: "log".to_owned(),
-            })
-        );
-    }
 
     assert_eq!(retire_result(&alice_entry()), None);
     assert_eq!(

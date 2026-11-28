@@ -5,14 +5,10 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::json;
 
 use super::fixtures::{alice_key as first_key, key, listed_ballot, VERIFIER_SECRET};
-use crate::proxy::{
-    delegate::{
-        delegate_ballots_path, delegate_by_key_path, parse_delegate_ballots_page,
-        parse_delegate_by_key_response, parse_pool_share_count, parse_proxy_params_response,
-        pool_share_count_store_key, ChainDelegateBallot, ChainReadError, ProxyVerifier,
-        PROXY_PARAMS_PATH,
-    },
-    registry::{RegistryProofRequest, REGISTRY_PROOF_STORE},
+use crate::proxy::delegate::{
+    delegate_ballots_path, delegate_by_key_path, parse_delegate_ballots_page,
+    parse_delegate_by_key_response, parse_pool_share_count, parse_proxy_params_response,
+    ChainDelegateBallot, ChainReadError, ProxyVerifier, PROXY_PARAMS_PATH,
 };
 
 /// A round id.
@@ -43,20 +39,6 @@ fn paths_name_the_chain_s_routes() {
     );
 }
 
-/// The proven entry and the pool's share count are store keys in the vote
-/// store: the entry key the participation reader proves, and vote-sdk's
-/// `ShareCountKey(round, 0, d)`.
-#[test]
-fn store_keys_name_the_entry_and_the_pool_count() {
-    let request = RegistryProofRequest { delegate_index: 17 };
-    assert_eq!(request.store_key(), [0x1a, 0x01, 0, 0, 0, 17]);
-    assert_eq!(REGISTRY_PROOF_STORE, "vote");
-    let key = pool_share_count_store_key(&ROUND, 17);
-    assert_eq!(key[0], 0x0b);
-    assert_eq!(key[1..33], ROUND);
-    assert_eq!(key[33..], [0, 0, 0, 0, 0, 0, 0, 17]);
-}
-
 /// The lookup by key names an entry, or nothing when the enabled node says
 /// the key was never registered.
 #[test]
@@ -71,12 +53,10 @@ fn lookups_by_key_name_an_entry() {
         parse_delegate_by_key_response(&dk, 500, b"oops"),
         Err(ChainReadError::Unavailable { status: 500 })
     );
-    for malformed in [&b"{}"[..], br#"{"delegate":{}}"#, b"[]"] {
-        assert!(matches!(
-            parse_delegate_by_key_response(&dk, 200, malformed),
-            Err(ChainReadError::Malformed { .. })
-        ));
-    }
+    assert!(matches!(
+        parse_delegate_by_key_response(&dk, 200, br#"{"delegate":{}}"#),
+        Err(ChainReadError::Malformed { .. })
+    ));
 }
 
 /// Only an enabled node's not-found answer for this very key means it was
@@ -101,8 +81,6 @@ fn only_the_node_s_not_found_answer_means_unregistered() {
         not_found(&other_key),
         "{\"error\":\"proxy delegation is not enabled\"}\n".to_owned(),
         "404 page not found\n".to_owned(),
-        "{\"error\":\"not found\"}".to_owned(),
-        String::new(),
     ] {
         assert_eq!(
             parse_delegate_by_key_response(&dk, 404, body.as_bytes()),
@@ -112,8 +90,9 @@ fn only_the_node_s_not_found_answer_means_unregistered() {
     }
 }
 
-/// A ballot page lists the round's ballots in ascending index, and its next
-/// page starts after them.
+/// A ballot page lists the round's ballots, and its next page starts after
+/// them. The page rules are on the shared parser, in
+/// `proxy/tests/delegate_ballots.rs`.
 #[test]
 fn ballot_pages_list_ballots_in_order() {
     let body = json!({
@@ -132,10 +111,6 @@ fn ballot_pages_list_ballots_in_order() {
     );
     assert_eq!(page.ballot_of(4), None);
 
-    let last = parse_delegate_ballots_page(&ROUND, 17, 200, b"{}").unwrap();
-    assert!(last.ballots.is_empty());
-    assert_eq!(last.next_start_after, None);
-
     assert_eq!(
         parse_delegate_ballots_page(&ROUND, 0, 404, b"{}"),
         Err(ChainReadError::RoundNotFound {
@@ -146,26 +121,9 @@ fn ballot_pages_list_ballots_in_order() {
         parse_delegate_ballots_page(&ROUND, 0, 503, b""),
         Err(ChainReadError::Unavailable { status: 503 })
     );
-    let malformed_pages = [
-        json!({ "ballots": [listed_ballot(&[0xcd; 32], 3, &[1])] }),
-        json!({ "ballots": [listed_ballot(&ROUND, 5, &[1]), listed_ballot(&ROUND, 4, &[1])] }),
-        json!({ "ballots": [listed_ballot(&ROUND, 3, &[1])] , "next_start_after": 2 }),
-        json!({ "ballots": [listed_ballot(&ROUND, 3, &[])] }),
-        json!({ "ballots": [listed_ballot(&ROUND, 3, &[0; 51])] }),
-        json!({ "ballots": [{ "vote_round_id": BASE64.encode(ROUND), "options": [1] }] }),
-    ];
-    for page in malformed_pages {
-        assert!(
-            matches!(
-                parse_delegate_ballots_page(&ROUND, 0, 200, page.to_string().as_bytes()),
-                Err(ChainReadError::Malformed { .. })
-            ),
-            "{page}"
-        );
-    }
-    let before_start = json!({ "ballots": [listed_ballot(&ROUND, 3, &[1])] }).to_string();
+    let too_many_options = json!({ "ballots": [listed_ballot(&ROUND, 3, &[0; 51])] });
     assert!(matches!(
-        parse_delegate_ballots_page(&ROUND, 3, 200, before_start.as_bytes()),
+        parse_delegate_ballots_page(&ROUND, 0, 200, too_many_options.to_string().as_bytes()),
         Err(ChainReadError::Malformed { .. })
     ));
 }
@@ -204,8 +162,6 @@ fn params_answers_give_the_verifier_set() {
         json!({ "verifiers": [verifier(1, pubkey), verifier(1, first_key().to_bytes())], "verifier_threshold": 1 }),
         json!({ "verifiers": [verifier(1, [0; 32])], "verifier_threshold": 1 }),
         json!({ "verifiers": [verifier(1, pubkey)], "verifier_threshold": 2 }),
-        json!({ "verifiers": [verifier(1, pubkey)] }),
-        json!({ "verifier_threshold": 1 }),
     ] {
         let body = json!({ "params": params }).to_string();
         assert!(

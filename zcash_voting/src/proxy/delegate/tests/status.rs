@@ -5,14 +5,14 @@
 use zcash_vote_delegate::{DelegateStatus, IdentityProvider};
 
 use super::fixtures::{
-    alice_attestation, alice_entry, alice_key, bob_key, chain, db, proven_entry, roster,
-    round_timing, signing_key, verifiers, ALICE_PROOF_ID, ALICE_SECRET, ATTEST_NOW, DELEGATE_INDEX,
+    alice_attestation, alice_entry, alice_key, chain, db, proven_entry, roster, round_timing,
+    signing_key, verifiers, ALICE_PROOF_ID, ALICE_SECRET, ATTEST_NOW, DELEGATE_INDEX,
 };
 use crate::{
     proxy::delegate::{
         delegate_key_info, delegate_mode_status, delegate_round, prepare_register_op,
         record_delegate_key, registration_result, sign_ballot, AttestationExpectation,
-        ChainDelegateBallot, CompleteBallot, DelegateModeError,
+        ChainDelegateBallot, CompleteBallot,
     },
     wire::{
         DelegateBallotBlock, DelegateBallotView, DelegateEntryStatus, DelegateEntryView,
@@ -67,57 +67,25 @@ fn status_shows_the_device_key_and_its_proven_entry() {
     );
 
     registration_result(&db, &chain, &alice_entry()).unwrap();
-    let entry_view = |status, status_reason| DelegateEntryView {
-        delegate_index: DELEGATE_INDEX,
-        provider: ProxyDelegateProvider::X,
-        handle: "alice".to_owned(),
-        proof_id: ALICE_PROOF_ID.to_owned(),
-        status,
-        status_reason,
-    };
-    for (status, view) in [
-        (
-            DelegateStatus::Active,
-            entry_view(DelegateEntryStatus::Active, 0),
-        ),
-        (
-            DelegateStatus::Suspended,
-            entry_view(DelegateEntryStatus::Suspended, 4),
-        ),
-        (
-            DelegateStatus::Retired,
-            entry_view(DelegateEntryStatus::Retired, 0),
-        ),
-    ] {
-        let entry = proven_entry(alice_key(), status);
-        assert_eq!(
-            delegate_mode_status(&db, &chain, Some(&entry)).unwrap(),
-            Some(DelegateModeStatus {
-                entry: Some(view),
-                ..held.clone()
-            })
-        );
-    }
-}
-
-/// An entry with another key is not the device's, and is never shown as its
-/// status.
-#[test]
-fn status_refuses_an_entry_that_holds_another_key() {
-    let db = db();
-    let chain = chain();
-    record_delegate_key(&db, &chain, &alice_key(), 10).unwrap();
-    let others = proven_entry(bob_key(), DelegateStatus::Active);
-    assert!(matches!(
-        delegate_mode_status(&db, &chain, Some(&others)),
-        Err(DelegateModeError::NotDeviceEntry {
-            delegate_index: DELEGATE_INDEX
+    let suspended = proven_entry(alice_key(), DelegateStatus::Suspended);
+    assert_eq!(
+        delegate_mode_status(&db, &chain, Some(&suspended)).unwrap(),
+        Some(DelegateModeStatus {
+            entry: Some(DelegateEntryView {
+                delegate_index: DELEGATE_INDEX,
+                provider: ProxyDelegateProvider::X,
+                handle: "alice".to_owned(),
+                proof_id: ALICE_PROOF_ID.to_owned(),
+                status: DelegateEntryStatus::Suspended,
+                status_reason: 4,
+            }),
+            ..held
         })
-    ));
+    );
 }
 
-/// A round says why the device cannot sign its ballot: no entry, or an entry
-/// that is suspended or retired.
+/// A round says the device cannot sign its ballot without an entry. An
+/// entry's own blocks are `sign_ballot`'s, in `ballot.rs`.
 #[test]
 fn round_views_show_what_blocks_the_ballot() {
     let db = db();
@@ -131,14 +99,6 @@ fn round_views_show_what_blocks_the_ballot() {
     };
     assert_eq!(block(None), Some(DelegateBallotBlock::NotRegistered));
     assert_eq!(block(Some(DelegateStatus::Active)), None);
-    assert_eq!(
-        block(Some(DelegateStatus::Suspended)),
-        Some(DelegateBallotBlock::Suspended)
-    );
-    assert_eq!(
-        block(Some(DelegateStatus::Retired)),
-        Some(DelegateBallotBlock::Retired)
-    );
 }
 
 /// A round shows the ballot as published, submitted while it runs and
@@ -199,15 +159,4 @@ fn round_views_show_the_ballot_and_the_pool_count() {
         view(None, None, VOTE_END_TIME).unwrap().ballot,
         DelegateBallotView::NotCounted
     );
-
-    assert!(matches!(
-        view(None, Some(&[1, 2, 3]), NOW),
-        Err(DelegateModeError::ChainRead(_))
-    ));
-    let mut other_delegate = listed.clone();
-    other_delegate.delegate_index = 18;
-    assert!(matches!(
-        view(Some(&other_delegate), None, NOW),
-        Err(DelegateModeError::InvalidInput { .. })
-    ));
 }

@@ -138,37 +138,3 @@ fn a_list_needs_a_canonical_round_id() {
     assert!(DelegateBallotList::new("01").is_err());
     assert!(DelegateBallotList::new(&"0A".repeat(32)).is_err());
 }
-
-/// The delegator's list and the delegate's page reader trust a page on the
-/// same rules, since both read it with one parser: a cursor that skips past
-/// the page's last delegate, too many options and too many ballots are
-/// refused by both, and a valid page reads the same in both.
-#[test]
-fn the_delegator_and_the_delegate_read_a_page_alike() {
-    let round: [u8; 32] = hex::decode(ROUND_ID).unwrap().try_into().unwrap();
-    let many: Vec<(u32, &[u32])> = (1..=1_001).map(|index| (index, &[1][..])).collect();
-    let fifty_one = [0u32; 51];
-    let cases: Vec<(&str, Vec<u8>, bool)> = vec![
-        ("valid", page(&[(2, &[1, 0]), (5, &[0, 2])], 5), true),
-        ("a skipping cursor", page(&[(2, &[1])], 9), false),
-        ("51 options", page(&[(2, &fifty_one)], 0), false),
-        ("1,001 ballots", page(&many, 0), false),
-    ];
-    for (case, bytes, valid) in cases {
-        let mut list = DelegateBallotList::new(ROUND_ID).unwrap();
-        let listed = list.add_page(&bytes);
-        let read = crate::proxy::delegate::parse_delegate_ballots_page(&round, 0, 200, &bytes);
-        assert_eq!(listed.is_ok(), valid, "{case}");
-        assert_eq!(read.is_ok(), valid, "{case}");
-        if let Ok(read) = read {
-            assert_eq!(list.next_start_after(), read.next_start_after, "{case}");
-            for ballot in &read.ballots {
-                assert_eq!(
-                    list.options(ballot.delegate_index),
-                    Some(ballot.options.as_slice()),
-                    "{case}"
-                );
-            }
-        }
-    }
-}

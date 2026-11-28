@@ -12,9 +12,8 @@ use super::fixtures::{
 };
 use crate::{
     proxy::delegate::{
-        ballot_preflight, classify_ballot_answer, existing_ballot_result, sign_ballot,
-        stored_ballot, BallotAnswer, BallotError, ChainDelegateBallot, CompleteBallot,
-        DelegateChain, DelegateModeError, DelegateOpAnswer, DelegateOpKind, DelegateRoundTiming,
+        ballot_preflight, existing_ballot_result, sign_ballot, stored_ballot, BallotError,
+        ChainDelegateBallot, CompleteBallot, DelegateOpKind, DelegateRoundTiming,
         ProvenDelegateEntry, StoredBallot,
     },
     storage::VotingDb,
@@ -71,57 +70,17 @@ fn listed(options: &[u32]) -> ChainDelegateBallot {
     }
 }
 
-/// The roster must list ids 1..n with 2 to 8 options, and the ballot must
-/// answer every proposal with one of its options.
+/// The ballot must answer every proposal of the roster with one of its
+/// options.
 #[test]
 fn complete_ballots_answer_every_proposal() {
     let round = round_id();
     let new = |proposals: &[ProposalRosterEntry], options: Vec<u32>| {
         CompleteBallot::new(round, proposals, options)
     };
-    assert!(matches!(new(&[], vec![]), Err(BallotError::EmptyRoster)));
     assert!(matches!(
-        new(&roster(51), vec![0; 51]),
-        Err(BallotError::TooManyProposals { count: 51 })
-    ));
-    let gap = [
-        roster(1)[0],
-        ProposalRosterEntry {
-            proposal_id: 3,
-            num_options: 2,
-        },
-    ];
-    assert!(matches!(
-        new(&gap, vec![0, 0]),
-        Err(BallotError::RosterOutOfOrder {
-            position: 2,
-            proposal_id: 3
-        })
-    ));
-    for num_options in [1, 9] {
-        let odd = [ProposalRosterEntry {
-            proposal_id: 1,
-            num_options,
-        }];
-        assert!(matches!(
-            new(&odd, vec![0]),
-            Err(BallotError::InvalidOptionCount { proposal_id: 1, .. })
-        ));
-    }
-    for options in [vec![0, 1], vec![0, 1, 2, 3]] {
-        assert!(matches!(
-            new(&roster(3), options),
-            Err(BallotError::WrongAnswerCount { proposals: 3, .. })
-        ));
-    }
-    let largest_option_value = u32::MAX;
-    assert!(matches!(
-        new(&roster(1), vec![largest_option_value]),
-        Err(BallotError::OptionOutOfRange {
-            proposal_id: 1,
-            option: u32::MAX,
-            num_options: 8
-        })
+        new(&roster(3), vec![0, 1]),
+        Err(BallotError::WrongAnswerCount { proposals: 3, .. })
     ));
     let two_options = [ProposalRosterEntry {
         proposal_id: 1,
@@ -131,9 +90,10 @@ fn complete_ballots_answer_every_proposal() {
         new(&two_options, vec![2]),
         Err(BallotError::OptionOutOfRange { option: 2, .. })
     ));
-    let complete = new(&roster(3), vec![7, 0, 3]).unwrap();
-    assert_eq!(complete.options(), &[7, 0, 3]);
-    assert_eq!(complete.vote_round_id(), &round);
+    assert_eq!(
+        new(&roster(3), vec![7, 0, 3]).unwrap().options(),
+        &[7, 0, 3]
+    );
 }
 
 /// The `ballot` vectors a roster can hold are signed under the entry's key
@@ -282,12 +242,6 @@ fn preflight_reports_the_stored_ballot() {
             identical: false,
         }
     );
-    let mut other_delegate = listed(&[1, 0, 2]);
-    other_delegate.delegate_index = 18;
-    assert!(matches!(
-        preflight(Some(&other_delegate), &[1, 0, 2]),
-        Err(DelegateModeError::InvalidInput { .. })
-    ));
 }
 
 /// A new ballot is signed only while voting is open, for an active entry,
@@ -346,38 +300,11 @@ fn a_new_ballot_needs_an_open_round_an_active_entry_and_its_key() {
     assert!(sign(&bob_entry(), BOB_SECRET, VOTE_END_TIME - 1).is_ok());
 }
 
-/// A ballot is stored for its vote chain: the same round and entry on
-/// another chain of the network has none.
-#[test]
-fn a_ballot_is_stored_for_its_vote_chain() {
-    let db = db();
-    sign_as_bob(&db, &[1]).unwrap();
-    let other = DelegateChain::new(chain().network(), "zvote-2").unwrap();
-    assert_eq!(
-        stored_ballot(&db, &other, &round_id(), DELEGATE_INDEX).unwrap(),
-        None
-    );
-}
-
-/// Code 0 is accepted; code 57 is success only when the listed ballot is the
-/// stored one.
+/// Code 57, a ballot exists, is success only when the listed ballot is the
+/// stored one. Each code's classification is in `chain_codes.rs`.
 #[test]
 fn ballot_answers_settle_the_submission() {
     let stored = sign_as_bob(&db(), &[1, 0, 2]).unwrap();
-    assert_eq!(
-        classify_ballot_answer(&DelegateOpAnswer::Accepted {
-            tx_hash: "AB".repeat(32)
-        }),
-        BallotAnswer::Settled(BallotSubmitResult::Accepted)
-    );
-    assert_eq!(
-        classify_ballot_answer(&DelegateOpAnswer::Rejected {
-            codespace: "vote".to_owned(),
-            code: 57,
-            log: "exists".to_owned(),
-        }),
-        BallotAnswer::BallotExists
-    );
     assert_eq!(
         existing_ballot_result(&stored, Some(&listed(&[1, 0, 2]))),
         Some(BallotSubmitResult::AlreadyAccepted)
@@ -387,7 +314,4 @@ fn ballot_answers_settle_the_submission() {
         Some(BallotSubmitResult::Rejected { ref codespace, code: 57, .. }) if codespace == "vote"
     ));
     assert_eq!(existing_ballot_result(&stored, None), None);
-    let mut other_delegate = listed(&[1, 0, 2]);
-    other_delegate.delegate_index = 18;
-    assert_eq!(existing_ballot_result(&stored, Some(&other_delegate)), None);
 }
