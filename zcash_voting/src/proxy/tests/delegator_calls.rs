@@ -5,12 +5,15 @@
 
 use super::fixtures::{answered_db_with_bundle_weights, choice, host_at, FIXTURE_ROSTER, ROUND_ID};
 use crate::{
-    proxy::{batch_layout, commit, load_allocation, preview, preview_allocation},
+    proxy::{
+        batch_layout, commit, load_allocation, preview, preview_allocation, status,
+        DelegateBallotList, ProxyRoundPhase,
+    },
     storage::VotingDb,
     vote_work::RoundHostContext,
     wire::{
         DelegateCheck, ProxyAllocationPreview, ProxyAllocationRequest, ProxyDelegationError,
-        ProxyDelegationErrorKind,
+        ProxyDelegationErrorKind, ProxyDelegationStage,
     },
 };
 
@@ -38,6 +41,13 @@ fn allowed() -> Vec<DelegateCheck> {
 /// The error kind of a failed call.
 fn kind<T: std::fmt::Debug>(result: Result<T, ProxyDelegationError>) -> ProxyDelegationErrorKind {
     result.expect_err("the call is refused").kind
+}
+
+/// The fixture round's complete ballot list, with no ballot in it.
+fn no_ballots() -> DelegateBallotList {
+    let mut ballots = DelegateBallotList::new(ROUND_ID).unwrap();
+    ballots.add_page(b"{}").unwrap();
+    ballots
 }
 
 /// Whether the round has an allocation.
@@ -130,22 +140,14 @@ fn a_commit_records_the_previewed_plan_once() {
             .map(|delegation| (delegation.delegate_index, delegation.ballots))
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        kind(commit(
-            &db,
-            &request(),
-            &previewed,
-            &allowed(),
-            &early(),
-            &FIXTURE_ROSTER,
-        )),
-        ProxyDelegationErrorKind::Other,
-        "the allocation is final"
-    );
-    assert_eq!(
-        kind(preview(&db, &request(), &early())),
-        ProxyDelegationErrorKind::Other
-    );
+    let view = status(&db, ROUND_ID, &no_ballots(), ProxyRoundPhase::Active)
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.kept_ballots, previewed.kept_ballots);
+    assert!(view
+        .delegations
+        .iter()
+        .all(|view| view.stage == ProxyDelegationStage::Preparing));
 }
 
 /// A commit needs an `Ok` verdict for every choice. The plan moving since
@@ -246,5 +248,26 @@ fn a_request_the_wallet_cannot_fund_or_read_is_refused() {
     assert_eq!(
         kind(preview(&db, &misnamed, &early())),
         ProxyDelegationErrorKind::Other
+    );
+}
+
+#[test]
+fn the_status_view_needs_the_round_s_complete_ballot_list() {
+    let db = answered_db_with_bundle_weights(&[100, 50]);
+    let incomplete = DelegateBallotList::new(ROUND_ID).unwrap();
+    assert_eq!(
+        kind(status(&db, ROUND_ID, &incomplete, ProxyRoundPhase::Active)),
+        ProxyDelegationErrorKind::Other
+    );
+    let mut other_round = DelegateBallotList::new(&"02".repeat(32)).unwrap();
+    other_round.add_page(b"{}").unwrap();
+    assert_eq!(
+        kind(status(&db, ROUND_ID, &other_round, ProxyRoundPhase::Active)),
+        ProxyDelegationErrorKind::Other
+    );
+    assert_eq!(
+        status(&db, ROUND_ID, &no_ballots(), ProxyRoundPhase::Active).unwrap(),
+        None,
+        "no allocation yet"
     );
 }

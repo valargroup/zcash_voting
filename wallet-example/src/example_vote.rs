@@ -296,6 +296,8 @@ pub async fn track_committed_vote_shares(
         now_seconds: request.now_seconds,
         vote_end_time_seconds: request.vote_end_time_seconds,
         policy: ShareTimingPolicy::default(),
+        // The example casts votes only, so it never tracks a DC share.
+        round_hotkey_seed: None,
     };
     track_pending_shares(voting_db, &params, client, cancel)
         .await

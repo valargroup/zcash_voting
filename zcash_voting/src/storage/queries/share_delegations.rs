@@ -769,7 +769,9 @@ pub fn get_unconfirmed_delegations(
     )
 }
 
-/// Load each round with at least one unconfirmed helper share once.
+/// Load each round with at least one unconfirmed helper share background
+/// tracking owns once: a vote share, or a handed-off share of a landed DC
+/// (`proxy::shares::tracked_dc_shares`).
 pub fn pending_share_rounds(
     conn: &Connection,
     wallet_id: &str,
@@ -779,13 +781,24 @@ pub fn pending_share_rounds(
             "SELECT rounds.round_id, rounds.session_json
              FROM rounds
              WHERE rounds.wallet_id = :wallet_id
-               AND EXISTS (
+               AND (EXISTS (
                    SELECT 1
                    FROM share_delegations
                    WHERE share_delegations.round_id = rounds.round_id
                      AND share_delegations.wallet_id = rounds.wallet_id
                      AND share_delegations.confirmed = 0
-               )
+               ) OR EXISTS (
+                   SELECT 1
+                   FROM proxy_dc_shares share
+                   JOIN proxy_dc_landings landing
+                     ON landing.round_id = share.round_id AND landing.wallet_id = share.wallet_id
+                    AND landing.bundle_index = share.bundle_index
+                    AND landing.dc_slot = share.dc_slot
+                   WHERE share.round_id = rounds.round_id
+                     AND share.wallet_id = rounds.wallet_id
+                     AND share.handed_off_at IS NOT NULL
+                     AND share.confirmed = 0
+               ))
              ORDER BY rounds.created_at DESC, rounds.round_id",
         )
         .map_err(|e| VotingError::Internal {

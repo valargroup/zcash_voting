@@ -245,6 +245,37 @@ fn the_default_policy_is_the_cadence_hosts_were_driving_by_hand() {
     assert_eq!(policy.failure_isolation, FailureIsolation::SkipBundle);
 }
 
+/// Background tracking owns a handed-off DC share as it owns an accepted
+/// vote share, so a run never dispatches its confirmation.
+#[test]
+fn a_handed_off_dc_share_is_left_to_background_tracking() {
+    use crate::round_planning::Obligation;
+    use crate::share_tracking::CommitmentRef;
+
+    let confirm = |commitment| Obligation::Confirm {
+        bundle_index: 0,
+        commitment,
+        share_index: 0,
+        accepted: true,
+        outcome_unknown: false,
+        prerequisite: None,
+    };
+    let step = |commitment| NextStep::ConfirmShare {
+        bundle_index: 0,
+        commitment,
+        share_index: 0,
+    };
+    for commitment in [
+        CommitmentRef::Vote { proposal_id: 1 },
+        CommitmentRef::Proxy { dc_slot: 0 },
+    ] {
+        assert!(super::super::quiescence::requires_background_tracking(
+            &step(commitment),
+            &[confirm(commitment)]
+        ));
+    }
+}
+
 #[tokio::test]
 async fn a_share_a_helper_already_holds_is_left_to_background_tracking() {
     // The share is submitted and accepted, so only polling can finish it and
@@ -360,7 +391,7 @@ async fn an_accepted_share_never_outranks_the_delivery_the_round_owes() {
         )
         .unwrap();
     let executor = executor_over_share_round(Arc::new(database));
-    let classified = executor.plan_classified().unwrap();
+    let classified = executor.plan_classified(false).unwrap();
 
     let accepted = NextStep::ConfirmShare {
         bundle_index: 0,

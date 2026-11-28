@@ -3,6 +3,7 @@ mod fixtures;
 mod projection;
 mod proxy_hold;
 mod proxy_remainder;
+mod proxy_shares;
 mod proxy_submission;
 mod resume_plan;
 mod roster_lifecycle_table;

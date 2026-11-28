@@ -267,6 +267,7 @@ async fn downstream_fixture_replacement_clears_stale_share_tracking() {
             now_seconds: u64::MAX,
             vote_end_time_seconds: None,
             policy: share::ShareTimingPolicy::default(),
+            round_hotkey_seed: None,
         },
         &HelperClient::new(Arc::new(ConfirmedHelperTransport), HelperHealth::default()),
         &|| false,

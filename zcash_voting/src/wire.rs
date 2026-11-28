@@ -85,8 +85,9 @@ pub use crate::vote::VanWitness;
 mod proxy_delegator;
 mod proxy_registry;
 pub use proxy_delegator::{
-    ProxyAllocationPreview, ProxyAllocationRequest, ProxyAvailability, ProxyDelegateChoice,
-    ProxyDelegationError, ProxyDelegationErrorKind, ProxyPreviewDelegation,
+    DelegateBallotView, ProxyAllocationPreview, ProxyAllocationRequest, ProxyAllocationStatus,
+    ProxyAvailability, ProxyDelegateChoice, ProxyDelegationError, ProxyDelegationErrorKind,
+    ProxyDelegationProgress, ProxyDelegationStage, ProxyDelegationView, ProxyPreviewDelegation,
 };
 pub use proxy_registry::{
     DelegateCheck, DelegateEntryStatus, DelegateKeyInfo, DelegateLookup, ProxyDelegateBrowse,

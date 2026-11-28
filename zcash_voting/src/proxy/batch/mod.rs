@@ -41,10 +41,11 @@ pub(crate) use batch_store::{
 };
 #[cfg(test)]
 pub(crate) use dc_chain::{build_dc_chain, BuiltDc};
+pub(crate) use dc_chain::{election_key, share_layout};
 #[cfg(test)]
 pub(crate) use proving::load_chain_inputs;
 pub(crate) use proving::{prove_batch, ProveBatchRequest};
-pub(crate) use slot_plan::{plan_batch_slots, PlannedSlot};
+pub(crate) use slot_plan::{canonical_base, decode_round_id, plan_batch_slots, PlannedSlot};
 
 /// One bundle's proxy batch as round planning reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -45,7 +45,7 @@ fn share_round_plan() -> ClassifiedPlan {
         )
         .unwrap();
     let classified = executor_over_share_round(std::sync::Arc::new(database))
-        .plan_classified()
+        .plan_classified(false)
         .unwrap();
     // The fixture's premise: two shares a helper already accepted, and nothing
     // the foreground has to run.

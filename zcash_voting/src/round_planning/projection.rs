@@ -269,7 +269,11 @@ pub(crate) fn project(
     work_summary.needs_delegation_signing =
         !work_summary.delegation_bundles_needing_signing.is_empty();
 
-    let has_unconfirmed_shares = snapshot.shares.iter().any(|share| !share.confirmed);
+    let has_unconfirmed_shares = snapshot.shares.iter().any(|share| !share.confirmed)
+        || snapshot
+            .proxy_dc_shares
+            .values()
+            .any(|dc| dc.tracked_shares().next().is_some());
 
     // Once a persisted plan carries the designation it is what will be
     // executed, whatever the current roster derives; report that marker, and
@@ -639,6 +643,10 @@ fn select_primary_action(
                 | NextStep::AdvanceImportedDelegation { .. }
                 | NextStep::ProxyDelegate { .. }
                 | NextStep::AdvanceProxyBatch { .. }
+                | NextStep::SubmitShares {
+                    commitment: CommitmentRef::Proxy { .. },
+                    ..
+                }
         )
     }) {
         return RoundPlanAction::Delegate;

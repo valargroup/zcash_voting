@@ -29,18 +29,22 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
     earlier version is sent without a fingerprint.
 - Proxy delegation (contracts v1), dormant while
   `proxy::PROXY_DELEGATION_ENABLED` is false. `zcash_voting::proxy` adds the
-  delegator calls (`availability`, `preview`, `commit`) and the registry
-  client (`proxy::registry`: registry cache, handle search, signed wallet
-  list, lookups, the pre-proving check of each chosen delegate's proven
-  entry). A commit either delegates the whole weight or
+  delegator calls (`availability`, `preview`, `commit`, `status`,
+  `progress`) and the registry client (`proxy::registry`: registry cache, handle
+  search, signed wallet list, lookups, the pre-proving check of each chosen
+  delegate's proven entry). A commit either delegates the whole weight or
   needs the kept share's ballot answers recorded first. Once a vote of the
   round has a saved share plan, preview and commit refuse with
   `AlreadyVoted` and `availability` reports it. A committed delegation is
   final: a batch the chain refuses is sent again until it lands or voting
   ends. Host types live in `zcash_voting::wire`, and `zcash_vote_delegate`
   holds the shared formats.
-- New round steps `NextStep::ProxyDelegate` and `NextStep::AdvanceProxyBatch`
-  and the `proxy_delegation_batch` chain-submission kind. `RoundPlan` gains
+- New round steps `NextStep::ProxyDelegate` and `NextStep::AdvanceProxyBatch`,
+  the `proxy_delegation_batch` chain-submission kind, and DC share delivery
+  through `SubmitShares`. Background tracking then confirms and resends
+  handed-off DC shares as it does vote shares, given the round hotkey
+  (`ShareTrackingParams::round_hotkey_seed`,
+  `ShareTrackingDriver::with_round_hotkey_seed`). `RoundPlan` gains
   `proxy_batches`, `fully_delegated_bundles` and `nothing_left_to_vote`.
 - `WalletCapabilities::proxy_delegation`, which offers `"v1"` only once the
   gate is open.
@@ -52,8 +56,8 @@ and this workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0
 - **Database compatibility:** schema version 26 adds the proxy delegation
   tables. The upgrade is one-way, and earlier builds refuse the database.
 - **Breaking:** `ChainSubmissionTarget`, `ChainSubmissionDiagnosticKind`
-  and `VotingError` gain variants, and `WalletCapabilities` gains a field.
-  Share steps and `ShareKey` name their commitment with
+  and `VotingError` gain variants, and `WalletCapabilities` and
+  `ShareTrackingParams` gain a field. Share steps and `ShareKey` name their commitment with
   `share_tracking::CommitmentRef` in place of `proposal_id`. A vote step's
   JSON is unchanged.
 - Every submission and lookup sends `X-Svote-Codespace: 1`, and rejections

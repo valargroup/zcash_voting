@@ -20,17 +20,23 @@
 //!    refuses stays pending and is sent again until it lands or voting ends,
 //!    so a committed delegation is final. The bundle casts its remainder once
 //!    the batch lands.
+//! 5. **Deliver shares.** The `SubmitShares` step delivers each landed DC's
+//!    shares. Background tracking then confirms each handed-off share's
+//!    reveal and resends one no helper reveals, as it does a vote share's
+//!    (module `shares`).
 //!
 //! [`registry`] reads the delegate lists and checks each chosen delegate's
 //! proven entry before step 1 commits. The client
-//! API calls [`availability`], [`preview`] and [`commit`] take and return
-//! the [`crate::wire`] types.
+//! API calls [`availability`], [`preview`], [`commit`], [`progress`] and
+//! [`status`] take and return the [`crate::wire`] types.
 
+mod ballot_pages;
 pub(crate) mod batch;
 pub mod delegate;
 mod delegator;
 mod planner;
 pub mod registry;
+pub(crate) mod shares;
 
 /// Whether this build offers proxy delegation to hosts.
 ///
@@ -130,8 +136,9 @@ pub(in crate::proxy) fn blob_array<const N: usize, E>(
 }
 
 pub use delegator::{
-    availability, commit, preview, GovNullifierProof, ProxyAvailabilityInputs,
-    CIRCUIT_FINGERPRINTS, PROXY_DELEGATION_CHAIN_VERSION, PROXY_DELEGATION_WALLET_VERSION,
+    availability, commit, preview, progress, status, DelegateBallotList, GovNullifierProof,
+    ProxyAvailabilityInputs, ProxyRoundPhase, CIRCUIT_FINGERPRINTS, PROXY_DELEGATION_CHAIN_VERSION,
+    PROXY_DELEGATION_WALLET_VERSION,
 };
 pub use planner::{
     batch_layout, commit_allocation, load_allocation, plan_allocation, preview_allocation,

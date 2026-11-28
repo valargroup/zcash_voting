@@ -19,6 +19,7 @@ use super::lifecycle::{
 };
 use super::snapshot::RoundSnapshot;
 use super::vote_units::{VoteUnit, VoteUnitId};
+use crate::proxy::shares::DcDeliveryProgress;
 use crate::session::ProxyBatchStage;
 
 /// One proposal's draft in a fresh cast.
@@ -98,7 +99,8 @@ pub(crate) enum Obligation {
         /// carried registration.
         signs_registration: bool,
     },
-    /// A confirmed vote owes these helper shares: they have no row yet.
+    /// A confirmed vote owes these helper shares: they have no row yet. A
+    /// landed DC owes every share not yet handed off.
     Deliver {
         bundle_index: u32,
         /// The commitment whose shares are owed.
@@ -110,7 +112,8 @@ pub(crate) enum Obligation {
     /// A submitted helper share awaits confirmation. One no helper has
     /// accepted yet blocks the foreground; one no helper has even reached
     /// (no acceptance, no ambiguous attempt, nothing in flight) cannot be
-    /// confirmed by polling and is delivered again instead.
+    /// confirmed by polling and is delivered again instead. A handed-off DC
+    /// share awaits its reveal here too.
     Confirm {
         bundle_index: u32,
         /// The commitment the share belongs to.
@@ -664,6 +667,57 @@ pub(crate) fn classify(
                 obligations.push(advance(false))
             }
             ProxyBatchStage::Landed => {}
+        }
+    }
+
+    // DC shares. Only a landed batch's DCs owe shares, whatever the ballot
+    // says, and none owes delivery once the vote ended (see the invariants'
+    // "Share obligations").
+    for (&(bundle_index, dc_slot), dc) in &snapshot.proxy_dc_shares {
+        let landed = snapshot
+            .proxy_batches
+            .get(&bundle_index)
+            .is_some_and(|status| status.progress == ProxyBatchStage::Landed);
+        if !landed {
+            continue;
+        }
+        let commitment = CommitmentRef::Proxy { dc_slot };
+        let deliver = |share_indexes| Obligation::Deliver {
+            bundle_index,
+            commitment,
+            vc_tree_position: dc.tree_position,
+            share_indexes,
+            prerequisite: None,
+        };
+        match dc.progress() {
+            DcDeliveryProgress::Unplanned | DcDeliveryProgress::Delivering
+                if snapshot.vote_ended => {}
+            DcDeliveryProgress::Unplanned => {
+                obligations.push(deliver(dc.delivered_share_indexes()));
+            }
+            DcDeliveryProgress::Delivering => {
+                let owed = dc
+                    .shares
+                    .iter()
+                    .flatten()
+                    .filter(|share| !share.handed_off())
+                    .map(|share| share.share_index)
+                    .collect();
+                obligations.push(deliver(owed));
+            }
+            DcDeliveryProgress::Complete => {}
+        }
+        // A handed-off share awaits its reveal as an accepted vote share
+        // does: background tracking owns it.
+        for share in dc.tracked_shares() {
+            obligations.push(Obligation::Confirm {
+                bundle_index,
+                commitment,
+                share_index: share.share_index,
+                accepted: true,
+                outcome_unknown: false,
+                prerequisite: None,
+            });
         }
     }
 

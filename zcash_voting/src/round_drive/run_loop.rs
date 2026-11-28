@@ -27,16 +27,17 @@ impl<T: ChainTransport> RoundDriver<'_, T> {
     /// runs under `block_in_place`: bundles persisting concurrently must not
     /// queue behind it on the same worker. A current-thread runtime has no
     /// other worker to hand it to, and `block_in_place` panics there, so the
-    /// read happens inline.
-    fn plan_off_the_worker(&self) -> Result<ClassifiedPlan, VotingError> {
+    /// read happens inline. The plan reads [`Run::vote_ended`].
+    fn plan_off_the_worker(&self, run: &Run) -> Result<ClassifiedPlan, VotingError> {
+        let vote_ended = run.vote_ended;
         let multi_threaded = matches!(
             tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()),
             Ok(tokio::runtime::RuntimeFlavor::MultiThread)
         );
         if multi_threaded {
-            tokio::task::block_in_place(|| self.executor.plan_classified())
+            tokio::task::block_in_place(|| self.executor.plan_classified(vote_ended))
         } else {
-            self.executor.plan_classified()
+            self.executor.plan_classified(vote_ended)
         }
     }
 
@@ -46,7 +47,7 @@ impl<T: ChainTransport> RoundDriver<'_, T> {
     /// Best effort: a run stops for a reason an operation produced, and a failed
     /// re-read is not that reason. The last known values stand if it fails.
     fn refresh_progress(&self, run: &mut Run) {
-        let Ok(classified) = self.plan_off_the_worker() else {
+        let Ok(classified) = self.plan_off_the_worker(run) else {
             return;
         };
         if let Some(baseline) = run.baseline.as_ref() {
@@ -81,7 +82,7 @@ impl<T: ChainTransport> RoundDriver<'_, T> {
                 stopping = Some((0, RoundQuiescence::Cancelled));
             }
             if stopping.is_none() {
-                match self.plan_off_the_worker() {
+                match self.plan_off_the_worker(&run) {
                     Err(error) => {
                         run.record_plan_failure(error);
                         stopping = Some((run.dispatches, RoundQuiescence::Failures));
@@ -175,6 +176,8 @@ impl<T: ChainTransport> RoundDriver<'_, T> {
                                 .into_iter()
                                 .map(|step| (step, host.host_context()))
                                 .collect();
+                            run.vote_ended |=
+                                dispatches.iter().any(|(_, context)| context.vote_ended());
                             let handoff = signing::missing_signer_bundles(
                                 self.executor,
                                 &dispatches,

@@ -46,7 +46,7 @@ pub(crate) fn plan_round(
     round_id: &str,
     proposal_ids: &[u32],
 ) -> Result<RoundPlan, VotingError> {
-    Ok(plan_round_classified(db, round_id, proposal_ids)?.plan)
+    Ok(plan_round_classified(db, round_id, proposal_ids, false)?.plan)
 }
 
 /// A plan together with the obligations it was projected from, so an
@@ -56,16 +56,21 @@ pub(crate) struct ClassifiedPlan {
     pub(crate) obligations: RoundObligations,
 }
 
-/// [`plan_round`], keeping the obligations beside the plan.
+/// [`plan_round`], keeping the obligations beside the plan. `vote_ended`
+/// is whether the host clock has reached the round's vote end
+/// ([`RoundSnapshot::vote_ended`]); [`plan_round`] has no clock and passes
+/// false.
 pub(crate) fn plan_round_classified(
     db: &VotingDb,
     round_id: &str,
     proposal_ids: &[u32],
+    vote_ended: bool,
 ) -> Result<ClassifiedPlan, VotingError> {
     let wallet_id = db.wallet_id();
-    let snapshot = db.read_transaction("plan round", |tx| {
+    let mut snapshot = db.read_transaction("plan round", |tx| {
         load_round_snapshot(tx, &wallet_id, round_id)
     })?;
+    snapshot.vote_ended = vote_ended;
     let obligations = classify_round(&snapshot, proposal_ids)?;
     let plan = projection::project(&snapshot, proposal_ids, &obligations)?;
     Ok(ClassifiedPlan { plan, obligations })

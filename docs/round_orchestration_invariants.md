@@ -121,7 +121,7 @@ canonical obligations are:
 | `Retire` | vote unit | unit id and every member; an undispatched unit a member of which left the roster |
 | `Cast` | bundle | every draft `(proposal_id, choice)` the bundle must cast, the units to retire first, the delegation prerequisite if any |
 | `ReconcileChain` | vote unit | unit id, ordered member proposals, phase, tx hash, the delegation prerequisite if any |
-| `Deliver` | confirmed vote | bundle, commitment (`CommitmentRef`), tree position, the share indexes owed, whether a durable helper plan already exists |
+| `Deliver` | confirmed vote, or landed DC | bundle, commitment (`CommitmentRef`), tree position, the share indexes owed, whether a durable helper plan already exists |
 | `Confirm` | share | share key with its commitment; whether a helper accepted it; whether an attempt's outcome is unknown or still in flight |
 | `Blocked` | bundle cast | the reason the host must resolve: an open ballot, or unrostered intents to clear |
 
@@ -382,6 +382,13 @@ them.
   `Refused` and the step `Pending`, so the next step sends it again until it
   lands or voting ends (`a_refused_batch_stays_pending_and_is_sent_again`,
   `a_paused_batch_stays_recoverable_and_retries_once_the_pause_lifts`).
+- **Status view.** `proxy::status` and `proxy::progress` read the batch
+  progress round planning reads, plus each landed DC's delivery, in one read
+  transaction, and plan nothing; `proxy::delegator::status` states their
+  stage rules. A refused batch shows as submitting, and the job's progress
+  flags it. Once the round closes a batch that never landed is not counted
+  (`a_refused_batch_stays_pending_and_is_sent_again`,
+  `a_delegation_is_as_far_as_its_least_advanced_dc`).
 - **The persisted batch layout.** The share layout is chosen once, from the
   last-moment window, when the allocation is committed: single share if and
   only if `RoundHostContext::is_last_moment()`, the call casts use, and the
@@ -490,8 +497,9 @@ exactly as before
   spends the dead VAN even if a batch was dispatched after the cast was
   planned (`a_fully_delegated_van_proves_no_vote`).
 - End to end, a landed batch that took the bundle's whole weight leaves a run
-  that stops with `NoWorkLeft`, before and after
-  the ballot is recorded, with no vote POST and no share sent; a kept
+  that delivers the DC's shares and stops with `BackgroundShareWorkOnly`,
+  leaving their reveals to background tracking, before and after
+  the ballot is recorded, with no vote POST and no vote share sent; a kept
   remainder plans its cast from the answers recorded before the commit once
   the batch lands, and the planner still owes the ballot for kept weight
   without answers
@@ -527,6 +535,38 @@ exactly as before
   being polled or recovered
   (`a_committed_vote_never_dispatched_prepares_its_plan_before_the_chain`,
   `a_dispatched_vote_is_reconciled_before_its_ballot_is_terminal`).
+- **DC shares.** Only a `Landed` batch's DCs owe shares, whatever the ballot
+  says; a DC of a batch that is planned, proved or on the wire owes none
+  (`dc_shares_are_owed_only_once_their_batch_landed`). A landed DC owes `Deliver`,
+  with `CommitmentRef::Proxy { dc_slot }` and its own tree position, for every
+  share its layout delivers until it is planned, and then for every planned
+  share not yet handed off (`a_landed_dc_owes_every_share_its_layout_delivers`,
+  `only_shares_not_handed_off_are_owed`). Once the host clock reaches the
+  authenticated vote end, no DC owes `Deliver`, so a share no helper took is
+  not retried after it. The executor's plan under the step's lock reads the
+  step's host clock, and the driver's plans read the latest host context it
+  sampled for a dispatch, so a step sampled at the vote end ends `NoWork` and
+  the run stops. `resume_plan` has no clock and still lists the step
+  (`no_dc_owes_delivery_once_the_vote_ended`,
+  `a_run_at_the_vote_end_stops_delivering_a_short_dc`). Every handed-off,
+  unconfirmed share owes `Confirm` with an acceptance, as an accepted vote
+  share does, so background tracking owns it
+  (`a_handed_off_dc_s_unconfirmed_shares_are_left_to_background_tracking`). The
+  executor delivers the whole DC for any of its `SubmitShares` steps, with the
+  shares derived from the bound hotkey: it advances once every share is
+  handed off, at its reachable target; a helper's refusal only sends the
+  share to the other helpers. It is `Pending` while a short share has a
+  configured helper whose acceptance a later pass reconciles (a lost answer
+  or a 5xx such as `leaf_not_found`); a helper that left the fleet is never
+  posted to again, so it doesn't count. It otherwise fails
+  `HelperDeliveryIncomplete`
+  (`a_refusing_helper_is_replaced_and_the_share_handed_off`,
+  `a_share_short_of_its_target_is_owed_again_until_handed_off`,
+  `a_refused_re_post_keeps_the_earlier_unknown_outcome`,
+  `a_dc_not_yet_in_the_helpers_trees_is_retried_later`,
+  `an_unknown_outcome_at_a_removed_helper_does_not_hide_a_short_share`).
+  `docs/helper_submission_invariants.md` ("Delegation commitment shares") owns
+  the planner, payload and hand-off rules.
 
 ### Projection
 
@@ -549,7 +589,13 @@ source of truth:
   when its first attempt carries the registration; it is a prerequisite of
   the bundle's vote and share steps. A DC's share steps belong to no
   proposal: they rank ahead of every proposal's within their tier, by bundle
-  and then slot and share, and are not `recovered_vote_work`;
+  and then slot and share, and are not `recovered_vote_work`. Its
+  `SubmitShares` makes the primary action `Delegate` and keeps
+  `blocking_recovery` true; its `ConfirmShare`, planned only for a handed-off
+  share, is background work like an accepted vote share's, which the round
+  driver hands to background tracking
+  (`dc_share_steps_rank_ahead_of_every_proposal_s_shares_slot_by_slot`,
+  `a_handed_off_dc_share_is_left_to_background_tracking`);
 - `blocking_prerequisite` answers from the obligation's prerequisite;
 - the derived flags (`has_unconfirmed_shares`, `blocking_share_work`,
   `has_recoverable_vote_or_share_work`, `immediate_share_key`,
@@ -1097,6 +1143,10 @@ Conformance is demonstrated by behavior. Tests cover:
 - `AdvanceProxyBatch` is planned once every batch is proved and for every
   batch on the wire; the hold lifts only on landing
   (`round_planning/tests/proxy_submission.rs`);
+- a landed DC owes delivery of every share not handed off until the vote
+  ends, and each handed-off share's reveal as background work; nothing is
+  owed before landing, and no DC share is the immediate share
+  (`round_planning/tests/proxy_shares.rs`);
 - a fully delegated bundle plans no cast and dispatches no undispatched unit
   whatever the intents say, a round of nothing else owes no ballot and
   reports `nothing_left_to_vote`, a mixed round casts only from the bundles

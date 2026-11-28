@@ -33,6 +33,11 @@ pub(super) struct Run {
     pub(super) delegations: Vec<SignedDelegationBundle>,
     /// Set when the last dispatch asked to be run again after a wait.
     pub(super) repoll: Vec<(NextStep, std::time::Duration)>,
+    /// A host context sampled for a dispatch had reached the vote end, so
+    /// later plans owe no DC delivery. Host contexts are sampled only per
+    /// dispatch, so a step sampled at the vote end resolves to `NoWork`
+    /// under its own context first.
+    pub(super) vote_ended: bool,
     /// Dispatch sequences for failures, skips, chain effects, deliveries, and signatures.
     order: [Vec<usize>; 5],
 }

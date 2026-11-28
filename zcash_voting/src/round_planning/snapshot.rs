@@ -12,6 +12,7 @@ use crate::phases::{
     DelegationSubmissionStatus, SharePhase, VotePhase,
 };
 use crate::proxy::batch::{proxy_batch_statuses_on, ProxyBatchStatus};
+use crate::proxy::shares::{landed_dc_shares_on, LandedDcShares};
 use crate::session::{load_ballot_intents, Decision};
 use crate::share_policy::ImmediateShareKey;
 use crate::share_tracking::round_immediate_share;
@@ -75,6 +76,13 @@ pub(crate) struct RoundSnapshot {
     /// Bundles the committed proxy allocation places DCs on, with how far
     /// each batch has come.
     pub(crate) proxy_batches: BTreeMap<u32, ProxyBatchStatus>,
+    /// Every DC whose batch landed, with its planned shares, by `(bundle,
+    /// dc_slot)`.
+    pub(crate) proxy_dc_shares: BTreeMap<(u32, u8), LandedDcShares>,
+    /// Whether the host clock has reached the round's authenticated vote
+    /// end. The one host fact in the snapshot: the loader leaves it false and
+    /// a planner with the host's clock sets it.
+    pub(crate) vote_ended: bool,
 }
 
 /// Reads the round's durable state on `tx`.
@@ -149,6 +157,7 @@ pub(crate) fn load_round_snapshot(
     let lifecycle_hashes = lifecycle_transaction_hashes(tx, wallet_id, round_id)?;
     let persisted_immediate_share = round_immediate_share(tx, round_id, wallet_id)?;
     let proxy_batches = proxy_batch_statuses_on(tx, wallet_id, round_id)?;
+    let proxy_dc_shares = landed_dc_shares_on(tx, wallet_id, round_id)?;
     Ok(RoundSnapshot {
         round_id: round_id.to_string(),
         delegations,
@@ -161,6 +170,8 @@ pub(crate) fn load_round_snapshot(
         persisted_immediate_share,
         rejection_blocked_bundles,
         proxy_batches,
+        proxy_dc_shares,
+        vote_ended: false,
     })
 }
 

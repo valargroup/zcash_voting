@@ -47,16 +47,23 @@ impl<T: ChainTransport> RoundExecutor<T> {
     }
 
     /// Plans the bound round, keeping the obligations beside the plan.
+    /// `vote_ended` is [`RoundHostContext::vote_ended`] of the host's
+    /// current context.
     ///
     /// The obligations name every member of an atomic batch, which the
     /// projected steps do not: a batch projects to one `AdvanceVoteBatch`
     /// carrying only its first member's id. The round driver reads them to
     /// report exact selected-vote submission progress.
-    pub(crate) fn plan_classified(&self) -> Result<ClassifiedPlan, VotingError> {
+    pub(crate) fn plan_classified(&self, vote_ended: bool) -> Result<ClassifiedPlan, VotingError> {
         self.wallet_scope()?;
         let binding = self.binding()?;
         self.ensure_stored_round_network(&binding.round_id, "the binding")?;
-        plan_round_classified(&self.database, &binding.round_id, &binding.proposal_ids())
+        plan_round_classified(
+            &self.database,
+            &binding.round_id,
+            &binding.proposal_ids(),
+            vote_ended,
+        )
     }
 
     /// Records ballot decisions and returns the refreshed plan.
@@ -326,7 +333,7 @@ impl<T: ChainTransport> RoundExecutor<T> {
             }
             Obligation::Confirm {
                 bundle_index,
-                commitment: CommitmentRef::Vote { proposal_id },
+                commitment,
                 share_index,
                 accepted,
                 outcome_unknown,
@@ -339,13 +346,11 @@ impl<T: ChainTransport> RoundExecutor<T> {
                 // (an ambiguous attempt, or one still in flight) is polled:
                 // redelivery excludes those helpers, so only tracking can
                 // classify them and make progress. Delivery also waits while
-                // the vote's own chain work is pending.
-                let chain_pending =
-                    classified
-                        .obligations
-                        .obligations
-                        .iter()
-                        .any(|candidate| match candidate {
+                // the vote's own chain work is pending. A DC's share is
+                // planned here only once handed off, so it is always polled.
+                if let CommitmentRef::Vote { proposal_id } = commitment {
+                    let chain_pending = classified.obligations.obligations.iter().any(
+                        |candidate| match candidate {
                             &Obligation::ReconcileChain {
                                 bundle_index: pending_bundle,
                                 ref ordered_proposal_ids,
@@ -355,35 +360,34 @@ impl<T: ChainTransport> RoundExecutor<T> {
                                     && ordered_proposal_ids.contains(&proposal_id)
                             }
                             _ => false,
-                        });
-                let never_reached = !accepted && !outcome_unknown;
-                if never_reached && !chain_pending {
-                    return self
-                        .run_deliver(&scope, bundle_index, proposal_id, progress)
-                        .await;
+                        },
+                    );
+                    let never_reached = !accepted && !outcome_unknown;
+                    if never_reached && !chain_pending {
+                        return self
+                            .run_deliver(&scope, bundle_index, proposal_id, progress)
+                            .await;
+                    }
                 }
                 self.run_confirm_share(
                     &scope,
-                    ShareKey::vote(bundle_index, proposal_id, share_index),
+                    ShareKey {
+                        bundle_index,
+                        commitment,
+                        share_index,
+                    },
                     progress,
                 )
                 .await
             }
-            // This build plans no DC share work.
             Obligation::Deliver {
-                commitment: CommitmentRef::Proxy { .. },
+                bundle_index,
+                commitment: CommitmentRef::Proxy { dc_slot },
                 ..
+            } => {
+                self.run_deliver_dc_shares(&scope, bundle_index, dc_slot)
+                    .await
             }
-            | Obligation::Confirm {
-                commitment: CommitmentRef::Proxy { .. },
-                ..
-            } => Err(self.step_failure(
-                RoundStepFailureKind::InvariantViolation,
-                Some(&scope.step),
-                None,
-                &ledger,
-                "this build plans no delegation commitment share work",
-            )),
             // Never projected as a step, so never resolved from one.
             Obligation::Retire { .. } | Obligation::Blocked { .. } => {
                 Ok(self.no_work(Some(scope.step), classified.plan))
@@ -397,7 +401,12 @@ impl<T: ChainTransport> RoundExecutor<T> {
         let ledger = StepLedger::default();
         self.ensure_stored_round_network(&scope.round_id, "the binding")
             .and_then(|()| {
-                plan_round_classified(&self.database, &scope.round_id, &scope.proposal_ids())
+                plan_round_classified(
+                    &self.database,
+                    &scope.round_id,
+                    &scope.proposal_ids(),
+                    scope.host.vote_ended(),
+                )
             })
             .map_err(|error| self.step_voting_failure(error, Some(&scope.step), &ledger))
     }

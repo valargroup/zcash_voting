@@ -53,9 +53,12 @@ pub(crate) trait TrackedShare: ShareAttemptJournal {
     fn mark_confirmed(&self) -> Result<bool, VotingError>;
 
     /// The share's helper request rebuilt for a resend with `submit_at`.
+    /// `round_hotkey_seed` is the pass's round hotkey, which only a DC
+    /// share is derived from.
     fn resend_payload(
         &self,
         submit_at: u64,
+        round_hotkey_seed: Option<&[u8]>,
         observations: &crate::ObservationScope,
     ) -> Result<ResendPayload, VotingError>;
 }
@@ -64,8 +67,10 @@ pub(crate) trait TrackedShare: ShareAttemptJournal {
 pub(crate) enum ResendPayload {
     /// The request body.
     Ready(String),
-    /// The vote is submitted, but its real VC tree position is not recorded.
-    AwaitingVcPosition,
+    /// The share can't be rebuilt yet: a vote's real VC tree position is not
+    /// recorded, or the pass holds no round hotkey to derive a DC share
+    /// from. The pass only polls the share.
+    Unavailable,
     /// The stored material is missing or cannot rebuild the share.
     Unrecoverable,
     /// The stored material rebuilds a share with another nullifier.
@@ -135,6 +140,7 @@ impl TrackedShare for VoteShareJournal<'_> {
     fn resend_payload(
         &self,
         submit_at: u64,
+        _round_hotkey_seed: Option<&[u8]>,
         observations: &crate::ObservationScope,
     ) -> Result<ResendPayload, VotingError> {
         let bundle = match vote_recovery::helper_recovery_material_for_wallet(
@@ -146,7 +152,7 @@ impl TrackedShare for VoteShareJournal<'_> {
         )? {
             vote_recovery::HelperRecoveryMaterial::Ready(bundle) => bundle,
             vote_recovery::HelperRecoveryMaterial::AwaitingVcPosition => {
-                return Ok(ResendPayload::AwaitingVcPosition);
+                return Ok(ResendPayload::Unavailable);
             }
             vote_recovery::HelperRecoveryMaterial::Missing => {
                 return Ok(ResendPayload::Unrecoverable);

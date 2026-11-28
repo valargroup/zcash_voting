@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use crate::chain_submission::planning::LifecycleTransactionHashes;
 use crate::phases::{DelegationPhase, DelegationSubmissionStatus, SharePhase, VotePhase};
 use crate::proxy::batch::ProxyBatchStatus;
+use crate::proxy::shares::{DcShareRecord, LandedDcShares};
+use crate::proxy::DcShareLayout;
 use crate::round_planning::{BundleSnapshot, RoundSnapshot, VoteSnapshot};
 use crate::session::Decision;
 use crate::session::ProxyBatchStage;
@@ -24,6 +26,7 @@ pub(super) fn snapshot() -> SnapshotBuilder {
         snapshot: RoundSnapshot {
             rejection_blocked_bundles: std::collections::BTreeMap::new(),
             proxy_batches: BTreeMap::new(),
+            proxy_dc_shares: BTreeMap::new(),
             round_id: ROUND.to_string(),
             delegations: Vec::new(),
             bundles: BTreeMap::new(),
@@ -33,6 +36,7 @@ pub(super) fn snapshot() -> SnapshotBuilder {
             intents: BTreeMap::new(),
             lifecycle_hashes: LifecycleTransactionHashes::default(),
             persisted_immediate_share: None,
+            vote_ended: false,
         },
     }
 }
@@ -209,9 +213,37 @@ impl SnapshotBuilder {
         self.proxy_status(bundle_index, ProxyBatchStatus::at(progress))
     }
 
+    /// The DC in `bundle_index`'s slot `dc_slot` landed at tree position
+    /// `100 + dc_slot` under `layout`, with `shares` once it is planned.
+    pub(super) fn landed_dc(
+        mut self,
+        bundle_index: u32,
+        dc_slot: u8,
+        layout: DcShareLayout,
+        shares: Option<Vec<DcShareRecord>>,
+    ) -> Self {
+        self.snapshot.proxy_dc_shares.insert(
+            (bundle_index, dc_slot),
+            LandedDcShares {
+                bundle_index,
+                dc_slot,
+                layout,
+                tree_position: 100 + u64::from(dc_slot),
+                shares,
+            },
+        );
+        self
+    }
+
     /// As [`Self::proxy_batch`], with the batch's whole status.
     pub(super) fn proxy_status(mut self, bundle_index: u32, status: ProxyBatchStatus) -> Self {
         self.snapshot.proxy_batches.insert(bundle_index, status);
+        self
+    }
+
+    /// The host clock has reached the round's vote end.
+    pub(super) fn vote_ended(mut self) -> Self {
+        self.snapshot.vote_ended = true;
         self
     }
 

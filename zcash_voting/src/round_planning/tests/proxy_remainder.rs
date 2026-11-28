@@ -5,6 +5,7 @@
 
 use super::fixtures::*;
 use crate::phases::{DelegationPhase, VotePhase};
+use crate::proxy::DcShareLayout;
 use crate::round_planning::{classify_round, plan_from_snapshot, Obligation};
 use crate::session::{Decision, NextStep, ProxyBatchStage};
 use crate::share_policy::ImmediateShareKey;
@@ -13,11 +14,13 @@ use crate::share_tracking::CommitmentRef;
 /// The roster every test plans against.
 const ROSTER: [u32; 2] = [1, 2];
 
-/// Adds `bundle_index` with its delegation confirmed and its batch landed.
+/// Adds `bundle_index` with its delegation confirmed, its batch landed and
+/// one landed DC whose shares are not yet planned.
 fn landed(builder: SnapshotBuilder, bundle_index: u32) -> SnapshotBuilder {
     builder
         .bundle(bundle_index, DelegationPhase::Confirmed)
         .proxy_batch(bundle_index, ProxyBatchStage::Landed)
+        .landed_dc(bundle_index, 0, DcShareLayout::Standard, None)
 }
 
 /// Records a choice for both roster proposals.
@@ -54,7 +57,8 @@ fn owes_cast_work(obligations: &[Obligation]) -> bool {
 }
 
 /// Delegating everything leaves the round nothing to vote: no proposal is
-/// open, and recorded choices plan no cast and withhold nothing.
+/// open, recorded choices plan no cast and withhold nothing, and only the
+/// DC's own shares are owed.
 #[test]
 fn delegating_everything_owes_no_ballot_and_no_cast_even_with_intents() {
     let undecided = landed(snapshot(), 0).fully_delegated(0).build();
@@ -63,7 +67,18 @@ fn delegating_everything_owes_no_ballot_and_no_cast_even_with_intents() {
     assert!(plan.nothing_left_to_vote);
     assert_eq!(plan.fully_delegated_bundles, vec![0]);
     assert!(!plan.needs_draft_setup);
-    assert_eq!(plan.next_steps, Vec::new(), "no step is owed");
+    assert!(!plan.next_steps.is_empty());
+    assert!(
+        plan.next_steps.iter().all(|step| matches!(
+            step,
+            NextStep::SubmitShares {
+                commitment: CommitmentRef::Proxy { .. },
+                ..
+            }
+        )),
+        "only the DC's shares are owed: {:?}",
+        plan.next_steps
+    );
 
     let decided = decided(landed(snapshot(), 0).fully_delegated(0)).build();
     let obligations = classify_round(&decided, &ROSTER).unwrap();

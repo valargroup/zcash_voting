@@ -60,6 +60,7 @@ fn tracking_params<'a>(urls: &'a [String], now_seconds: u64) -> ShareTrackingPar
         now_seconds,
         vote_end_time_seconds: Some(VOTE_END),
         policy: ShareTimingPolicy::default(),
+        round_hotkey_seed: None,
     }
 }
 
