@@ -11,7 +11,7 @@ use super::{
     delegate_store::{self, DeviceDelegateKey},
     DelegateChain, DelegateModeError, ProvenDelegateEntry,
 };
-use crate::{storage::VotingDb, wire::DelegateKeyInfo};
+use crate::{proxy::in_transaction, storage::VotingDb, wire::DelegateKeyInfo};
 
 /// Draws a delegate key from `rng`, which must be the OS CSPRNG. Nothing is
 /// stored. The host keeps the key's `zvdsk1…` export in secure storage, then
@@ -51,7 +51,7 @@ pub fn record_delegate_key(
     now_seconds: u64,
 ) -> Result<DeviceDelegateKey, DelegateModeError> {
     let wallet_id = db.wallet_id();
-    delegate_store::in_transaction(
+    in_transaction(
         db,
         TransactionBehavior::Immediate,
         "record delegate key",
@@ -89,12 +89,7 @@ pub fn device_delegate_key(
     chain: &DelegateChain,
 ) -> Result<Option<DeviceDelegateKey>, DelegateModeError> {
     let wallet_id = db.wallet_id();
-    delegate_store::in_transaction(
-        db,
-        TransactionBehavior::Deferred,
-        "load delegate key",
-        |tx| Ok(delegate_store::load_key(tx, &wallet_id, chain)?.map(|row| row.key)),
-    )
+    Ok(delegate_store::load_key(&db.conn(), &wallet_id, chain)?.map(|row| row.key))
 }
 
 /// Forgets the device's key on the chain, with any pending register op, so
@@ -103,12 +98,7 @@ pub fn device_delegate_key(
 /// to delete, and signed ballots stay.
 pub fn forget_delegate_key(db: &VotingDb, chain: &DelegateChain) -> Result<(), DelegateModeError> {
     let wallet_id = db.wallet_id();
-    delegate_store::in_transaction(
-        db,
-        TransactionBehavior::Immediate,
-        "forget delegate key",
-        |tx| delegate_store::delete_key(tx, &wallet_id, chain),
-    )
+    delegate_store::delete_key(&db.conn(), &wallet_id, chain)
 }
 
 /// Records that `entry`, proven, is the device's key's entry and returns the
@@ -127,7 +117,7 @@ pub fn record_proven_entry(
 ) -> Result<DeviceDelegateKey, DelegateModeError> {
     let entry = entry.entry();
     let wallet_id = db.wallet_id();
-    delegate_store::in_transaction(
+    in_transaction(
         db,
         TransactionBehavior::Immediate,
         "record proven delegate entry",

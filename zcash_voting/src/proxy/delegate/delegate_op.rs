@@ -9,9 +9,12 @@ use std::fmt;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zcash_vote_delegate::{AttestationWindow, DelegateKey, DelegateRegisterFields};
+use zcash_vote_delegate::{DelegateKey, DelegateRegisterFields};
 
-use crate::chain_submission::{ChainSubmissionDiagnostic, ChainSubmissionDiagnosticKind};
+use crate::{
+    chain_submission::{ChainSubmissionDiagnostic, ChainSubmissionDiagnosticKind},
+    wire::DelegateAttestationSignature,
+};
 
 /// The delegate op endpoint, under a vote server's base URL.
 pub const DELEGATE_OP_PATH: &str = "/shielded-vote/v1/delegate-op";
@@ -73,20 +76,13 @@ impl fmt::Debug for SignedDelegateOp {
     }
 }
 
-/// One verifier attestation as a register op carries it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct OpAttestation {
-    pub(super) verifier_id: u32,
-    pub(super) window: AttestationWindow,
-    /// The verifier's Ed25519 signature over ATTEST.
-    pub(super) sig: [u8; 64],
-}
-
-/// The register op for `fields`, with `dk_sig` over REGISTER.
+/// The register op for `fields`, with `dk_sig` over REGISTER. The
+/// `attestations` passed [`check_attestation`](super::check_attestation), so
+/// each `sig` is canonical base64.
 pub(super) fn register_op(
     fields: &DelegateRegisterFields<'_>,
     dk: &DelegateKey,
-    attestations: &[OpAttestation],
+    attestations: &[DelegateAttestationSignature],
     dk_sig: &[u8; 64],
 ) -> SignedDelegateOp {
     debug_assert_eq!(fields.dk, dk.to_bytes());
@@ -99,9 +95,9 @@ pub(super) fn register_op(
             .iter()
             .map(|attestation| AttestationJson {
                 verifier_id: attestation.verifier_id,
-                not_before: attestation.window.not_before,
-                expires_at: attestation.window.expires_at,
-                sig: BASE64.encode(attestation.sig),
+                not_before: attestation.not_before,
+                expires_at: attestation.expires_at,
+                sig: &attestation.sig,
             })
             .collect(),
         dk_sig: BASE64.encode(dk_sig),
@@ -110,40 +106,20 @@ pub(super) fn register_op(
         DelegateOpKind::Register,
         0,
         dk,
-        &DelegateOpJson {
-            register: Some(register),
-            retire: None,
-            ballot: None,
-        },
+        &DelegateOpJson::Register(register),
     )
 }
 
 /// The register op of `dk` stored as `body` by
 /// [`prepare_register_op`](super::prepare_register_op). The body is returned
 /// as stored, never rebuilt.
-pub(super) fn stored_register_op(
-    dk: &DelegateKey,
-    body: Vec<u8>,
-) -> Result<SignedDelegateOp, &'static str> {
-    #[derive(Deserialize)]
-    struct StoredOp {
-        register: StoredRegister,
-    }
-    #[derive(Deserialize)]
-    struct StoredRegister {
-        dk: String,
-    }
-    let stored: StoredOp =
-        serde_json::from_slice(&body).map_err(|_| "a stored register op does not parse")?;
-    if BASE64.decode(&stored.register.dk).ok().as_deref() != Some(dk.to_bytes().as_slice()) {
-        return Err("a stored register op registers another key");
-    }
-    Ok(SignedDelegateOp {
+pub(super) fn stored_register_op(dk: &DelegateKey, body: Vec<u8>) -> SignedDelegateOp {
+    SignedDelegateOp {
         kind: DelegateOpKind::Register,
         delegate_index: 0,
         dk: *dk,
         body,
-    })
+    }
 }
 
 /// The retire op of entry `delegate_index`, with `dk_sig` over RETIRE by its
@@ -161,11 +137,7 @@ pub(super) fn retire_op(
         DelegateOpKind::Retire,
         delegate_index,
         dk,
-        &DelegateOpJson {
-            register: None,
-            retire: Some(retire),
-            ballot: None,
-        },
+        &DelegateOpJson::Retire(retire),
     )
 }
 
@@ -180,18 +152,14 @@ pub(super) fn ballot_op(
     let ballot = BallotJson {
         vote_round_id: BASE64.encode(vote_round_id),
         delegate_index,
-        options: options.to_vec(),
+        options,
         dk_sig: BASE64.encode(dk_sig),
     };
     signed_op(
         DelegateOpKind::Ballot,
         delegate_index,
         dk,
-        &DelegateOpJson {
-            register: None,
-            retire: None,
-            ballot: Some(ballot),
-        },
+        &DelegateOpJson::Ballot(ballot),
     )
 }
 
@@ -210,15 +178,13 @@ fn signed_op(
     }
 }
 
-/// `MsgDelegateOp`: exactly one field is set.
+/// `MsgDelegateOp`, whose one field is the op.
 #[derive(Serialize)]
-struct DelegateOpJson<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    register: Option<RegisterJson<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    retire: Option<RetireJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ballot: Option<BallotJson>,
+#[serde(rename_all = "snake_case")]
+enum DelegateOpJson<'a> {
+    Register(RegisterJson<'a>),
+    Retire(RetireJson),
+    Ballot(BallotJson<'a>),
 }
 
 /// `DelegateRegister`, fields in proto order.
@@ -228,19 +194,19 @@ struct RegisterJson<'a> {
     provider: u32,
     handle: &'a str,
     proof_id: &'a str,
-    attestations: Vec<AttestationJson>,
+    attestations: Vec<AttestationJson<'a>>,
     dk_sig: String,
 }
 
 /// `DelegateAttestation`, fields in proto order.
 #[derive(Serialize)]
-struct AttestationJson {
-    #[serde(skip_serializing_if = "is_zero_u32")]
+struct AttestationJson<'a> {
+    #[serde(skip_serializing_if = "is_zero")]
     verifier_id: u32,
-    #[serde(skip_serializing_if = "is_zero_u64")]
+    #[serde(skip_serializing_if = "is_zero")]
     not_before: u64,
     expires_at: u64,
-    sig: String,
+    sig: &'a str,
 }
 
 /// `DelegateRetire`, fields in proto order.
@@ -252,21 +218,16 @@ struct RetireJson {
 
 /// `DelegateBallot`, fields in proto order.
 #[derive(Serialize)]
-struct BallotJson {
+struct BallotJson<'a> {
     vote_round_id: String,
     delegate_index: u32,
-    options: Vec<u32>,
+    options: &'a [u32],
     dk_sig: String,
 }
 
-/// Whether a `u32` is zero, which Go's encoder omits.
-fn is_zero_u32(value: &u32) -> bool {
-    *value == 0
-}
-
-/// Whether a `u64` is zero, which Go's encoder omits.
-fn is_zero_u64(value: &u64) -> bool {
-    *value == 0
+/// Whether an integer is zero, which Go's encoder omits.
+fn is_zero<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// CheckTx's verdict on a posted op (HTTP 200 or 422).
@@ -371,8 +332,8 @@ struct BroadcastResultJson {
 
 /// A REST error body, `{"error": "..."}`.
 #[derive(Deserialize)]
-struct ErrorJson {
-    error: String,
+pub(super) struct ErrorJson {
+    pub(super) error: String,
 }
 
 /// Server text, escaped and bounded as chain diagnostics are.

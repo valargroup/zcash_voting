@@ -3,23 +3,24 @@
 //!
 //! The device stores the register op it prepares so retries resend the same
 //! bytes, see [`prepare_register_op`]. A registration settles only from a
-//! proven entry, see [`registration_result`]. Retire is one op signed by the
-//! entry's key, settled as [`retire_result`] says.
+//! proven entry, see [`record_proven_entry`](super::record_proven_entry).
+//! Retire is one op signed by the entry's key, settled once a proven entry
+//! shows it retired.
 
 use rusqlite::TransactionBehavior;
 use zcash_vote_delegate::{
-    register_digest, retire_digest, DelegateRetireFields, DelegateSigningKey, DelegateStatus,
-    ProxyChainError,
+    register_digest, retire_digest, DelegateRetireFields, DelegateSigningKey, ProxyChainError,
 };
 
 use super::{
-    attestation::{checked_attestations, register_fields, AttestationExpectation},
+    attestation::{check_attestation, register_fields, AttestationExpectation},
     delegate_op::{register_op, retire_op, stored_register_op, DelegateOpAnswer, SignedDelegateOp},
     delegate_store::{self, KeyRow},
-    device_key::{hold_key, record_proven_entry},
+    device_key::hold_key,
     DelegateChain, DelegateModeError, ProvenDelegateEntry,
 };
 use crate::{
+    proxy::in_transaction,
     storage::VotingDb,
     wire::{DelegateAttestation, DelegateRegisterResult, DelegateRetireResult},
 };
@@ -47,18 +48,18 @@ pub fn prepare_register_op(
     now_seconds: u64,
 ) -> Result<SignedDelegateOp, DelegateModeError> {
     let dk = signing_key.delegate_key();
-    let attestations = checked_attestations(chain, attestation, &dk, expected, now_seconds)?;
+    check_attestation(chain, attestation, &dk, expected, now_seconds)?;
     let fields = register_fields(attestation, &dk);
     let digest = register_digest(chain.chain_id(), &fields)
         .expect("a checked chain id and canonical fields always encode");
     let op = register_op(
         &fields,
         &dk,
-        &attestations,
+        &attestation.attestations,
         &signing_key.sign_digest(&digest),
     );
     let wallet_id = db.wallet_id();
-    delegate_store::in_transaction(
+    in_transaction(
         db,
         TransactionBehavior::Immediate,
         "prepare register op",
@@ -75,22 +76,12 @@ pub fn prepare_register_op(
 
 /// The stored register op of the device's key, byte for byte, until a proven
 /// entry settles the registration. `None` when none is pending.
-///
-/// # Errors
-///
-/// [`DelegateModeError::CorruptRecord`] when the stored op is not a register
-/// op of the device's key.
 pub fn pending_register_op(
     db: &VotingDb,
     chain: &DelegateChain,
 ) -> Result<Option<SignedDelegateOp>, DelegateModeError> {
     let wallet_id = db.wallet_id();
-    let held = delegate_store::in_transaction(
-        db,
-        TransactionBehavior::Deferred,
-        "load pending register op",
-        |tx| delegate_store::load_key(tx, &wallet_id, chain),
-    )?;
+    let held = delegate_store::load_key(&db.conn(), &wallet_id, chain)?;
     let Some(KeyRow {
         key,
         pending_register_op: Some(body),
@@ -98,23 +89,20 @@ pub fn pending_register_op(
     else {
         return Ok(None);
     };
-    stored_register_op(&key.dk, body)
-        .map(Some)
-        .map_err(|message| DelegateModeError::CorruptRecord {
-            message: message.to_owned(),
-        })
+    Ok(Some(stored_register_op(&key.dk, body)))
 }
 
 /// What the node's answer to a register op means.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegisterAnswer {
-    /// CheckTx accepted the op. See [`registration_result`].
+    /// CheckTx accepted the op. See
+    /// [`record_proven_entry`](super::record_proven_entry).
     Submitted {
         /// The transaction hash, uppercase hex.
         tx_hash: String,
     },
     /// Code 61: the key was registered before, so an earlier post landed.
-    /// See [`registration_result`].
+    /// See [`record_proven_entry`](super::record_proven_entry).
     AlreadyRegistered,
     /// Any other rejection. Code 62, the handle already has a live entry, is
     /// permanent until that entry retires.
@@ -140,28 +128,6 @@ pub fn classify_register_answer(answer: &DelegateOpAnswer) -> RegisterAnswer {
             }),
         },
     }
-}
-
-/// Settles the device's registration from `entry`, the proven entry the
-/// lookup by key named: the entry's key is the device's, so the registration
-/// landed. Records the entry as [`record_proven_entry`] does.
-///
-/// While the lookup by key names no entry the registration has not landed,
-/// and the host looks again later.
-///
-/// # Errors
-///
-/// [`DelegateModeError::NotDeviceEntry`] when the entry's key is not the
-/// device's.
-pub fn registration_result(
-    db: &VotingDb,
-    chain: &DelegateChain,
-    entry: &ProvenDelegateEntry,
-) -> Result<DelegateRegisterResult, DelegateModeError> {
-    record_proven_entry(db, chain, entry)?;
-    Ok(DelegateRegisterResult::Registered {
-        delegate_index: entry.entry().index,
-    })
 }
 
 /// Builds Retire: the retire op of `entry`, signed by `signing_key`, its
@@ -201,7 +167,8 @@ pub fn build_retire_op(
 /// What the node's answer to a retire op means.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetireAnswer {
-    /// CheckTx accepted the op. See [`retire_result`].
+    /// CheckTx accepted the op. It settles once a proven entry shows the
+    /// entry retired.
     Submitted {
         /// The transaction hash, uppercase hex.
         tx_hash: String,
@@ -231,11 +198,4 @@ pub fn classify_retire_answer(answer: &DelegateOpAnswer) -> RetireAnswer {
             },
         ),
     }
-}
-
-/// Settles a submitted Retire from `entry`, proven again after the op:
-/// retired once the entry shows it, else `None` and the host proves again
-/// later.
-pub fn retire_result(entry: &ProvenDelegateEntry) -> Option<DelegateRetireResult> {
-    (entry.entry().status == DelegateStatus::Retired).then_some(DelegateRetireResult::Retired)
 }

@@ -144,7 +144,7 @@ fn ballots_sign_the_vector_digests() {
             case["name"]
         );
         let dk: [u8; 32] = vector_bytes(&expected["dk"]);
-        assert_eq!(stored.dk().to_bytes(), dk);
+        assert_eq!(stored.op().dk().to_bytes(), dk);
         assert_eq!(
             verify_zip215(&dk, &vector_bytes::<32>(&expected["digest"]), &dk_sig),
             Ok(())
@@ -181,7 +181,6 @@ fn retries_resend_the_stored_bytes() {
     .unwrap();
     assert_eq!(again, first);
     assert_eq!(again.op().body(), body.as_slice());
-    assert_eq!(again.signed_at(), NOW);
 }
 
 /// A different ballot for a round that has one is refused, and the stored

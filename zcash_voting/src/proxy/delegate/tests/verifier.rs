@@ -61,7 +61,7 @@ fn requests_carry_provider_proof_and_key() {
     let attest = attest_request(IdentityProvider::X, "https://x.com/alice/status/20", &dk);
     assert_eq!(VERIFIER_ATTEST_PATH, "/v1/attest");
     assert_eq!(
-        String::from_utf8(attest.body).unwrap(),
+        String::from_utf8(attest).unwrap(),
         format!(
             r#"{{"provider":1,"proof_url":"https://x.com/alice/status/20","dk":"{}"}}"#,
             dk.encode()

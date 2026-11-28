@@ -11,7 +11,7 @@ use super::fixtures::{
 use crate::{
     proxy::delegate::{
         delegate_key_info, delegate_mode_status, delegate_round, prepare_register_op,
-        record_delegate_key, registration_result, sign_ballot, AttestationExpectation,
+        record_delegate_key, record_proven_entry, sign_ballot, AttestationExpectation,
         ChainDelegateBallot, CompleteBallot,
     },
     wire::{
@@ -66,7 +66,7 @@ fn status_shows_the_device_key_and_its_proven_entry() {
         })
     );
 
-    registration_result(&db, &chain, &alice_entry()).unwrap();
+    record_proven_entry(&db, &chain, &alice_entry()).unwrap();
     let suspended = proven_entry(alice_key(), DelegateStatus::Suspended);
     assert_eq!(
         delegate_mode_status(&db, &chain, Some(&suspended)).unwrap(),

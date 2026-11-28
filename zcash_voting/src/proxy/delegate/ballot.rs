@@ -17,6 +17,7 @@ use super::{
     ProvenDelegateEntry,
 };
 use crate::{
+    proxy::in_transaction,
     storage::VotingDb,
     types::{validate_vote_options, MAX_PROPOSAL_ID},
     wire::{BallotPreflight, BallotSubmitResult, DelegateBallotBlock},
@@ -31,10 +32,7 @@ pub enum BallotError {
     EmptyRoster,
     /// The round lists more than [`MAX_PROPOSAL_ID`] proposals.
     #[error("the round lists {count} proposals, more than {MAX_PROPOSAL_ID}")]
-    TooManyProposals {
-        /// The number of proposals.
-        count: usize,
-    },
+    TooManyProposals { count: usize },
     /// The round's proposal ids are not `1..=n` in order.
     #[error("proposal {position} of the round has id {proposal_id}; ids run 1..n in order")]
     RosterOutOfOrder {
@@ -45,11 +43,7 @@ pub enum BallotError {
     },
     /// A proposal declares an option count outside 2 to 8.
     #[error("proposal {proposal_id} declares {num_options} options")]
-    InvalidOptionCount {
-        /// The proposal.
-        proposal_id: u32,
-        num_options: u32,
-    },
+    InvalidOptionCount { proposal_id: u32, num_options: u32 },
     /// The ballot does not answer exactly every proposal.
     #[error("the ballot answers {answers} of the round's {proposals} proposals")]
     WrongAnswerCount {
@@ -87,10 +81,7 @@ pub enum BallotError {
     },
     /// The entry is suspended or retired, so it may not ballot.
     #[error("the round's ballot is blocked: {block:?}")]
-    Blocked {
-        /// Why.
-        block: DelegateBallotBlock,
-    },
+    Blocked { block: DelegateBallotBlock },
     /// The signing key is not the entry's key.
     #[error("the ballot must be signed by the entry's key {fingerprint}")]
     NotEntryKey {
@@ -163,11 +154,6 @@ impl CompleteBallot {
             vote_round_id,
             options,
         })
-    }
-
-    /// The round the ballot is for.
-    pub fn vote_round_id(&self) -> &[u8; 32] {
-        &self.vote_round_id
     }
 
     /// `options[i]` is the choice on proposal `i + 1`.
@@ -246,7 +232,7 @@ pub fn sign_ballot(
     }
     let entry = entry.entry();
     let wallet_id = db.wallet_id();
-    let outcome = delegate_store::in_transaction(
+    in_transaction::<_, DelegateModeError>(
         db,
         TransactionBehavior::Immediate,
         "sign delegate ballot",
@@ -295,8 +281,7 @@ pub fn sign_ballot(
             delegate_store::insert_ballot(tx, &wallet_id, chain, &signed)?;
             Ok(Ok(signed))
         },
-    )?;
-    outcome
+    )?
 }
 
 /// Why an entry with `status` may not ballot, if it may not.
@@ -317,12 +302,7 @@ pub fn stored_ballot(
     delegate_index: u32,
 ) -> Result<Option<StoredBallot>, DelegateModeError> {
     let wallet_id = db.wallet_id();
-    delegate_store::in_transaction(
-        db,
-        TransactionBehavior::Deferred,
-        "load delegate ballot",
-        |tx| delegate_store::load_ballot(tx, &wallet_id, chain, vote_round_id, delegate_index),
-    )
+    delegate_store::load_ballot(&db.conn(), &wallet_id, chain, vote_round_id, delegate_index)
 }
 
 /// What the node's answer to a ballot op means.

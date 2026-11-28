@@ -3,9 +3,9 @@
 //! round). Neither holds a secret. Schema triggers make a key's index
 //! write-once and a stored ballot immutable. Rows are keyed by vote chain
 //! (network and `chain_id`), since a key registers separately on each. Every
-//! function runs in the caller's transaction.
+//! function runs on the caller's connection or transaction.
 
-use rusqlite::{named_params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{named_params, Connection, OptionalExtension};
 use zcash_vote_delegate::DelegateKey;
 
 use super::{
@@ -13,7 +13,7 @@ use super::{
     DelegateChain, DelegateModeError,
 };
 use crate::{
-    storage::{queries::network_to_storage, VotingDb},
+    storage::queries::network_to_storage,
     types::{VotingError, MAX_PROPOSAL_ID},
 };
 
@@ -61,29 +61,14 @@ impl StoredBallot {
         }
     }
 
-    /// The round the ballot is for.
-    pub fn vote_round_id(&self) -> &[u8; 32] {
-        &self.vote_round_id
-    }
-
     /// The delegate's entry.
     pub fn delegate_index(&self) -> u32 {
         self.delegate_index
     }
 
-    /// The key that signed it: the entry's key.
-    pub fn dk(&self) -> DelegateKey {
-        self.dk
-    }
-
     /// `options[i]` is the choice on proposal `i + 1`.
     pub fn options(&self) -> &[u32] {
         &self.options
-    }
-
-    /// When the device signed it, in unix seconds.
-    pub fn signed_at(&self) -> u64 {
-        self.signed_at
     }
 
     /// The ballot op, rebuilt from the stored signature to the same bytes.
@@ -96,23 +81,6 @@ impl StoredBallot {
             &self.dk_sig,
         )
     }
-}
-
-/// Runs `body` in one transaction, committing only when it succeeds.
-pub(super) fn in_transaction<T>(
-    db: &VotingDb,
-    behavior: TransactionBehavior,
-    context: &str,
-    body: impl FnOnce(&Transaction<'_>) -> Result<T, DelegateModeError>,
-) -> Result<T, DelegateModeError> {
-    let mut conn = db.conn();
-    let tx = conn
-        .transaction_with_behavior(behavior)
-        .map_err(|error| VotingError::from_sqlite(context, &error))?;
-    let value = body(&tx)?;
-    tx.commit()
-        .map_err(|error| VotingError::from_sqlite(context, &error))?;
-    Ok(value)
 }
 
 /// The `proxy_delegate_keys` row of a chain.

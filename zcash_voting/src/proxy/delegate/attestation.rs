@@ -10,9 +10,9 @@ use zcash_vote_delegate::{
     DelegateKey, DelegateRegisterFields, IdentityProvider,
 };
 
-use super::{chain_reads::ProxyVerifierSet, delegate_op::OpAttestation, DelegateChain};
+use super::{chain_reads::ProxyVerifierSet, DelegateChain};
 use crate::{
-    proxy::registry::{encoding, identity_provider},
+    proxy::registry::{base64_array, identity_provider},
     wire::DelegateAttestation,
 };
 
@@ -40,10 +40,7 @@ pub enum AttestationMismatch {
     /// A field does not decode, or is not canonical: the key, the handle,
     /// the proof id or a signature.
     #[error("the attestation's {field} is malformed")]
-    Malformed {
-        /// The field.
-        field: &'static str,
-    },
+    Malformed { field: &'static str },
     /// The attestation is for another key than the one being registered.
     #[error("the attestation is for key {attested}, not {expected}")]
     WrongKey {
@@ -62,10 +59,7 @@ pub enum AttestationMismatch {
     },
     /// Not 1 to [`MAX_ATTESTATIONS`] attestations.
     #[error("a register op carries 1 to {MAX_ATTESTATIONS} attestations, got {count}")]
-    AttestationCount {
-        /// The number of attestations.
-        count: usize,
-    },
+    AttestationCount { count: usize },
     /// A window is empty or longer than [`MAX_ATTESTATION_WINDOW_SECONDS`].
     #[error(
         "verifier {verifier_id}'s window from {not_before} to {expires_at} is not 1 s to 72 h"
@@ -77,34 +71,20 @@ pub enum AttestationMismatch {
     },
     /// An attestation has expired on the device's clock.
     #[error("verifier {verifier_id}'s attestation expired at {expires_at}")]
-    Expired {
-        /// The verifier.
-        verifier_id: u32,
-        expires_at: u64,
-    },
+    Expired { verifier_id: u32, expires_at: u64 },
     /// An attestation starts further ahead of the device's clock than
     /// [`MAX_ATTESTATION_CLOCK_SKEW_SECONDS`].
     #[error("verifier {verifier_id}'s attestation is valid only from {not_before}")]
-    NotYetValid {
-        /// The verifier.
-        verifier_id: u32,
-        not_before: u64,
-    },
+    NotYetValid { verifier_id: u32, not_before: u64 },
     /// The chain's verifier set is empty, so registration is closed (code 59).
     #[error("registration is closed: the chain's verifier set is empty")]
     RegistrationClosed,
     /// An attestation names a verifier outside the chain's set.
     #[error("verifier {verifier_id} is not in the chain's verifier set")]
-    UnknownVerifier {
-        /// The verifier.
-        verifier_id: u32,
-    },
+    UnknownVerifier { verifier_id: u32 },
     /// A signature does not verify over ATTEST under its verifier's key.
     #[error("verifier {verifier_id}'s signature does not verify over ATTEST")]
-    BadSignature {
-        /// The verifier.
-        verifier_id: u32,
-    },
+    BadSignature { verifier_id: u32 },
     /// Fewer distinct verifiers attested than the chain's threshold.
     #[error("{distinct} distinct verifiers attested; the chain needs {threshold}")]
     BelowThreshold {
@@ -131,31 +111,6 @@ pub fn check_attestation(
     expected: &AttestationExpectation<'_>,
     now_seconds: u64,
 ) -> Result<(), AttestationMismatch> {
-    checked_attestations(chain, attestation, dk, expected, now_seconds).map(|_| ())
-}
-
-/// The fields REGISTER and ATTEST bind for `attestation` of `dk`.
-pub(super) fn register_fields<'a>(
-    attestation: &'a DelegateAttestation,
-    dk: &DelegateKey,
-) -> DelegateRegisterFields<'a> {
-    DelegateRegisterFields {
-        dk: dk.to_bytes(),
-        provider: identity_provider(attestation.provider),
-        handle: &attestation.handle,
-        proof_id: &attestation.proof_id,
-    }
-}
-
-/// Runs [`check_attestation`] and returns the attestations as a register op
-/// carries them, in the attester's order.
-pub(super) fn checked_attestations(
-    chain: &DelegateChain,
-    attestation: &DelegateAttestation,
-    dk: &DelegateKey,
-    expected: &AttestationExpectation<'_>,
-    now_seconds: u64,
-) -> Result<Vec<OpAttestation>, AttestationMismatch> {
     let attested_key = DelegateKey::decode(&attestation.key.dk)
         .map_err(|_| AttestationMismatch::Malformed { field: "key.dk" })?;
     if attested_key != *dk || attestation.key.fingerprint != dk.fingerprint().to_string() {
@@ -181,14 +136,28 @@ pub(super) fn checked_attestations(
     if let Some(verifiers) = expected.verifiers {
         check_signatures(chain, &fields, &attestations, verifiers)?;
     }
-    Ok(attestations)
+    Ok(())
 }
 
-/// Decodes the attestations and checks their count and windows.
+/// The fields REGISTER and ATTEST bind for `attestation` of `dk`.
+pub(super) fn register_fields<'a>(
+    attestation: &'a DelegateAttestation,
+    dk: &DelegateKey,
+) -> DelegateRegisterFields<'a> {
+    DelegateRegisterFields {
+        dk: dk.to_bytes(),
+        provider: identity_provider(attestation.provider),
+        handle: &attestation.handle,
+        proof_id: &attestation.proof_id,
+    }
+}
+
+/// Checks the attestations' count and windows, and decodes each one's
+/// verifier, window and signature.
 fn decoded_attestations(
     attestation: &DelegateAttestation,
     now_seconds: u64,
-) -> Result<Vec<OpAttestation>, AttestationMismatch> {
+) -> Result<Vec<(u32, AttestationWindow, [u8; 64])>, AttestationMismatch> {
     let count = attestation.attestations.len();
     if !(1..=MAX_ATTESTATIONS).contains(&count) {
         return Err(AttestationMismatch::AttestationCount { count });
@@ -223,13 +192,9 @@ fn decoded_attestations(
                     not_before: window.not_before,
                 });
             }
-            let sig = encoding::base64_array::<64>(&signature.sig)
+            let sig = base64_array::<64>(&signature.sig)
                 .ok_or(AttestationMismatch::Malformed { field: "sig" })?;
-            Ok(OpAttestation {
-                verifier_id,
-                window,
-                sig,
-            })
+            Ok((verifier_id, window, sig))
         })
         .collect()
 }
@@ -239,23 +204,22 @@ fn decoded_attestations(
 fn check_signatures(
     chain: &DelegateChain,
     fields: &DelegateRegisterFields<'_>,
-    attestations: &[OpAttestation],
+    attestations: &[(u32, AttestationWindow, [u8; 64])],
     verifiers: &ProxyVerifierSet,
 ) -> Result<(), AttestationMismatch> {
     if verifiers.verifiers.is_empty() {
         return Err(AttestationMismatch::RegistrationClosed);
     }
     let mut distinct = BTreeSet::new();
-    for attestation in attestations {
-        let verifier_id = attestation.verifier_id;
+    for &(verifier_id, window, sig) in attestations {
         let verifier = verifiers
             .verifiers
             .iter()
             .find(|verifier| verifier.verifier_id == verifier_id)
             .ok_or(AttestationMismatch::UnknownVerifier { verifier_id })?;
-        let digest = attest_digest(chain.chain_id(), fields, &attestation.window)
+        let digest = attest_digest(chain.chain_id(), fields, &window)
             .expect("a checked chain id and canonical fields always encode");
-        verify_zip215(&verifier.pubkey, &digest, &attestation.sig)
+        verify_zip215(&verifier.pubkey, &digest, &sig)
             .map_err(|_| AttestationMismatch::BadSignature { verifier_id })?;
         distinct.insert((verifier_id, verifier.pubkey));
     }

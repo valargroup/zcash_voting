@@ -13,7 +13,7 @@ use zcash_vote_delegate::{
 
 use super::{delegate_op::bounded_server_text, device_key::delegate_key_info};
 use crate::{
-    proxy::registry::{encoding, provider_view},
+    proxy::registry::{base64_array, provider_view},
     wire::{
         DelegateAttestation, DelegateAttestationSignature, DelegateVerifierError,
         DelegateVerifierRefusal,
@@ -23,29 +23,17 @@ use crate::{
 /// The attest route, under a verifier API base URL.
 pub const VERIFIER_ATTEST_PATH: &str = "/v1/attest";
 
-/// One attest request. The host posts `body` as `application/json` to a
-/// `verifier_api_urls` entry followed by
+/// The JSON body asking the attester to attest `dk` from the marker at
+/// `proof_url`, an X post or GitHub gist link. The host posts it as
+/// `application/json` to a `verifier_api_urls` entry followed by
 /// [`VERIFIER_ATTEST_PATH`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VerifierRequest {
-    /// The JSON body.
-    pub body: Vec<u8>,
-}
-
-/// Asks the attester to attest `dk` from the marker at `proof_url`, an X
-/// post or GitHub gist link.
-pub fn attest_request(
-    provider: IdentityProvider,
-    proof_url: &str,
-    dk: &DelegateKey,
-) -> VerifierRequest {
-    let body = serde_json::to_vec(&ProofRequestJson {
+pub fn attest_request(provider: IdentityProvider, proof_url: &str, dk: &DelegateKey) -> Vec<u8> {
+    serde_json::to_vec(&ProofRequestJson {
         provider: provider.code(),
         proof_url,
         dk: dk.encode(),
     })
-    .expect("a verifier request always serializes");
-    VerifierRequest { body }
+    .expect("a verifier request always serializes")
 }
 
 /// Reads the attester's answer to an attest request for `dk` into the
@@ -78,7 +66,7 @@ pub fn parse_attest_response(
         .attestations
         .into_iter()
         .map(|attestation| {
-            encoding::base64_array::<64>(&attestation.sig).ok_or_else(|| malformed("sig"))?;
+            base64_array::<64>(&attestation.sig).ok_or_else(|| malformed("sig"))?;
             Ok(DelegateAttestationSignature {
                 verifier_id: attestation.verifier_id,
                 not_before: attestation.not_before,

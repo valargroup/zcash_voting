@@ -1,7 +1,6 @@
 //! The delegate's status and round views (plan §4.5 DG-8). Every view is
 //! built from the proven entry, never from the device's records alone.
 
-use rusqlite::TransactionBehavior;
 use zcash_vote_delegate::DelegateStatus;
 
 use super::{
@@ -13,11 +12,11 @@ use super::{
     ProvenDelegateEntry,
 };
 use crate::{
-    proxy::registry::provider_view,
+    proxy::{delegator::ballot_view, registry::provider_view, ProxyRoundPhase},
     storage::VotingDb,
     wire::{
-        DelegateBallotBlock, DelegateBallotView, DelegateEntryStatus, DelegateEntryView,
-        DelegateModeStatus, DelegateRound,
+        DelegateBallotBlock, DelegateEntryStatus, DelegateEntryView, DelegateModeStatus,
+        DelegateRound,
     },
 };
 
@@ -35,12 +34,7 @@ pub fn delegate_mode_status(
     entry: Option<&ProvenDelegateEntry>,
 ) -> Result<Option<DelegateModeStatus>, DelegateModeError> {
     let wallet_id = db.wallet_id();
-    let held = delegate_store::in_transaction(
-        db,
-        TransactionBehavior::Deferred,
-        "load delegate key",
-        |tx| delegate_store::load_key(tx, &wallet_id, chain),
-    )?;
+    let held = delegate_store::load_key(&db.conn(), &wallet_id, chain)?;
     let Some(KeyRow {
         key,
         pending_register_op,
@@ -104,27 +98,20 @@ pub fn delegate_round(
         }
     }
     let revealed_shares = parse_pool_share_count(pool_share_count)?;
-    let round_id = round.round_id;
     let local_ballot = match entry {
-        Some(entry) => super::stored_ballot(db, chain, &round_id, entry.index)?,
+        Some(entry) => super::stored_ballot(db, chain, &round.round_id, entry.index)?,
         None => None,
     };
-    let closed = !round.is_running_at(now_seconds);
-    let ballot = match (chain_ballot, closed) {
-        (Some(ballot), false) => DelegateBallotView::Submitted {
-            options: ballot.options.clone(),
-        },
-        (Some(ballot), true) => DelegateBallotView::Counted {
-            options: ballot.options.clone(),
-        },
-        (None, false) => DelegateBallotView::NoBallotYet,
-        (None, true) => DelegateBallotView::NotCounted,
+    let phase = if round.is_running_at(now_seconds) {
+        ProxyRoundPhase::Active
+    } else {
+        ProxyRoundPhase::Closed
     };
     Ok(DelegateRound {
-        round_id: hex::encode(round_id),
+        round_id: hex::encode(round.round_id),
         vote_end_time: round.vote_end_time,
         revealed_shares,
-        ballot,
+        ballot: ballot_view(chain_ballot.map(|ballot| ballot.options.as_slice()), phase),
         stored_ballot: local_ballot
             .filter(|_| chain_ballot.is_none())
             .map(|stored| stored.options().to_vec()),

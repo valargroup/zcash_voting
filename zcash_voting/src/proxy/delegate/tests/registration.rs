@@ -8,19 +8,18 @@ use zcash_vote_delegate::{verify_zip215, DelegateStatus, IdentityProvider};
 
 use super::fixtures::{
     alice_attestation, alice_entry, alice_key, attestation, bob_key, broadcast_result, chain, db,
-    entry, proven, proven_entry, signing_key, vector_bytes, vector_case, vector_window, verifiers,
+    entry, proven, signing_key, vector_bytes, vector_case, vector_window, verifiers,
     ALICE_PROOF_ID, ALICE_SECRET, ATTEST_NOW, BOB_SECRET, DELEGATE_INDEX, VERIFIER_SECRET,
 };
 use crate::{
     proxy::delegate::{
         build_retire_op, classify_register_answer, classify_retire_answer, device_delegate_key,
         forget_delegate_key, parse_delegate_op_answer, pending_register_op, prepare_register_op,
-        registration_result, retire_result, AttestationExpectation, DelegateChain,
-        DelegateModeError, DelegateOpKind, ProxyVerifierSet, RegisterAnswer, RetireAnswer,
-        SignedDelegateOp,
+        record_proven_entry, AttestationExpectation, DelegateChain, DelegateModeError,
+        DelegateOpKind, ProxyVerifierSet, RegisterAnswer, RetireAnswer, SignedDelegateOp,
     },
     storage::VotingDb,
-    wire::{DelegateRegisterResult, DelegateRetireResult},
+    wire::DelegateRetireResult,
 };
 
 /// What alice expects of her X registration, checked against the chain's
@@ -133,10 +132,10 @@ fn a_prepared_register_op_is_resent_unchanged_until_the_entry_settles_it() {
     assert_eq!(pending_register_op(&db, &chain).unwrap(), Some(fresh));
 
     assert_eq!(
-        registration_result(&db, &chain, &alice_entry()).unwrap(),
-        DelegateRegisterResult::Registered {
-            delegate_index: DELEGATE_INDEX
-        }
+        record_proven_entry(&db, &chain, &alice_entry())
+            .unwrap()
+            .delegate_index,
+        Some(DELEGATE_INDEX)
     );
     assert_eq!(pending_register_op(&db, &chain).unwrap(), None);
     assert!(matches!(
@@ -194,9 +193,8 @@ fn the_retire_op_signs_the_vector_digest_with_the_entry_s_key() {
     ));
 }
 
-/// Code 55, already retired, is a success. An accepted op settles once the
-/// proven entry shows it retired. Every other code's classification is in
-/// `chain_codes.rs`.
+/// Code 55, already retired, is a success. Every other code's
+/// classification is in `chain_codes.rs`.
 #[test]
 fn retire_answers_settle_retire() {
     let retire_answer = |code: u32| {
@@ -210,16 +208,6 @@ fn retire_answers_settle_retire() {
         retire_answer(55),
         RetireAnswer::Settled(DelegateRetireResult::Retired)
     );
-
-    assert_eq!(retire_result(&alice_entry()), None);
-    assert_eq!(
-        retire_result(&proven_entry(alice_key(), DelegateStatus::Suspended)),
-        None
-    );
-    assert_eq!(
-        retire_result(&proven_entry(alice_key(), DelegateStatus::Retired)),
-        Some(DelegateRetireResult::Retired)
-    );
 }
 
 /// To change its key a delegate retires, forgets the key and registers a
@@ -229,7 +217,7 @@ fn a_key_changes_by_retiring_and_registering_again() {
     let db = db();
     let chain = chain();
     prepare(&db, &chain).unwrap();
-    registration_result(&db, &chain, &alice_entry()).unwrap();
+    record_proven_entry(&db, &chain, &alice_entry()).unwrap();
     build_retire_op(&chain, &alice_entry(), &signing_key(ALICE_SECRET)).unwrap();
 
     forget_delegate_key(&db, &chain).unwrap();
@@ -250,9 +238,9 @@ fn a_key_changes_by_retiring_and_registering_again() {
         DelegateStatus::Active,
     ));
     assert_eq!(
-        registration_result(&db, &chain, &new_entry).unwrap(),
-        DelegateRegisterResult::Registered {
-            delegate_index: DELEGATE_INDEX + 1
-        }
+        record_proven_entry(&db, &chain, &new_entry)
+            .unwrap()
+            .delegate_index,
+        Some(DELEGATE_INDEX + 1)
     );
 }

@@ -8,22 +8,19 @@
 //! network and `chain_id`. A device holds one delegate key and one entry per
 //! chain. No secret is stored. The host keeps the key's `zvdsk1…` export in
 //! secure storage and passes its [`DelegateSigningKey`] to each call that
-//! signs. Every op is deterministic, and register and ballot ops are stored
-//! before their first post, so a retry resends the same bytes.
+//! signs.
 //!
 //! 1. **Key.** [`create_delegate_key`] or [`DelegateSigningKey::import`],
 //!    then [`record_delegate_key`].
 //! 2. **Attest.** [`delegate_marker_text`], [`attest_request`],
 //!    [`parse_attest_response`], then [`check_attestation`] before signing.
-//! 3. **Register.** [`prepare_register_op`], [`classify_register_answer`],
-//!    [`registration_result`].
+//! 3. **Register.** [`prepare_register_op`], [`classify_register_answer`].
 //! 4. **Ballot.** [`ballot_preflight`], [`sign_ballot`],
 //!    [`classify_ballot_answer`]; a retry posts [`stored_ballot`]'s op.
-//! 5. **Status.** [`record_proven_entry`], [`delegate_mode_status`],
-//!    [`delegate_round`].
-//! 6. **Retire.** [`build_retire_op`], [`classify_retire_answer`],
-//!    [`retire_result`]. To change a key, retire, [`forget_delegate_key`]
-//!    and register again.
+//! 5. **Status.** [`record_proven_entry`] settles a registration, then
+//!    [`delegate_mode_status`], [`delegate_round`].
+//! 6. **Retire.** [`build_retire_op`], [`classify_retire_answer`]. To change
+//!    a key, retire, [`forget_delegate_key`] and register again.
 //!
 //! [`VotingDb`]: crate::storage::VotingDb
 
@@ -69,10 +66,10 @@ pub use device_key::{
 };
 pub use registration::{
     build_retire_op, classify_register_answer, classify_retire_answer, pending_register_op,
-    prepare_register_op, registration_result, retire_result, RegisterAnswer, RetireAnswer,
+    prepare_register_op, RegisterAnswer, RetireAnswer,
 };
 pub use status::{delegate_mode_status, delegate_round};
-pub use verifier::{attest_request, parse_attest_response, VerifierRequest, VERIFIER_ATTEST_PATH};
+pub use verifier::{attest_request, parse_attest_response, VERIFIER_ATTEST_PATH};
 pub use zcash_vote_delegate::{
     pool_share_count_store_key, DelegateKeyDecodeError, DelegateSigningKey,
 };
@@ -132,10 +129,7 @@ impl DelegateRoundTiming {
 pub enum DelegateModeError {
     /// The host passed a malformed or inconsistent value.
     #[error("invalid input: {message}")]
-    InvalidInput {
-        /// What is wrong.
-        message: String,
-    },
+    InvalidInput { message: String },
     /// The device already holds another delegate key on the chain.
     #[error("the device already holds delegate key {held}")]
     AnotherKeyHeld {
@@ -144,23 +138,14 @@ pub enum DelegateModeError {
     },
     /// The device's key already has its entry, so it needs no register op.
     #[error("the device's delegate key is registered in entry {delegate_index}")]
-    KeyRegistered {
-        /// The key's entry.
-        delegate_index: u32,
-    },
+    KeyRegistered { delegate_index: u32 },
     /// A proven entry is not the device's: its key is not the device's key,
     /// or the device recorded its key in another entry.
     #[error("entry {delegate_index} is not the device's delegate entry")]
-    NotDeviceEntry {
-        /// The proven entry's index.
-        delegate_index: u32,
-    },
+    NotDeviceEntry { delegate_index: u32 },
     /// A stored delegate-mode row cannot be read back as written.
     #[error("stored delegate-mode record is unreadable: {message}")]
-    CorruptRecord {
-        /// What is wrong with the row.
-        message: String,
-    },
+    CorruptRecord { message: String },
     /// A chain answer the host fetched is malformed.
     #[error(transparent)]
     ChainRead(#[from] ChainReadError),

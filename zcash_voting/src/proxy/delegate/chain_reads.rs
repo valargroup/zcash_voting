@@ -9,9 +9,10 @@ use serde::Deserialize;
 use thiserror::Error;
 use zcash_vote_delegate::{validate_ed25519_key, DelegateKey};
 
+use super::delegate_op::ErrorJson;
 use crate::proxy::{
     ballot_pages::{parse_ballot_page, DelegateBallotPage, DELEGATE_BALLOTS_PAGE_LIMIT},
-    registry::encoding,
+    registry::base64_array,
 };
 
 /// The vote chain's REST prefix.
@@ -87,8 +88,7 @@ fn names_unregistered_key(dk: &DelegateKey, body: &[u8]) -> bool {
         "delegate key {} was never registered",
         hex::encode(dk.to_bytes())
     );
-    serde_json::from_slice::<ErrorAnswer>(body)
-        .is_ok_and(|answer| answer.error.contains(&not_found))
+    serde_json::from_slice::<ErrorJson>(body).is_ok_and(|answer| answer.error.contains(&not_found))
 }
 
 /// One page of the whole-round ballot list,
@@ -162,7 +162,7 @@ pub fn parse_proxy_params_response(
     let mut ids = BTreeSet::new();
     let mut verifiers = Vec::with_capacity(answer.params.verifiers.len());
     for verifier in answer.params.verifiers {
-        let pubkey = encoding::base64_array::<32>(&verifier.pubkey)
+        let pubkey = base64_array::<32>(&verifier.pubkey)
             .filter(|pubkey| validate_ed25519_key(pubkey).is_ok())
             .ok_or_else(|| {
                 malformed(format!(
@@ -228,12 +228,6 @@ fn malformed(message: String) -> ChainReadError {
 #[derive(Deserialize)]
 struct ByKeyAnswer {
     delegate: ByKeyEntry,
-}
-
-/// A REST error body, `{"error": "..."}`.
-#[derive(Deserialize)]
-struct ErrorAnswer {
-    error: String,
 }
 
 /// The listed entry. Only its index is read, since the host proves the rest.

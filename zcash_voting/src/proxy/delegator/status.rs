@@ -281,7 +281,10 @@ pub(crate) fn delegation_stage(
 }
 
 /// A delegate's ballot view from its options in the round's list.
-fn ballot_view(options: Option<&[u32]>, phase: ProxyRoundPhase) -> DelegateBallotView {
+pub(in crate::proxy) fn ballot_view(
+    options: Option<&[u32]>,
+    phase: ProxyRoundPhase,
+) -> DelegateBallotView {
     match (phase, options) {
         (ProxyRoundPhase::Active, Some(options)) => DelegateBallotView::Submitted {
             options: options.to_vec(),
