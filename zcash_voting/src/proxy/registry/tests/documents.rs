@@ -9,8 +9,7 @@ use super::fixtures::{
     entry, list_document, list_signer, pin, row, verified, wallet_list, PINNED_KEY_ID,
 };
 use crate::proxy::registry::{
-    proxy_service_urls, resolve_wallet_list, ProxyServiceUrls, RegistryError, WalletListPin,
-    WalletListUpdate,
+    proxy_service_urls, resolve_wallet_list, ProxyServiceUrls, RegistryError, WalletListUpdate,
 };
 
 /// The URL lists are read as published; an unknown member is ignored, and an
@@ -74,69 +73,22 @@ fn the_newest_verified_wallet_list_is_kept() {
     assert_eq!(conflicting.newest.as_ref(), Some(&second_stored));
 }
 
-/// Only a key the build pins counts, a list for another wallet or chain is
-/// refused, and a stored list must be the pin's.
+/// Only a key the build pins counts, and a rejected document keeps the
+/// stored list. The vectors pin every other verification failure.
 #[test]
 fn a_wallet_list_verifies_only_under_the_pinned_key() {
-    let pin = pin();
     let list = wallet_list(3, vec![row(&entry(17, "alice"))], &[]);
     let stored = verified(&wallet_list(1, Vec::new(), &[]));
     let other_key = SigningKey::from_bytes(&[10; 32]);
-    for (case, document, error) in [
-        (
-            "another key under the pinned key id",
-            list_document(&list, &other_key, PINNED_KEY_ID),
-            WalletListError::NoPinnedSignature,
-        ),
-        (
-            "the pinned key under another key id",
-            list_document(&list, &list_signer(), "tachyon"),
-            WalletListError::NoPinnedSignature,
-        ),
-        (
-            "another wallet's list",
-            list_document(
-                &zcash_vote_delegate::WalletList {
-                    wallet_id: "zodl".to_owned(),
-                    ..list.clone()
-                },
-                &list_signer(),
-                PINNED_KEY_ID,
-            ),
-            WalletListError::WrongWallet,
-        ),
-        (
-            "another chain's list",
-            list_document(
-                &zcash_vote_delegate::WalletList {
-                    chain_id: "svote-1".to_owned(),
-                    ..list.clone()
-                },
-                &list_signer(),
-                PINNED_KEY_ID,
-            ),
-            WalletListError::WrongChain,
-        ),
-    ] {
-        let resolution = resolve_wallet_list(&pin, &document, Some(&stored)).unwrap();
-        assert_eq!(
-            resolution.update,
-            WalletListUpdate::Rejected(error),
-            "{case}"
-        );
-        assert_eq!(resolution.newest.as_ref(), Some(&stored), "{case}");
-    }
-
-    let stage_pin = WalletListPin {
-        chain_id: "svote-1".to_owned(),
-        ..pin
-    };
-    assert!(matches!(
-        resolve_wallet_list(
-            &stage_pin,
-            &list_document(&list, &list_signer(), PINNED_KEY_ID),
-            Some(&stored)
-        ),
-        Err(RegistryError::InvalidInput { .. })
-    ));
+    let resolution = resolve_wallet_list(
+        &pin(),
+        &list_document(&list, &other_key, PINNED_KEY_ID),
+        Some(&stored),
+    )
+    .unwrap();
+    assert_eq!(
+        resolution.update,
+        WalletListUpdate::Rejected(WalletListError::NoPinnedSignature)
+    );
+    assert_eq!(resolution.newest.as_ref(), Some(&stored));
 }

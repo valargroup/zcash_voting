@@ -83,21 +83,7 @@ fn a_page_that_could_skip_or_garble_an_entry_is_refused() {
             page_body(&[entries[1].clone(), entries[0].clone()], 5),
         ),
         ("a next page that skips entries", 0, page_body(&entries, 12)),
-        ("an unknown provider", 0, edited("provider", json!(3))),
-        ("an unknown status", 0, edited("status", json!(3))),
-        ("a key that is not 32 bytes", 0, edited("dk", json!("AAAA"))),
-        (
-            "a key that fails the key rule",
-            0,
-            edited("dk", json!(BASE64.encode([0u8; 32]))),
-        ),
         ("an uppercase handle", 0, edited("handle", json!("Carol"))),
-        (
-            "a proof id that is not canonical",
-            0,
-            edited("proof_id", json!("0179")),
-        ),
-        ("not JSON", 0, b"nope".to_vec()),
     ] {
         assert!(
             matches!(

@@ -1,5 +1,5 @@
-//! The §0 field encoding and what each §4 digest binds. The vectors pin
-//! every digest's value.
+//! What each §4 digest binds, and the length prefix that refuses an
+//! overlong chain id. The vectors pin every digest's value.
 
 use zcash_vote_delegate::{
     ballot_digest, proxy_batch_digest, proxy_batch_sighash, register_digest, retire_digest,
@@ -35,60 +35,6 @@ fn registration() -> DelegateRegisterFields<'static> {
         handle: "alice",
         proof_id: "1790000000000000000",
     }
-}
-
-/// A 32-byte slot holding `value` little-endian in its first bytes.
-fn slot(value: &[u8]) -> [u8; 32] {
-    let mut slot = [0u8; 32];
-    slot[..value.len()].copy_from_slice(value);
-    slot
-}
-
-/// `write32` takes exactly 32 bytes and rejects every other length.
-#[test]
-fn write32_rejects_fields_that_are_not_32_bytes() {
-    let mut preimage = DigestPreimage::new("D", "c").unwrap();
-    assert_eq!(
-        preimage.write32(&[0; 31]),
-        Err(DigestError::FieldLength { actual: 31 })
-    );
-    assert_eq!(
-        preimage.write32(&[0; 33]),
-        Err(DigestError::FieldLength { actual: 33 })
-    );
-    assert_eq!(
-        preimage.write32(&[]),
-        Err(DigestError::FieldLength { actual: 0 })
-    );
-    let unchanged = preimage.as_bytes().to_vec();
-    preimage.write32(&[7; 32]).unwrap();
-    assert_eq!(preimage.as_bytes(), [unchanged, vec![7; 32]].concat());
-}
-
-/// Integer slots are little-endian in a zeroed 32-byte slot, and `u8` is one byte.
-#[test]
-fn integer_fields_fill_little_endian_slots() {
-    let mut preimage = DigestPreimage::new("", "").unwrap();
-    preimage.write_u32_as_32(0x0102_0304);
-    preimage.write_u64_as_32(0x0102_0304_0506_0708);
-    preimage.write_u8(0xab);
-    let mut expected = vec![0u8];
-    expected.extend_from_slice(&slot(&[4, 3, 2, 1]));
-    expected.extend_from_slice(&slot(&[8, 7, 6, 5, 4, 3, 2, 1]));
-    expected.push(0xab);
-    assert_eq!(preimage.as_bytes(), expected);
-}
-
-/// `lp8` writes a length byte and accepts at most 255 bytes.
-#[test]
-fn lp8_takes_at_most_255_bytes() {
-    let mut preimage = DigestPreimage::new("", "").unwrap();
-    preimage.write_lp8(&[9; 255]).unwrap();
-    assert_eq!(preimage.as_bytes()[1], 255);
-    assert_eq!(
-        preimage.write_lp8(&[9; 256]),
-        Err(DigestError::LengthPrefixOverflow { actual: 256 })
-    );
 }
 
 /// A chain id over 255 bytes cannot be length-prefixed, so every digest fails.

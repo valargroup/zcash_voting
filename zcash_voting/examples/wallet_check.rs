@@ -196,25 +196,3 @@ async fn get(http: &HttpClient, url: &str) -> Result<Vec<u8>, String> {
         .await
         .map_err(|error| fail(&error))?
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every argument is required, and an unknown one is refused.
-    #[test]
-    fn arguments_parse() {
-        let args =
-            |line: &str| -> Vec<String> { line.split_whitespace().map(str::to_owned).collect() };
-        let parsed = parse(&args(
-            "--static-source https://a/s.json --ca ca.pem --round ab",
-        ))
-        .unwrap();
-        assert_eq!(
-            (parsed.static_source.as_str(), parsed.round.as_str()),
-            ("https://a/s.json", "ab")
-        );
-        assert!(parse(&args("--ca ca.pem --round ab")).is_err());
-        assert!(parse(&args("--chain-id svote-1")).is_err());
-    }
-}

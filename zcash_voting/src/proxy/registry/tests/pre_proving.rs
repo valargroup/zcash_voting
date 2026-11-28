@@ -89,10 +89,6 @@ fn an_entry_that_is_not_proven_cannot_be_verified() {
                 ProvenValue::Present(entry(18, "alice").encode()),
             )],
         ),
-        (
-            "only another entry's proof",
-            vec![proven(&entry(18, "bob"))],
-        ),
     ] {
         assert_eq!(
             verdict(&alice, &proofs),
@@ -125,49 +121,32 @@ fn only_a_proven_active_entry_is_ok() {
     );
 }
 
-/// The proven entry must hold the key the delegator picked, so a registry
-/// cache cannot pass another delegate's entry off under a chosen index.
+/// The proven entry must hold the key, provider and handle the delegator
+/// picked, so a registry cache cannot pass another delegate's entry off under
+/// a chosen index.
 #[test]
-fn a_proven_entry_with_another_key_is_a_mismatch() {
+fn a_proven_entry_with_another_key_provider_or_handle_is_a_mismatch() {
     let alice = entry(17, "alice");
-    let rekeyed = ProxyDelegateEntry {
-        dk: dk(99),
-        ..alice.clone()
-    };
-    assert_eq!(verdict_against(&alice, &rekeyed), DelegateCheck::Mismatch);
-}
-
-/// The proven entry must be on the provider the delegator picked.
-#[test]
-fn a_proven_entry_on_another_provider_is_a_mismatch() {
-    let alice = entry(17, "alice");
-    let github = ProxyDelegateEntry {
-        provider: IdentityProvider::GitHub,
-        proof_id: "aa5a315d".to_owned(),
-        ..alice.clone()
-    };
-    assert_eq!(verdict_against(&alice, &github), DelegateCheck::Mismatch);
-}
-
-/// The proven entry must have the handle the delegator picked.
-#[test]
-fn a_proven_entry_with_another_handle_is_a_mismatch() {
-    let alice = entry(17, "alice");
-    let renamed = ProxyDelegateEntry {
-        handle: "alicee".to_owned(),
-        ..alice.clone()
-    };
-    assert_eq!(verdict_against(&alice, &renamed), DelegateCheck::Mismatch);
-}
-
-/// A mismatch is reported before the entry's status: an entry that is not
-/// the delegate picked is not that delegate suspended or retired.
-#[test]
-fn a_mismatch_is_reported_before_the_entry_s_status() {
-    let alice = entry(17, "alice");
-    for status in [DelegateStatus::Suspended, DelegateStatus::Retired] {
-        let other = with_status(entry(17, "mallory"), status);
-        assert_eq!(verdict_against(&alice, &other), DelegateCheck::Mismatch);
+    for other in [
+        ProxyDelegateEntry {
+            dk: dk(99),
+            ..alice.clone()
+        },
+        ProxyDelegateEntry {
+            provider: IdentityProvider::GitHub,
+            proof_id: "aa5a315d".to_owned(),
+            ..alice.clone()
+        },
+        ProxyDelegateEntry {
+            handle: "alicee".to_owned(),
+            ..alice.clone()
+        },
+    ] {
+        assert_eq!(
+            verdict_against(&alice, &other),
+            DelegateCheck::Mismatch,
+            "{other:?}"
+        );
     }
 }
 

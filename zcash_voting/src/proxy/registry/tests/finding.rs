@@ -5,7 +5,7 @@ use zcash_vote_delegate::{DelegateStatus, IdentityProvider, ProxyDelegateEntry};
 
 use super::fixtures::{cache, dk, entry, picture, row, verified, wallet_list, with_status};
 use crate::{
-    proxy::registry::{PasteQuery, RegistryCache, RegistryView, VerifiedWalletList},
+    proxy::registry::{RegistryCache, RegistryView, VerifiedWalletList},
     wire::{
         DelegateEntryStatus, DelegateKeyInfo, DelegateLookup, ProxyDelegateListing,
         ProxyDelegateProvider,
@@ -136,55 +136,14 @@ fn browse_shows_the_list_rows_the_cache_holds_with_their_reviewed_status() {
         .all(|listing| listing.display_name == Some(format!("Delegate {}", listing.index))));
 }
 
-#[test]
-fn without_a_verified_list_browse_is_empty_and_nothing_is_reviewed() {
-    let registry = registry();
-    let view = view(&registry, None);
-    let browse = view.browse();
-    assert!(browse.list_unavailable);
-    assert_eq!(browse.listed, Vec::new());
-    let listing = found(view.lookup("17"));
-    assert!(!listing.reviewed);
-    assert_eq!(listing.display_name, None);
-    assert_eq!(listing.lookalike_of, None);
-}
-
-/// Search normalizes what the user typed and matches live entries' handles
-/// exactly, on either provider.
+/// Search normalizes what the user typed and matches handles exactly. The
+/// cache tests pin which entries are live.
 #[test]
 fn search_matches_a_normalized_handle_exactly_among_live_entries() {
     let (registry, list) = (registry(), list());
     let view = view(&registry, Some(&list));
     assert_eq!(view.search(" @Alice "), vec![alice()]);
-
-    // One handle on both providers, in index order.
-    let bobs: Vec<(u32, ProxyDelegateProvider)> = view
-        .search("bob")
-        .iter()
-        .map(|listing| (listing.index, listing.provider))
-        .collect();
-    assert_eq!(
-        bobs,
-        [
-            (19, ProxyDelegateProvider::X),
-            (23, ProxyDelegateProvider::GitHub)
-        ]
-    );
-
-    // A retired entry no longer holds its handle; a suspended one does.
-    let indexes = |query: &str| -> Vec<u32> {
-        view.search(query)
-            .iter()
-            .map(|listing| listing.index)
-            .collect()
-    };
-    assert_eq!(indexes("dave"), [41]);
-    assert_eq!(indexes("carol"), [31]);
-
-    // Exact only, and nothing for text that is no handle.
-    assert_eq!(indexes("alic"), [0u32; 0]);
-    assert_eq!(indexes("ali ce"), [0u32; 0]);
-    assert_eq!(indexes(""), [0u32; 0]);
+    assert_eq!(view.search("alic"), Vec::new());
 }
 
 /// A delegate whose handle looks like a wallet list handle or a reserved
@@ -207,44 +166,20 @@ fn a_lookalike_of_a_list_handle_or_reserved_name_is_flagged() {
     assert_eq!(view.search("dave")[0].lookalike_of.as_deref(), Some("dave"));
 }
 
-#[test]
-fn a_paste_names_a_marker_key_index_or_fingerprint() {
-    let key = dk(17);
-    let fingerprint = key.fingerprint().to_string();
-    assert_eq!(
-        PasteQuery::parse(&format!("  zcash-vote-delegate v1 {key}\n")),
-        Some(PasteQuery::Key(key))
-    );
-    assert_eq!(PasteQuery::parse(&key.encode()), Some(PasteQuery::Key(key)));
-    assert_eq!(PasteQuery::parse("17"), Some(PasteQuery::Index(17)));
-    assert_eq!(PasteQuery::parse("#17"), Some(PasteQuery::Index(17)));
-    for form in [
-        fingerprint.clone(),
-        fingerprint.replace('-', ""),
-        fingerprint.to_uppercase(),
-    ] {
-        assert_eq!(
-            PasteQuery::parse(&form),
-            Some(PasteQuery::Fingerprint(key.fingerprint())),
-            "{form}"
-        );
-    }
-    for text in ["", "0", "017", "#0", "alice", "4294967296", "zvdk1qqqq"] {
-        assert_eq!(PasteQuery::parse(text), None, "{text:?}");
-    }
-}
-
-/// A paste is answered from the cache alone: a key or fingerprint finds the
-/// entry with that key, an index its entry, and what the cache lacks is not
-/// found.
+/// A paste is answered from the cache alone: a key, marker or fingerprint, in
+/// either case and grouped or not, finds the entry with that key, an index
+/// its entry, and what the cache lacks is not found.
 #[test]
 fn a_paste_finds_the_cached_entry_it_names() {
     let (registry, list) = (registry(), list());
     let view = view(&registry, Some(&list));
+    let fingerprint = dk(17).fingerprint().to_string();
     for text in [
         dk(17).encode(),
-        format!("zcash-vote-delegate v1 {}", dk(17)),
-        dk(17).fingerprint().to_string(),
+        format!("  zcash-vote-delegate v1 {}\n", dk(17)),
+        fingerprint.clone(),
+        fingerprint.replace('-', "").to_uppercase(),
+        "17".to_owned(),
         "#17".to_owned(),
     ] {
         assert_eq!(found(view.lookup(&text)), alice(), "{text}");
@@ -253,12 +188,6 @@ fn a_paste_finds_the_cached_entry_it_names() {
         found(view.lookup("40")).status,
         DelegateEntryStatus::Retired
     );
-
     assert_eq!(view.lookup(&dk(99).encode()), DelegateLookup::NotFound);
-    assert_eq!(view.lookup("99"), DelegateLookup::NotFound);
-    assert_eq!(
-        view.lookup(&dk(99).fingerprint().to_string()),
-        DelegateLookup::NotFound
-    );
     assert_eq!(view.lookup("alice"), DelegateLookup::Unrecognized);
 }

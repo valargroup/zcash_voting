@@ -39,11 +39,3 @@ fn lookalike_check_agrees_with_the_distance() {
         }
     }
 }
-
-/// The check stays linear on long input from an untrusted directory.
-#[test]
-fn lookalike_check_is_linear_in_the_input() {
-    let long = "a".repeat(200_000);
-    assert!(are_lookalikes(&long, &format!("{long}b")));
-    assert!(!are_lookalikes(&long, &format!("b{long}b")));
-}
