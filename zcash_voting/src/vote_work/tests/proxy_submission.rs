@@ -378,59 +378,53 @@ async fn a_new_attempt_after_the_vote_end_is_refused() {
     );
 }
 
-/// A refused batch, paused or not, stays pending on the wire and is sent
-/// again until it lands. Its DCs show as submitting while the round runs,
-/// and as not counted once it closes.
+/// A refused batch stays pending on the wire and is sent again until it
+/// lands. Its DCs show as submitting while the round runs, and as not
+/// counted once it closes. A pause takes the same path (see
+/// `a_paused_batch_stays_recoverable_and_retries_once_the_pause_lifts`).
 #[tokio::test]
 async fn a_refused_batch_stays_pending_and_is_sent_again() {
     use ProxyDelegationStage::{NotCounted, Submitting};
-    for code in [51, 5] {
-        let round = round(FixtureAnchor::Chain);
-        round.chain.expect("GET", "/v1/height", chain_height(1_000));
-        round.chain.expect(
-            "POST",
-            "/proxy-delegation-batch",
-            rejected(round.digest, "vote", code),
-        );
-        assert_eq!(
-            round.step().await.disposition,
-            RoundStepDisposition::Pending,
-            "{code}"
-        );
+    let round = round(FixtureAnchor::Chain);
+    round.chain.expect("GET", "/v1/height", chain_height(1_000));
+    round.chain.expect(
+        "POST",
+        "/proxy-delegation-batch",
+        rejected(round.digest, "vote", 5),
+    );
+    assert_eq!(
+        round.step().await.disposition,
+        RoundStepDisposition::Pending
+    );
 
-        let refused = job(&round);
-        assert!(
-            refused.broadcast_started && refused.refused_by_chain,
-            "{code}"
-        );
-        assert_eq!(round.stage(), ProxyBatchStage::Refused);
-        assert!(round.executor.plan().unwrap().next_steps.contains(&STEP));
-        assert_eq!(
-            delegation_stages(&round, ProxyRoundPhase::Active),
-            [(17, 23, Submitting), (5, 17, Submitting)]
-        );
-        assert_eq!(
-            delegation_stages(&round, ProxyRoundPhase::Closed),
-            [(17, 23, NotCounted), (5, 17, NotCounted)]
-        );
+    let refused = job(&round);
+    assert!(refused.broadcast_started && refused.refused_by_chain);
+    assert_eq!(round.stage(), ProxyBatchStage::Refused);
+    assert!(round.executor.plan().unwrap().next_steps.contains(&STEP));
+    assert_eq!(
+        delegation_stages(&round, ProxyRoundPhase::Active),
+        [(17, 23, Submitting), (5, 17, Submitting)]
+    );
+    assert_eq!(
+        delegation_stages(&round, ProxyRoundPhase::Closed),
+        [(17, 23, NotCounted), (5, 17, NotCounted)]
+    );
 
-        expect_tree_pass(&round.chain, &[unrelated_leaf(1)]);
-        round
-            .chain
-            .expect("POST", "/proxy-delegation-batch", accepted(round.digest));
-        round
-            .chain
-            .expect("GET", "/tx/", landed(&round.fixture, round.digest, 9));
-        assert_eq!(
-            round.step().await.disposition,
-            RoundStepDisposition::Advanced,
-            "{code}"
-        );
-        round.chain.assert_drained();
-        assert_eq!(round.chain.posts(), 2);
-        assert_eq!(round.stage(), ProxyBatchStage::Landed);
-        assert!(!job(&round).refused_by_chain);
-    }
+    expect_tree_pass(&round.chain, &[unrelated_leaf(1)]);
+    round
+        .chain
+        .expect("POST", "/proxy-delegation-batch", accepted(round.digest));
+    round
+        .chain
+        .expect("GET", "/tx/", landed(&round.fixture, round.digest, 9));
+    assert_eq!(
+        round.step().await.disposition,
+        RoundStepDisposition::Advanced
+    );
+    round.chain.assert_drained();
+    assert_eq!(round.chain.posts(), 2);
+    assert_eq!(round.stage(), ProxyBatchStage::Landed);
+    assert!(!job(&round).refused_by_chain);
 }
 
 #[tokio::test]

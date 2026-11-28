@@ -537,8 +537,7 @@ exactly as before
   `a_dispatched_vote_is_reconciled_before_its_ballot_is_terminal`).
 - **DC shares.** Only a `Landed` batch's DCs owe shares, whatever the ballot
   says; a DC of a batch that is planned, proved or on the wire owes none
-  (`dc_shares_are_owed_only_once_their_batch_landed`,
-  `shares_are_owed_only_once_the_batch_lands`). A landed DC owes `Deliver`,
+  (`dc_shares_are_owed_only_once_their_batch_landed`). A landed DC owes `Deliver`,
   with `CommitmentRef::Proxy { dc_slot }` and its own tree position, for every
   share its layout delivers until it is planned, and then for every planned
   share not yet handed off (`a_landed_dc_owes_every_share_its_layout_delivers`,
@@ -549,7 +548,6 @@ exactly as before
   sampled for a dispatch, so a step sampled at the vote end ends `NoWork` and
   the run stops. `resume_plan` has no clock and still lists the step
   (`no_dc_owes_delivery_once_the_vote_ended`,
-  `a_dc_every_helper_refuses_is_not_counted_after_close`,
   `a_run_at_the_vote_end_stops_delivering_a_short_dc`). Every handed-off,
   unconfirmed share owes `Confirm` with an acceptance, as an accepted vote
   share does, so background tracking owns it

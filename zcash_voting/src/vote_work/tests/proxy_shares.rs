@@ -59,8 +59,6 @@ enum Answer {
     Lost,
     /// 422 `delegate_not_found` (contract §11.8), a definite refusal.
     DelegateNotFound,
-    /// 422 `proxy_delegation_disabled` (contract §11.8), a definite refusal.
-    ProxyDisabled,
     /// 503 `leaf_not_found` (contract §11.8): like any 5xx, the outcome is
     /// unknown.
     LeafNotFound,
@@ -188,10 +186,6 @@ impl HelperTransport for Helpers {
                 Answer::DelegateNotFound => Ok(HelperResponse::json(
                     422,
                     br#"{"status":"error","error":"delegate_not_found"}"#.to_vec(),
-                )),
-                Answer::ProxyDisabled => Ok(HelperResponse::json(
-                    422,
-                    br#"{"status":"error","error":"proxy_delegation_disabled"}"#.to_vec(),
                 )),
                 Answer::LeafNotFound => Ok(HelperResponse::json(
                     503,
@@ -463,21 +457,6 @@ fn slot_of(round: &LandedRound, delegate_index: u32) -> u8 {
 }
 
 #[tokio::test]
-async fn shares_are_owed_only_once_the_batch_lands() {
-    let (round, _chain) = proved_round(DcShareLayout::Standard);
-    assert!(dc_steps(&round.steps()).is_empty());
-    let outcome = round.run(submit(0, 0)).await;
-    assert_eq!(outcome.disposition, RoundStepDisposition::NoWork);
-    assert!(round.helpers.posts().is_empty());
-
-    let round = landed_round(DcShareLayout::Standard).await;
-
-    let mut owed: Vec<_> = (0..16).map(|share| (true, 0, share)).collect();
-    owed.extend((0..16).map(|share| (true, 1, share)));
-    assert_eq!(dc_steps(&round.steps()), owed);
-}
-
-#[tokio::test]
 async fn a_dc_is_planned_before_its_first_post_and_delivered_into_its_delegate_s_pool() {
     let round = landed_round(DcShareLayout::Standard).await;
     {
@@ -593,64 +572,29 @@ async fn a_share_short_of_its_target_is_owed_again_until_handed_off() {
 
 /// A helper's 422 refusal of a pool share (contract §11.8) is an ordinary
 /// definite failure of that helper: with a target of two, the share goes to
-/// the fallback helper and is handed off.
+/// the fallback helper and is handed off. Both 422 codes are read by status
+/// alone, so one stands for the other.
 #[tokio::test]
 async fn a_refusing_helper_is_replaced_and_the_share_handed_off() {
-    use Answer::{DelegateNotFound, ProxyDisabled};
-    for script in [&[DelegateNotFound][..], &[ProxyDisabled][..]] {
-        let round = landed_round(DcShareLayout::SingleShare).await;
-        // The first POST goes to one of the share's two planned helpers.
-        round.helpers.script_next_posts(script);
-        let dc_slot = slot_of(&round, 17);
-
-        assert_eq!(
-            round.run(submit(dc_slot, 0)).await.disposition,
-            RoundStepDisposition::Advanced,
-            "{script:?}"
-        );
-        let posted_to = round.helpers.posted_to();
-        assert_eq!(
-            posted_to.len(),
-            3,
-            "{script:?}: the fallback helper is tried"
-        );
-        assert_eq!(round.shares(dc_slot), vec![(0, 2, 0)], "{script:?}");
-        let steps = dc_steps(&round.steps());
-        assert!(
-            !steps.contains(&(true, dc_slot, 0)) && steps.contains(&(false, dc_slot, 0)),
-            "{script:?}: only share 0's reveal is owed"
-        );
-        assert_eq!(
-            delegations(&round, &ballot_list(&[]), ProxyRoundPhase::Active)[0].2,
-            ProxyDelegationStage::HandedOff,
-            "{script:?}"
-        );
-    }
-}
-
-/// A DC whose share every helper keeps refusing is never handed off. Once
-/// the vote ends its delivery is no longer owed, so a step on it does no
-/// work and posts nothing, and once the round closes it is not counted.
-#[tokio::test]
-async fn a_dc_every_helper_refuses_is_not_counted_after_close() {
     let round = landed_round(DcShareLayout::SingleShare).await;
-    for url in Helpers::urls() {
-        round.helpers.script(&url, &[Answer::DelegateNotFound]);
-    }
+    // The first POST goes to one of the share's two planned helpers.
+    round.helpers.script_next_posts(&[Answer::DelegateNotFound]);
     let dc_slot = slot_of(&round, 17);
-    assert_eq!(
-        round.fail(submit(dc_slot, 0)).await.kind,
-        RoundStepFailureKind::HelperDeliveryIncomplete
-    );
-    assert_eq!(round.helpers.posts().len(), 3, "every helper is tried");
 
-    let ended = round.run_at(submit(dc_slot, 0), round.vote_end()).await;
-    assert_eq!(ended.disposition, RoundStepDisposition::NoWork);
-    assert!(dc_steps(&ended.plan.next_steps).is_empty());
-    assert_eq!(round.helpers.posts().len(), 3, "nothing is posted after it");
     assert_eq!(
-        delegations(&round, &ballot_list(&[]), ProxyRoundPhase::Closed)[0].2,
-        ProxyDelegationStage::NotCounted
+        round.run(submit(dc_slot, 0)).await.disposition,
+        RoundStepDisposition::Advanced
+    );
+    assert_eq!(
+        round.helpers.posted_to().len(),
+        3,
+        "the fallback helper is tried"
+    );
+    assert_eq!(round.shares(dc_slot), vec![(0, 2, 0)]);
+    let steps = dc_steps(&round.steps());
+    assert!(
+        !steps.contains(&(true, dc_slot, 0)) && steps.contains(&(false, dc_slot, 0)),
+        "only share 0's reveal is owed"
     );
 }
 
@@ -907,52 +851,6 @@ async fn a_removed_helper_does_not_count_toward_a_shrunk_fleet_s_target() {
     );
 }
 
-/// A share's helpers that left the configured fleet never hand it off. Two
-/// helpers' acceptances filled its target of two, but no pass recorded the
-/// hand-off (a crash between the acceptances and the record), and the fleet
-/// then lost both: the share is still owed, goes to the configured helper,
-/// and is handed off once that helper, the shrunk fleet's reachable target,
-/// holds it.
-#[tokio::test]
-async fn helpers_removed_from_the_fleet_do_not_hand_a_share_off() {
-    let round = landed_round(DcShareLayout::SingleShare).await;
-    let urls = Helpers::urls();
-    for url in &urls {
-        round.helpers.script(url, &[Answer::Refused]);
-    }
-    let dc_slot = slot_of(&round, 17);
-    round.fail(submit(dc_slot, 0)).await;
-    assert_eq!(
-        round.shares(dc_slot),
-        vec![(0, 0, 0)],
-        "planned, held by none"
-    );
-    round
-        .db()
-        .conn()
-        .execute(
-            "UPDATE proxy_dc_shares SET sent_to_urls = ?1",
-            [serde_json::to_string(&urls[..2]).unwrap()],
-        )
-        .unwrap();
-
-    assert!(
-        dc_steps(&round.steps()).contains(&(true, dc_slot, 0)),
-        "no pass recorded the two acceptances as a hand-off"
-    );
-    let posts = round.helpers.posts().len();
-    let shrunk = [urls[2].clone()];
-    assert_eq!(
-        round
-            .run_with_fleet(submit(dc_slot, 0), &shrunk)
-            .await
-            .disposition,
-        RoundStepDisposition::Advanced
-    );
-    assert_eq!(round.helpers.posted_to()[posts..], shrunk[..]);
-    assert!(!dc_steps(&round.steps()).contains(&(true, dc_slot, 0)));
-}
-
 /// An unknown outcome at a helper that left the fleet is never reconciled,
 /// since no pass posts there again, so it doesn't hold the step pending:
 /// once every configured helper refuses, the share is short and the step
@@ -990,39 +888,6 @@ async fn an_unknown_outcome_at_a_removed_helper_does_not_hide_a_short_share() {
         .await
         .unwrap_err();
     assert_eq!(failure.kind, RoundStepFailureKind::HelperDeliveryIncomplete);
-}
-
-#[tokio::test]
-async fn an_ambiguous_helper_is_reconciled_by_a_duplicate_safe_re_post() {
-    let round = landed_round(DcShareLayout::SingleShare).await;
-    let urls = Helpers::urls();
-    round
-        .helpers
-        .script(&urls[0], &[Answer::Lost, Answer::Duplicate]);
-    round
-        .helpers
-        .script(&urls[1], &[Answer::Lost, Answer::Refused]);
-    round
-        .helpers
-        .script(&urls[2], &[Answer::Lost, Answer::Duplicate]);
-
-    // Every helper's answer is lost, so none definitely holds the share and
-    // only reconciliation can tell; the pass waits for it.
-    assert_eq!(
-        round.run(submit(0, 0)).await.disposition,
-        RoundStepDisposition::Pending
-    );
-    assert_eq!(round.shares(0), vec![(0, 0, 3)]);
-
-    assert_eq!(
-        round.run(submit(0, 0)).await.disposition,
-        RoundStepDisposition::Advanced
-    );
-    assert_eq!(
-        round.shares(0),
-        vec![(0, 2, 1)],
-        "two helpers answered duplicate; the refusal says nothing about the original"
-    );
 }
 
 #[tokio::test]

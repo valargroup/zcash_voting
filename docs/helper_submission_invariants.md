@@ -2392,7 +2392,7 @@ attempt in an earlier pass has an unknown outcome, interrupted ones first. A
 helper that does not accept becomes explicitly ambiguous; an ambiguous one
 is unchanged. A helper whose answer was lost in this pass waits for the next
 (`a_share_short_of_its_target_is_owed_again_until_handed_off`,
-`an_ambiguous_helper_is_reconciled_by_a_duplicate_safe_re_post`).
+`a_refused_re_post_keeps_the_earlier_unknown_outcome`).
 
 **The helper's answers to a pool share** (contract §11.8). A pool share's
 answers are read as a vote share's are, with no code of their own:
@@ -2426,7 +2426,7 @@ A DC whose share no helper took by then is never handed off, so once the
 round closes the status view shows it not counted (see Status)
 (`a_refusing_helper_is_replaced_and_the_share_handed_off`,
 `a_share_short_of_its_target_is_owed_again_until_handed_off`,
-`a_dc_every_helper_refuses_is_not_counted_after_close`,
+`once_the_round_closes_only_a_handed_off_dc_is_counted`,
 `a_refused_re_post_keeps_the_earlier_unknown_outcome`,
 `a_dc_not_yet_in_the_helpers_trees_is_retried_later`).
 
@@ -2442,7 +2442,8 @@ hold the share, including a share placed on its full target, since round
 planning, which owes the share, has no fleet to judge it by. A raw count of
 `sent_to_urls` never hands a share off: helpers removed from the fleet may
 fill it, so a share whose verdict was never recorded goes to the configured
-fleet (`helpers_removed_from_the_fleet_do_not_hand_a_share_off`). The record
+fleet (`only_shares_not_handed_off_are_owed`,
+`a_removed_helper_does_not_count_toward_a_shrunk_fleet_s_target`). The record
 is written once, so the hand-off stands if the fleet grows back
 (`a_fleet_that_shrinks_below_the_plan_s_target_hands_the_share_off`,
 `a_removed_helper_does_not_count_toward_a_shrunk_fleet_s_target`). Delivery

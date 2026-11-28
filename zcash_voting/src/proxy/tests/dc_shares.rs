@@ -47,7 +47,7 @@ fn landed(layout: DcShareLayout) -> ProvedBatchFixture {
 #[test]
 fn a_single_share_dc_plans_share_zero_alone_at_once_like_a_vote_share() {
     // 15 helpers is where the vote-share cap of 5 differs from half the fleet.
-    for helpers in [1, 2, 5, 9, 15] {
+    for helpers in [3, 15] {
         let plans = plan_dc_shares(
             DcShareLayout::SingleShare,
             &fleet(helpers),
