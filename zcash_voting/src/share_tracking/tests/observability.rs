@@ -520,7 +520,7 @@ async fn confirmation_diagnostics_distinguish_quorum_persistence_and_reuse() {
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -604,7 +604,7 @@ async fn status_endpoint_ordinals_survive_health_order_and_keep_pending_semantic
             round_id: ROUND_ID,
             share: ShareKey {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             configured_server_urls: &configured,
@@ -651,9 +651,13 @@ async fn cancelled_confirmation_reports_lock_wait_without_polling() {
     let configured = helpers(2);
     let db = db_with_delivery(&configured, &[], 2);
     let scope = share::ShareOperationScope::capture(&db);
-    let _guard = lock_share_operation(&scope, ROUND_ID, 0, 1, 0)
-        .await
-        .unwrap();
+    let _guard = lock_share_operation(
+        &scope,
+        ROUND_ID,
+        crate::share_tracking::ShareKey::vote(0, 1, 0),
+    )
+    .await
+    .unwrap();
     let transport = Arc::new(MockTransport::default());
     let client = client_with(transport.clone());
     let cancelled = std::sync::atomic::AtomicBool::new(false);
@@ -662,7 +666,7 @@ async fn cancelled_confirmation_reports_lock_wait_without_polling() {
         round_id: ROUND_ID,
         share: ShareKey {
             bundle_index: 0,
-            proposal_id: 1,
+            commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
             share_index: 0,
         },
         configured_server_urls: &configured,

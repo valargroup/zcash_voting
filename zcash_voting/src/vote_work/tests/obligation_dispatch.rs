@@ -44,7 +44,7 @@ async fn a_confirm_share_step_for_an_accepted_share_polls_instead_of_delivering(
     .unwrap();
     let step = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let plan = executor.plan().unwrap();
@@ -124,7 +124,7 @@ async fn a_share_with_only_ambiguous_evidence_is_polled_not_redelivered() {
     .unwrap();
     let step = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let plan = executor.plan().unwrap();

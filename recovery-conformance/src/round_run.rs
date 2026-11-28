@@ -772,7 +772,12 @@ fn delivery_record(
 ) -> ShareDeliveryRecord {
     ShareDeliveryRecord {
         bundle_index: resubmitted.share.bundle_index,
-        proposal_id: resubmitted.share.proposal_id,
+        // Tracking resubmits vote shares only, so a proposal is always named.
+        proposal_id: resubmitted
+            .share
+            .commitment
+            .proposal_id()
+            .unwrap_or(zcash_voting::proxy::POOL_PROPOSAL_ID),
         share_index: resubmitted.share.share_index,
         server_url: resubmitted.server_url.clone(),
     }

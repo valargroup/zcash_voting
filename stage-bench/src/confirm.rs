@@ -253,11 +253,7 @@ const OPTIONS_PER_SHARE: ObservabilityOptions = ObservabilityOptions {
 };
 
 fn share_key(record: &zcash_voting::ShareDelegationRecord) -> ShareKey {
-    ShareKey {
-        bundle_index: record.bundle_index,
-        proposal_id: record.proposal_id,
-        share_index: record.share_index,
-    }
+    ShareKey::vote(record.bundle_index, record.proposal_id, record.share_index)
 }
 
 fn now_seconds() -> u64 {
@@ -307,12 +303,12 @@ pub async fn confirm_immediate_share(
 
     let mut phase = PhaseEvent::phase("confirm::immediate_started");
     phase.bundle_index = Some(share.bundle_index);
-    phase.proposal_id = Some(share.proposal_id);
+    phase.proposal_id = share.commitment.proposal_id();
     phase.share_index = Some(share.share_index);
     events.record(phase);
     eprintln!(
-        "bench: confirming the immediate share (bundle {}, proposal {}, share {})",
-        share.bundle_index, share.proposal_id, share.share_index
+        "bench: confirming the immediate share (bundle {}, {:?}, share {})",
+        share.bundle_index, share.commitment, share.share_index
     );
 
     loop {

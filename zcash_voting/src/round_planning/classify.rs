@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::phases::{DelegationPhase, VotePhase};
 use crate::session::{BallotIntentClassification, Decision};
+use crate::share_tracking::CommitmentRef;
 use crate::types::VotingError;
 
 use super::lifecycle::{
@@ -88,7 +89,8 @@ pub(crate) enum Obligation {
     /// A confirmed vote owes these helper shares: they have no row yet.
     Deliver {
         bundle_index: u32,
-        proposal_id: u32,
+        /// The commitment whose shares are owed.
+        commitment: CommitmentRef,
         vc_tree_position: u64,
         share_indexes: Vec<u32>,
         prerequisite: Option<u32>,
@@ -99,7 +101,8 @@ pub(crate) enum Obligation {
     /// confirmed by polling and is delivered again instead.
     Confirm {
         bundle_index: u32,
-        proposal_id: u32,
+        /// The commitment the share belongs to.
+        commitment: CommitmentRef,
         share_index: u32,
         /// At least one helper definitely holds the share.
         accepted: bool,
@@ -357,7 +360,7 @@ pub(crate) fn classify(
             })?;
         obligations.push(Obligation::Deliver {
             bundle_index,
-            proposal_id,
+            commitment: CommitmentRef::Vote { proposal_id },
             vc_tree_position,
             share_indexes,
             prerequisite: None,
@@ -574,7 +577,7 @@ pub(crate) fn classify(
                 });
                 obligations.push(Obligation::Confirm {
                     bundle_index,
-                    proposal_id,
+                    commitment: CommitmentRef::Vote { proposal_id },
                     share_index,
                     accepted,
                     outcome_unknown,

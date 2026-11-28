@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::chain_submission::ChainSubmissionDiagnostic;
 use crate::phases::DelegationPhase;
 use crate::share_policy::ImmediateShareKey;
+use crate::share_tracking::CommitmentRef;
 use crate::storage::{queries, VotingDb};
 use crate::types::{
     validate_proposal_id, validate_vote_decision, validate_vote_options, VotingError,
@@ -530,12 +531,18 @@ pub enum NextStep {
     /// remaining definite-delivery deficits.
     SubmitShares {
         bundle_index: u32,
-        proposal_id: u32,
+        /// The commitment whose share is owed.
+        #[serde(flatten)]
+        commitment: CommitmentRef,
         share_index: u32,
     },
+    /// Confirm one submitted helper share, or deliver it again from its
+    /// durable plan when no helper has reached it.
     ConfirmShare {
         bundle_index: u32,
-        proposal_id: u32,
+        /// The commitment the share belongs to.
+        #[serde(flatten)]
+        commitment: CommitmentRef,
         share_index: u32,
     },
 }

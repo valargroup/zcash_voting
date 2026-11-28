@@ -290,12 +290,12 @@ async fn a_share_a_helper_already_holds_is_left_to_background_tracking() {
         vec![
             NextStep::ConfirmShare {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 0,
             },
             NextStep::ConfirmShare {
                 bundle_index: 0,
-                proposal_id: 1,
+                commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
                 share_index: 1,
             },
         ]
@@ -364,12 +364,12 @@ async fn an_accepted_share_never_outranks_the_delivery_the_round_owes() {
 
     let accepted = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let undelivered = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 1,
     };
     assert_eq!(
@@ -458,12 +458,12 @@ async fn an_outcome_unknown_share_never_outranks_the_delivery_the_round_owes() {
     let executor = executor_over_accepting_helper(Arc::new(database), Arc::clone(&helper));
     let outcome_unknown = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let undelivered = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 1,
     };
     assert_eq!(
@@ -572,12 +572,12 @@ async fn a_crash_interrupted_share_is_handed_to_tracking_not_redelivered() {
     let executor = executor_over_accepting_helper(Arc::new(database), Arc::clone(&helper));
     let interrupted = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let undelivered = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 1,
     };
 

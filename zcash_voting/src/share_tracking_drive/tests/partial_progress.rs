@@ -16,7 +16,7 @@ use crate::share_tracking_drive::ShareTrackingQuiescence;
 fn share(share_index: u32) -> ShareKey {
     ShareKey {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index,
     }
 }

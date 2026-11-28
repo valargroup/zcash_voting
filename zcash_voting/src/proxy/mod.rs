@@ -9,4 +9,8 @@
 pub mod delegate;
 pub mod registry;
 
-pub use zcash_vote_delegate::DelegateKey;
+/// Number of DC slots in one bundle's batch: `dc_slot` is in
+/// `0..MAX_DC_SLOTS` (contract §10, `DC_SLOT_BITS = 3`).
+pub const MAX_DC_SLOTS: u8 = 8;
+
+pub use zcash_vote_delegate::{DelegateKey, POOL_PROPOSAL_ID};

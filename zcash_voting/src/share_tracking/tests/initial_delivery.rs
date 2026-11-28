@@ -221,9 +221,13 @@ async fn cancellation_aborts_initial_wait_for_live_share_operation() {
     db.set_wallet_id("initial-cancellation-lock-wait");
     seed_recoverable_vote_for_wallet(&db, "initial-cancellation-lock-wait");
     let scope = share::ShareOperationScope::capture(&db);
-    let _operation_guard = lock_share_operation(&scope, ROUND_ID, 0, 1, 0)
-        .await
-        .unwrap();
+    let _operation_guard = lock_share_operation(
+        &scope,
+        ROUND_ID,
+        crate::share_tracking::ShareKey::vote(0, 1, 0),
+    )
+    .await
+    .unwrap();
     let servers = helpers(2);
     let transport = Arc::new(MockTransport::default());
     let client = client_with(transport.clone());

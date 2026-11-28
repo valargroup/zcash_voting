@@ -42,7 +42,7 @@ async fn a_blocking_confirm_share_step_delivers_before_polling() {
     .unwrap();
     let step = NextStep::ConfirmShare {
         bundle_index: 0,
-        proposal_id: 1,
+        commitment: crate::share_tracking::CommitmentRef::Vote { proposal_id: 1 },
         share_index: 0,
     };
     let plan = executor.plan().unwrap();

@@ -63,14 +63,14 @@ pub(crate) fn step_attribution(step: &crate::session::NextStep) -> super::Observ
         } => (bundle_index, Some(proposal_id), None),
         NextStep::SubmitShares {
             bundle_index,
-            proposal_id,
+            commitment,
             share_index,
         }
         | NextStep::ConfirmShare {
             bundle_index,
-            proposal_id,
+            commitment,
             share_index,
-        } => (bundle_index, Some(proposal_id), Some(share_index)),
+        } => (bundle_index, commitment.proposal_id(), Some(share_index)),
     };
     super::ObservationAttribution {
         bundle_index: Some(bundle),
