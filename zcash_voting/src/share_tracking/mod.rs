@@ -617,14 +617,29 @@ pub(crate) async fn observe_confirm_pending_share(
         let client = &observed_client;
         match params.share.commitment {
             CommitmentRef::Vote { proposal_id } => {
-                confirm_vote_share(
+                let key = params.share;
+                let share = share::get_delegation_for_scope(
                     db,
                     &scope,
-                    params,
+                    params.round_id,
+                    key.bundle_index,
                     proposal_id,
-                    &configured_fleet,
+                    key.share_index,
+                )?
+                .ok_or_else(|| VotingError::InvalidInput {
+                    message: format!(
+                        "helper share not found: round={}, bundle={}, proposal={}, share={}",
+                        params.round_id, key.bundle_index, proposal_id, key.share_index
+                    ),
+                })?;
+                let tracked = VoteShareJournal::tracking(db, &scope, params.round_id, share);
+                confirm_stored_share(
+                    &scope,
+                    params,
+                    configured_fleet.urls(),
                     client,
                     cancel,
+                    &tracked,
                 )
                 .await
             }
@@ -671,44 +686,6 @@ pub async fn confirm_pending_share_with_report(
     invocation.complete("confirm_pending_share", outcome, operation_result)
 }
 
-/// [`confirm_pending_share`] for a share of `proposal_id`'s vote commitment.
-async fn confirm_vote_share(
-    db: &VotingDb,
-    scope: &share::ShareOperationScope,
-    params: &ShareConfirmationParams<'_>,
-    proposal_id: u32,
-    configured_fleet: &ConfiguredHelperFleet,
-    client: &HelperClient,
-    cancel: &(dyn Fn() -> bool + Send + Sync),
-) -> Result<ShareConfirmationReport, VotingError> {
-    let key = params.share;
-    confirm_stored_share(
-        scope,
-        params,
-        configured_fleet.urls(),
-        client,
-        cancel,
-        || {
-            share::get_delegation_for_scope(
-                db,
-                scope,
-                params.round_id,
-                key.bundle_index,
-                proposal_id,
-                key.share_index,
-            )
-        },
-        || VotingError::InvalidInput {
-            message: format!(
-                "helper share not found: round={}, bundle={}, proposal={}, share={}",
-                params.round_id, key.bundle_index, proposal_id, key.share_index
-            ),
-        },
-        |share| confirm_vote_share_generation(db, scope, params.round_id, share),
-    )
-    .await
-}
-
 /// The parts of a stored helper share, vote or DC, that confirmation and
 /// tracking read.
 pub(crate) trait StoredShare: ShareSchedule {
@@ -746,26 +723,21 @@ impl StoredShare for ShareDelegationRecord {
     }
 }
 
-/// [`confirm_pending_share`] for one stored share, vote or DC.
+/// [`confirm_pending_share`] for one stored share, vote or DC, as `tracked`
+/// was loaded.
 ///
-/// Loads the share with `load`, failing with `not_found` when it is absent,
-/// and waits for its operation lock. It then reloads the share and returns
-/// an unconfirmed report when the share is gone or has a new nullifier.
-/// Otherwise see [`poll_and_confirm_share`], with `mark_confirmed` called on
-/// the reloaded share.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn confirm_stored_share<S: StoredShare>(
+/// Waits for the share's operation lock, then reloads it and returns an
+/// unconfirmed report when the share is gone or has a new nullifier.
+/// Otherwise see [`poll_and_confirm_share`], with the share's
+/// [`TrackedShare::mark_confirmed`].
+pub(crate) async fn confirm_stored_share(
     scope: &share::ShareOperationScope,
     params: &ShareConfirmationParams<'_>,
     configured_urls: &[String],
     client: &HelperClient,
     cancel: &(dyn Fn() -> bool + Send + Sync),
-    load: impl Fn() -> Result<Option<S>, VotingError>,
-    not_found: impl FnOnce() -> VotingError,
-    mark_confirmed: impl FnOnce(&S) -> Result<bool, VotingError>,
+    tracked: &impl TrackedShare,
 ) -> Result<ShareConfirmationReport, VotingError> {
-    let loaded_share = load()?.ok_or_else(not_found)?;
-
     let Some(_operation_guard) = lock_share_operation_or_cancel(
         scope,
         params.round_id,
@@ -781,9 +753,7 @@ pub(crate) async fn confirm_stored_share<S: StoredShare>(
         });
     };
 
-    let Some(share) =
-        load()?.filter(|share| share.reveal_nullifier() == loaded_share.reveal_nullifier())
-    else {
+    let Some(share) = tracked.reload()? else {
         return Ok(ShareConfirmationReport::default());
     };
 
@@ -794,27 +764,9 @@ pub(crate) async fn confirm_stored_share<S: StoredShare>(
         client,
         params.now_seconds,
         cancel,
-        || mark_confirmed(&share),
+        || tracked.mark_confirmed(),
     )
     .await
-}
-
-/// Durably confirms the vote share generation `share` was loaded at, and
-/// returns `false` when the stored share was replaced or deleted since.
-fn confirm_vote_share_generation(
-    db: &VotingDb,
-    scope: &share::ShareOperationScope,
-    round_id: &str,
-    share: &ShareDelegationRecord,
-) -> Result<bool, VotingError> {
-    share::confirm_for_generation(
-        db,
-        round_id,
-        share.bundle_index,
-        share.proposal_id,
-        share.share_index,
-        share::ShareGeneration::new(scope, &share.nullifier),
-    )
 }
 
 /// Returns a confirmed report at once when `share` is already confirmed.
@@ -1164,18 +1116,12 @@ async fn track_share<S: TrackedShare>(
     };
 
     // Only configured helpers count toward current placement or polling.
-    let configured_only = |urls: &[String]| {
-        urls.iter()
-            .filter(|url| configured_fleet.contains(url))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    let configured_definite_acceptance_urls = configured_only(share.sent_to_urls());
+    let configured_definite_acceptance_urls = configured_fleet.filter(share.sent_to_urls());
     // An `attempting` marker left by an interrupted process is an unknown
     // POST outcome. Keep it separate from explicit ambiguity so recovery
     // can reconcile the crash marker even without vote-end timing.
-    let configured_outcome_unknown_urls = configured_only(share.ambiguous_urls());
-    let configured_interrupted_attempt_urls = configured_only(share.attempting_urls());
+    let configured_outcome_unknown_urls = configured_fleet.filter(share.ambiguous_urls());
+    let configured_interrupted_attempt_urls = configured_fleet.filter(share.attempting_urls());
     let mut delivery_state = share::ShareDeliveryState::from_url_lists(
         &configured_definite_acceptance_urls,
         &configured_outcome_unknown_urls,

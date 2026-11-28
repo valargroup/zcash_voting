@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     configured_fleet::ConfiguredHelperFleet, CommitmentRef, CommittedShareSubmissionRequest,
-    InitialShareSubmissionParams, ShareKey, ShareSubmissionReport,
+    InitialShareSubmissionParams, ShareKey, ShareSubmissionReport, TrackedShare,
 };
 use crate::storage::queries::ShareAttemptReservation;
 
@@ -192,13 +192,6 @@ pub(crate) trait ShareAttemptJournal: Sync {
     /// The share, which keys its process-wide operation lock.
     fn share(&self) -> ShareKey;
 
-    /// The share's current helper state, restricted to `candidates`, or
-    /// `None` once its generation was replaced or deleted.
-    fn delivery_state(
-        &self,
-        candidates: &[String],
-    ) -> Result<Option<share::ShareDeliveryState>, VotingError>;
-
     /// Durably reserves `server_url` before its POST. Under
     /// [`EnforcePlacementTarget`](share::ShareAttemptCapacityPolicy::EnforcePlacementTarget)
     /// it refuses once accepted and in-flight helpers among `candidates`
@@ -247,10 +240,6 @@ pub(super) struct VoteShareJournal<'a> {
     pub(super) bundle_index: u32,
     pub(super) proposal_id: u32,
     pub(super) share_index: u32,
-    /// The share's durable schedule.
-    pub(super) submit_at: u64,
-    /// The share's placement target.
-    pub(super) target_count: usize,
     /// The share's reveal nullifier, as loaded.
     pub(super) nullifier: Vec<u8>,
 }
@@ -270,13 +259,12 @@ impl<'a> VoteShareJournal<'a> {
             bundle_index: params.bundle_index,
             proposal_id: params.proposal_id,
             share_index: params.share_index,
-            submit_at: params.submit_at,
-            target_count: params.target_count,
             nullifier,
         }
     }
 
-    /// The attempt params of a POST to `server_url` under `target_count`.
+    /// The attempt params of a POST to `server_url` under `target_count`,
+    /// with `submit_at` 0, which no attempt write reads.
     pub(super) fn attempt<'b>(
         &'b self,
         server_url: &'b str,
@@ -289,7 +277,7 @@ impl<'a> VoteShareJournal<'a> {
             share_index: self.share_index,
             server_url,
             target_count,
-            submit_at: self.submit_at,
+            submit_at: 0,
         }
     }
 
@@ -302,30 +290,6 @@ impl<'a> VoteShareJournal<'a> {
 impl ShareAttemptJournal for VoteShareJournal<'_> {
     fn share(&self) -> ShareKey {
         ShareKey::vote(self.bundle_index, self.proposal_id, self.share_index)
-    }
-
-    fn delivery_state(
-        &self,
-        candidates: &[String],
-    ) -> Result<Option<share::ShareDeliveryState>, VotingError> {
-        let Some(current_delivery) = share::get_delegation_for_scope(
-            self.db,
-            self.scope,
-            self.round_id,
-            self.bundle_index,
-            self.proposal_id,
-            self.share_index,
-        )?
-        .filter(|share| share.nullifier == self.nullifier) else {
-            return Ok(None);
-        };
-        candidate_delivery_state(
-            current_delivery.sent_to_urls,
-            current_delivery.ambiguous_urls,
-            current_delivery.attempting_urls,
-            candidates,
-        )
-        .map(Some)
     }
 
     fn begin_attempt(
@@ -352,7 +316,8 @@ impl ShareAttemptJournal for VoteShareJournal<'_> {
     ) -> Result<bool, VotingError> {
         share::resolve_delivery_attempt_for_generation(
             self.db,
-            &self.attempt(server_url, self.target_count),
+            // A resolution reads no target.
+            &self.attempt(server_url, 0),
             self.generation(),
             outcome,
             reset_submit_at,
@@ -360,29 +325,9 @@ impl ShareAttemptJournal for VoteShareJournal<'_> {
     }
 }
 
-/// A share's helper state from its stored URL lists, keeping only helpers in
-/// `candidates`.
-pub(crate) fn candidate_delivery_state(
-    accepted_urls: Vec<String>,
-    outcome_unknown_urls: Vec<String>,
-    in_flight_urls: Vec<String>,
-    candidates: &[String],
-) -> Result<share::ShareDeliveryState, VotingError> {
-    let keep = |urls: Vec<String>| {
-        urls.into_iter()
-            .filter(|url| candidates.contains(url))
-            .collect::<Vec<_>>()
-    };
-    share::ShareDeliveryState::from_url_lists(
-        &keep(accepted_urls),
-        &keep(outcome_unknown_urls),
-        &keep(in_flight_urls),
-    )
-}
-
 /// Continues fan-out from an already-prepared durable delivery record.
 /// See [`submit_share_to_helpers`] for the waves, ordering and durability.
-pub(crate) async fn dispatch_share_to_canonical_helpers<J: ShareAttemptJournal>(
+pub(crate) async fn dispatch_share_to_canonical_helpers<J: TrackedShare>(
     journal: &J,
     scope: &share::ShareOperationScope,
     client: &HelperClient,

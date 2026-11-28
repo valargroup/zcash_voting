@@ -284,23 +284,14 @@ pub(super) async fn resubmit_to_next_helper<S: TrackedShare>(
             .await
         {
             Ok(_) => {
-                if !tracked
-                    .resolve_attempt(
-                        &server_url,
-                        share::ShareDeliveryAttemptOutcome::Accepted,
-                        request.schedule.reset_submit_at(),
-                    )
-                    .map_err(|error| {
-                        FailedResubmission::after_retained_outcomes(
-                            error,
-                            &newly_outcome_unknown_urls,
-                        )
-                    })?
-                {
-                    return Ok(ResubmitReport {
-                        outcome: ResubmitOutcome::StaleGeneration,
-                        outcome_unknown_urls: newly_outcome_unknown_urls,
-                    });
+                if let Some(stale) = journal_outcome(
+                    tracked,
+                    &server_url,
+                    share::ShareDeliveryAttemptOutcome::Accepted,
+                    request.schedule.reset_submit_at(),
+                    &mut newly_outcome_unknown_urls,
+                )? {
+                    return Ok(stale);
                 }
                 return Ok(ResubmitReport {
                     outcome: ResubmitOutcome::DefinitelyAcceptedByHelper(server_url),
@@ -308,24 +299,16 @@ pub(super) async fn resubmit_to_next_helper<S: TrackedShare>(
                 });
             }
             Err(HelperError::Cancelled) => {
-                if journals_fresh_attempt
-                    && !tracked
-                        .resolve_attempt(
-                            &server_url,
-                            share::ShareDeliveryAttemptOutcome::DefiniteFailure,
-                            request.schedule.reset_submit_at(),
-                        )
-                        .map_err(|error| {
-                            FailedResubmission::after_retained_outcomes(
-                                error,
-                                &newly_outcome_unknown_urls,
-                            )
-                        })?
-                {
-                    return Ok(ResubmitReport {
-                        outcome: ResubmitOutcome::StaleGeneration,
-                        outcome_unknown_urls: newly_outcome_unknown_urls,
-                    });
+                if journals_fresh_attempt {
+                    if let Some(stale) = journal_outcome(
+                        tracked,
+                        &server_url,
+                        share::ShareDeliveryAttemptOutcome::DefiniteFailure,
+                        request.schedule.reset_submit_at(),
+                        &mut newly_outcome_unknown_urls,
+                    )? {
+                        return Ok(stale);
+                    }
                 }
                 return Ok(ResubmitReport {
                     outcome: ResubmitOutcome::Cancelled,
@@ -336,46 +319,28 @@ pub(super) async fn resubmit_to_next_helper<S: TrackedShare>(
             // durable acceptance established by the original request.
             Err(error) if error.is_ambiguous() && retries_definitely_accepted_helper => {}
             Err(error) if error.is_ambiguous() => {
-                if !tracked
-                    .resolve_attempt(
-                        &server_url,
-                        share::ShareDeliveryAttemptOutcome::Ambiguous,
-                        request.schedule.reset_submit_at(),
-                    )
-                    .map_err(|error| {
-                        FailedResubmission::after_retained_outcomes(
-                            error,
-                            &newly_outcome_unknown_urls,
-                        )
-                    })?
-                {
-                    return Ok(ResubmitReport {
-                        outcome: ResubmitOutcome::StaleGeneration,
-                        outcome_unknown_urls: newly_outcome_unknown_urls,
-                    });
+                if let Some(stale) = journal_outcome(
+                    tracked,
+                    &server_url,
+                    share::ShareDeliveryAttemptOutcome::Ambiguous,
+                    request.schedule.reset_submit_at(),
+                    &mut newly_outcome_unknown_urls,
+                )? {
+                    return Ok(stale);
                 }
                 if !retries_ambiguous_helper {
                     newly_outcome_unknown_urls.push(server_url);
                 }
             }
             Err(_) if retries_interrupted_helper => {
-                if !tracked
-                    .resolve_attempt(
-                        &server_url,
-                        share::ShareDeliveryAttemptOutcome::Ambiguous,
-                        request.schedule.reset_submit_at(),
-                    )
-                    .map_err(|error| {
-                        FailedResubmission::after_retained_outcomes(
-                            error,
-                            &newly_outcome_unknown_urls,
-                        )
-                    })?
-                {
-                    return Ok(ResubmitReport {
-                        outcome: ResubmitOutcome::StaleGeneration,
-                        outcome_unknown_urls: newly_outcome_unknown_urls,
-                    });
+                if let Some(stale) = journal_outcome(
+                    tracked,
+                    &server_url,
+                    share::ShareDeliveryAttemptOutcome::Ambiguous,
+                    request.schedule.reset_submit_at(),
+                    &mut newly_outcome_unknown_urls,
+                )? {
+                    return Ok(stale);
                 }
                 newly_outcome_unknown_urls.push(server_url);
             }
@@ -383,23 +348,14 @@ pub(super) async fn resubmit_to_next_helper<S: TrackedShare>(
             // outcome-unknown POST, so that persisted state is kept.
             Err(_) if retries_outcome_unknown_helper => {}
             Err(_) => {
-                if !tracked
-                    .resolve_attempt(
-                        &server_url,
-                        share::ShareDeliveryAttemptOutcome::DefiniteFailure,
-                        request.schedule.reset_submit_at(),
-                    )
-                    .map_err(|error| {
-                        FailedResubmission::after_retained_outcomes(
-                            error,
-                            &newly_outcome_unknown_urls,
-                        )
-                    })?
-                {
-                    return Ok(ResubmitReport {
-                        outcome: ResubmitOutcome::StaleGeneration,
-                        outcome_unknown_urls: newly_outcome_unknown_urls,
-                    });
+                if let Some(stale) = journal_outcome(
+                    tracked,
+                    &server_url,
+                    share::ShareDeliveryAttemptOutcome::DefiniteFailure,
+                    request.schedule.reset_submit_at(),
+                    &mut newly_outcome_unknown_urls,
+                )? {
+                    return Ok(stale);
                 }
             }
         }
@@ -408,4 +364,24 @@ pub(super) async fn resubmit_to_next_helper<S: TrackedShare>(
         outcome: ResubmitOutcome::NoDefiniteAcceptanceObserved,
         outcome_unknown_urls: newly_outcome_unknown_urls,
     })
+}
+
+/// Journals how the POST to `server_url` ended. Returns the report that ends
+/// the resubmission when the share's generation was replaced meanwhile.
+fn journal_outcome(
+    tracked: &impl TrackedShare,
+    server_url: &str,
+    outcome: share::ShareDeliveryAttemptOutcome,
+    reset_submit_at: bool,
+    newly_outcome_unknown_urls: &mut Vec<String>,
+) -> Result<Option<ResubmitReport>, FailedResubmission> {
+    let resolved = tracked
+        .resolve_attempt(server_url, outcome, reset_submit_at)
+        .map_err(|error| {
+            FailedResubmission::after_retained_outcomes(error, newly_outcome_unknown_urls)
+        })?;
+    Ok((!resolved).then(|| ResubmitReport {
+        outcome: ResubmitOutcome::StaleGeneration,
+        outcome_unknown_urls: std::mem::take(newly_outcome_unknown_urls),
+    }))
 }

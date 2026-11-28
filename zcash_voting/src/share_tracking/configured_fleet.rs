@@ -42,4 +42,12 @@ impl ConfiguredHelperFleet {
     pub(super) fn contains(&self, url: &str) -> bool {
         self.urls.iter().any(|candidate| candidate == url)
     }
+
+    /// The `urls` this fleet holds, in their order.
+    pub(super) fn filter(&self, urls: &[String]) -> Vec<String> {
+        urls.iter()
+            .filter(|url| self.contains(url))
+            .cloned()
+            .collect()
+    }
 }

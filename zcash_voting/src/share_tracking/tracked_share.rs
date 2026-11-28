@@ -4,14 +4,15 @@
 use crate::recovery as vote_recovery;
 use crate::{
     share,
+    share_policy::ShareSchedule,
     types::{ShareDelegationRecord, VotingError},
 };
 
 use super::{initial_delivery::VoteShareJournal, ShareAttemptJournal, StoredShare};
 
-/// One stored share a tracking pass walks, bound to the nullifier it was
-/// loaded with: the journal its attempts go to, and how to reload, confirm
-/// and rebuild it for a resend.
+/// One stored share delivery or a tracking pass walks, bound to the
+/// nullifier it was loaded with: the journal its attempts go to, and how to
+/// reload, confirm and rebuild it for a resend.
 pub(crate) trait TrackedShare: ShareAttemptJournal {
     /// The stored row.
     type Record: StoredShare;
@@ -19,9 +20,34 @@ pub(crate) trait TrackedShare: ShareAttemptJournal {
     /// The share as stored now, or `None` once it was replaced or deleted.
     fn reload(&self) -> Result<Option<Self::Record>, VotingError>;
 
+    /// The share's current helper state, keeping only helpers in
+    /// `candidates`, or `None` once it was replaced or deleted.
+    fn delivery_state(
+        &self,
+        candidates: &[String],
+    ) -> Result<Option<share::ShareDeliveryState>, VotingError> {
+        let Some(record) = self.reload()? else {
+            return Ok(None);
+        };
+        let keep = |urls: &[String]| {
+            urls.iter()
+                .filter(|url| candidates.contains(url))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        share::ShareDeliveryState::from_url_lists(
+            &keep(record.sent_to_urls()),
+            &keep(record.ambiguous_urls()),
+            &keep(record.attempting_urls()),
+        )
+        .map(Some)
+    }
+
     /// Whether the share is durably confirmed, or `None` once it was
     /// replaced or deleted.
-    fn stored_confirmation(&self) -> Result<Option<bool>, VotingError>;
+    fn stored_confirmation(&self) -> Result<Option<bool>, VotingError> {
+        Ok(self.reload()?.map(|record| record.is_confirmed()))
+    }
 
     /// Durably confirms the share; `false` once it was replaced or deleted.
     fn mark_confirmed(&self) -> Result<bool, VotingError>;
@@ -62,8 +88,6 @@ impl<'a> VoteShareJournal<'a> {
             bundle_index: share.bundle_index,
             proposal_id: share.proposal_id,
             share_index: share.share_index,
-            submit_at: share.submit_at,
-            target_count: usize::try_from(share.target_count).unwrap_or(usize::MAX),
             nullifier: share.nullifier,
         }
     }
