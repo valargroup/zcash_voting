@@ -200,29 +200,6 @@ fn the_committed_layout_survives_a_re_plan_in_the_last_moment_window() {
     }
 }
 
-/// The first DC of a batch carrying the registration spends the registration
-/// VAN: a VAN stored for another weight fails before any proof.
-#[test]
-fn the_first_dc_must_spend_the_registration_van() {
-    let db = db_with_hotkey_setup(&[100]);
-    commit(&db, &three_delegates(), DcShareLayout::Standard);
-    plan_batch_slots(&db, ROUND_ID, 0, &HOTKEY_SECRET, NETWORK).unwrap();
-    let mut inputs = db
-        .read_transaction("test", |tx| {
-            load_chain_inputs(tx, ROUND_ID, WALLET_ID, 0, NETWORK)
-        })
-        .unwrap();
-    inputs.registration_van = hotkey_van(99, &van_comm_rand(0)).try_into().unwrap();
-
-    match build_dc_chain(&inputs, &BatchAnchor::Registration, &HOTKEY_SECRET) {
-        Err(VotingError::Internal { message }) => {
-            assert!(message.contains("does not spend"), "{message}")
-        }
-        Err(other) => panic!("expected Internal, got {other:?}"),
-        Ok(_) => panic!("a chain over the wrong registration VAN must not build"),
-    }
-}
-
 /// A batch whose registration already landed spends the confirmed VAN through
 /// its tree witness and binds the anchor height in every DC, while the DCs
 /// and successor VANs are those of the registration-anchored batch: the

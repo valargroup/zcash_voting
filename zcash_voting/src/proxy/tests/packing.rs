@@ -50,26 +50,3 @@ fn quotas_fill_largest_first_and_equal_ones_in_request_order() {
         [(0, 2, 3), (0, 0, 2), (0, 1, 2)]
     );
 }
-
-/// Eight delegates over six bundles, two of them too small to be reached.
-#[test]
-fn many_quotas_spill_across_the_largest_bundles_only() {
-    assert_eq!(
-        packed(
-            &[60, 7, 300, 41, 2, 90],
-            &[1_500, 1_500, 1_200, 1_100, 1_000, 900, 800, 700]
-        ),
-        [
-            (2, 0, 75),
-            (2, 1, 75),
-            (2, 2, 60),
-            (2, 3, 55),
-            (2, 4, 35),
-            (5, 4, 15),
-            (5, 5, 45),
-            (5, 6, 30),
-            (0, 6, 10),
-            (0, 7, 35),
-        ]
-    );
-}

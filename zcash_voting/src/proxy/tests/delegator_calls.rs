@@ -147,66 +147,29 @@ fn a_commit_records_the_previewed_plan_once() {
     );
 }
 
-/// A commit needs the plan to preview as the delegator confirmed and an
-/// `Ok` verdict for every choice.
+/// A commit needs an `Ok` verdict for every choice. The plan moving since
+/// the preview is `commit_allocation`'s rule, tested with it.
 #[test]
-fn a_commit_is_refused_when_its_plan_moved_or_the_registry_check_disallows_it() {
+fn a_commit_is_refused_unless_the_registry_check_allows_every_choice() {
     let db = answered_db_with_bundle_weights(&[100, 50]);
     let confirmed = preview(&db, &request(), &early()).unwrap();
-    let mut other_quota = confirmed.clone();
-    other_quota.delegations[0].ballots += 1;
-    let mut other_kept = confirmed.clone();
-    other_kept.kept_ballots += 1;
-    let other_layout = ProxyAllocationPreview {
-        single_share: true,
-        ..confirmed.clone()
-    };
-    let mut cases = vec![
-        (
-            "another quota",
-            other_quota,
-            allowed(),
-            ProxyDelegationErrorKind::PlanChanged,
-        ),
-        (
-            "other kept ballots",
-            other_kept,
-            allowed(),
-            ProxyDelegationErrorKind::PlanChanged,
-        ),
-        (
-            "another layout",
-            other_layout,
-            allowed(),
-            ProxyDelegationErrorKind::PlanChanged,
-        ),
+    for (case, checks, expected) in [
         (
             "a missing verdict",
-            confirmed.clone(),
             vec![DelegateCheck::Ok],
             ProxyDelegationErrorKind::Other,
         ),
         (
             "an unverifiable entry",
-            confirmed.clone(),
             vec![DelegateCheck::Ok, DelegateCheck::CannotVerify],
             ProxyDelegationErrorKind::CannotVerify,
         ),
-    ];
-    for refusal in [
-        DelegateCheck::Suspended,
-        DelegateCheck::Retired,
-        DelegateCheck::NotFound,
-        DelegateCheck::Mismatch,
-    ] {
-        cases.push((
+        (
             "a refused delegate",
-            confirmed.clone(),
-            vec![refusal, DelegateCheck::Ok],
+            vec![DelegateCheck::Suspended, DelegateCheck::Ok],
             ProxyDelegationErrorKind::Other,
-        ));
-    }
-    for (case, confirmed, checks, expected) in cases {
+        ),
+    ] {
         assert_eq!(
             kind(commit(
                 &db,
@@ -254,24 +217,6 @@ fn a_vote_dispatched_after_the_preview_refuses_the_commit() {
         ProxyDelegationErrorKind::AlreadyVoted
     );
     assert!(!committed(&db));
-}
-
-#[test]
-fn a_preview_needs_the_round_s_timing_before_its_vote_end() {
-    let db = answered_db_with_bundle_weights(&[100, 50]);
-    for (host, expected) in [
-        (
-            host_at(10, None, Some(VOTE_END)),
-            ProxyDelegationErrorKind::Other,
-        ),
-        (host_at(10, Some(0), None), ProxyDelegationErrorKind::Other),
-        (
-            host_at(VOTE_END, Some(0), Some(VOTE_END)),
-            ProxyDelegationErrorKind::VoteEnded,
-        ),
-    ] {
-        assert_eq!(kind(preview(&db, &request(), &host)), expected);
-    }
 }
 
 /// A commit takes the round's timing from the host, as a preview does: it

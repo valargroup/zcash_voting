@@ -52,7 +52,7 @@ pub(super) fn bundles(weights: &[u64]) -> Vec<BundleBallots> {
 
 /// One bundle's weight, from a single ballot up to the circuit's 2^30 bound,
 /// with small weights common so the one-ballot floor and splits are hit.
-pub(super) fn bundle_weight() -> impl Strategy<Value = u64> {
+fn bundle_weight() -> impl Strategy<Value = u64> {
     prop_oneof![
         1u64..=8,
         9u64..=1_000,

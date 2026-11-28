@@ -224,11 +224,9 @@ fn the_plan_reports_each_bundle_s_batch_stage() {
 /// needs the registration signature from storage in its one transaction.
 #[test]
 fn the_snapshot_reads_each_batch_s_submission_state() {
-    use crate::proxy::{
-        batch::{sign_batch_attempt, AttemptSigningRequest},
-        tests::submission_fixtures::{
-            proved_batch, FixtureAnchor, CHAIN_ID, HOTKEY_SECRET, NETWORK, ROUND_ID, WALLET_ID,
-        },
+    use crate::chain_submission::tests::scripted_chain::sign_attempt;
+    use crate::proxy::tests::submission_fixtures::{
+        proved_batch, FixtureAnchor, ROUND_ID, WALLET_ID,
     };
     use crate::round_planning::load_round_snapshot;
 
@@ -247,20 +245,7 @@ fn the_snapshot_reads_each_batch_s_submission_state() {
         }
     );
 
-    sign_batch_attempt(
-        db,
-        AttemptSigningRequest {
-            round_id: ROUND_ID,
-            bundle_index: 0,
-            hotkey_seed: &HOTKEY_SECRET,
-            network: NETWORK,
-            chain_id: CHAIN_ID,
-            registration_signature: Some(fixture.registration_signature),
-            chain_height: 1_000,
-            stored_attempt_expired: false,
-        },
-    )
-    .unwrap();
+    sign_attempt(&fixture, 1_000, false);
     assert_eq!(read(), status(ProxyBatchProgress::Proved));
 
     db.conn()

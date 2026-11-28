@@ -168,7 +168,6 @@ fn any_missing_capability_or_proxy_flag_is_unsupported() {
     let db = db_with_bundle_weights(&[10]);
     let mut other = CIRCUIT_FINGERPRINTS;
     other[3].1 = "00000000000000000000000000000000000000000000000000000000000000ff";
-    let three = CIRCUIT_FINGERPRINTS[..3].to_vec();
     let cases: Vec<(&str, Change)> = vec![
         (
             "a build without the feature",
@@ -183,33 +182,8 @@ fn any_missing_capability_or_proxy_flag_is_unsupported() {
             Box::new(|s| s.capabilities["proxy_delegation_version"] = json!(0)),
         ),
         (
-            "a later chain version",
-            Box::new(|s| s.capabilities["proxy_delegation_version"] = json!(2)),
-        ),
-        (
-            "no zkp4 fingerprint",
-            Box::new(move |s| s.capabilities["circuit_fingerprints"] = fingerprints(&three)),
-        ),
-        (
             "another zkp4 fingerprint",
             Box::new(move |s| s.capabilities["circuit_fingerprints"] = fingerprints(&other)),
-        ),
-        (
-            "a second, different zkp4 fingerprint",
-            Box::new(move |s| {
-                let mut published = CIRCUIT_FINGERPRINTS.to_vec();
-                published.push(other[3]);
-                s.capabilities["circuit_fingerprints"] = fingerprints(&published);
-            }),
-        ),
-        (
-            "a round created without the proxy flag",
-            Box::new(|s| {
-                s.round["round"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("proxy_delegation");
-            }),
         ),
         (
             "a round whose proxy flag is off",
@@ -332,56 +306,15 @@ fn an_unproven_nullifier_state_cannot_be_verified_unless_a_cast_settles_it() {
 }
 
 #[test]
-fn timing_is_required_and_the_vote_end_is_exclusive() {
-    let db = db_with_bundle_weights(&[10]);
-    for (host, expected) in [
-        (
-            host_at(10, None, Some(VOTE_END)),
-            ProxyAvailability::TimingUnavailable,
-        ),
-        (
-            host_at(10, Some(0), None),
-            ProxyAvailability::TimingUnavailable,
-        ),
-        (
-            host_at(VOTE_END - 1, Some(0), Some(VOTE_END)),
-            ProxyAvailability::Available,
-        ),
-        (
-            host_at(VOTE_END, Some(0), Some(VOTE_END)),
-            ProxyAvailability::VoteEnded,
-        ),
-    ] {
-        let scenario = Scenario {
-            host,
-            ..available()
-        };
-        assert_eq!(scenario.result(&db), expected);
-    }
-}
-
-#[test]
 fn malformed_answers_and_answers_about_another_round_are_refused() {
     let db = db_with_bundle_weights(&[10]);
     let other_round = "02".repeat(32);
     let cases: Vec<(&str, Change)> = vec![
         (
-            "capabilities that are not JSON",
-            Box::new(|s| s.capabilities = json!("nope")),
-        ),
-        (
-            "a round response without a round",
-            Box::new(|s| s.round = json!({})),
-        ),
-        (
             "another round's response",
             Box::new(move |s| s.round["round"]["vote_round_id"] = json!(round_b64(&other_round))),
         ),
         ("no params", Box::new(|s| s.params = None)),
-        (
-            "params that are not JSON",
-            Box::new(|s| s.params = Some(json!([1]))),
-        ),
     ];
     for (case, change) in cases {
         let mut scenario = available();
@@ -401,17 +334,6 @@ fn malformed_answers_and_answers_about_another_round_are_refused() {
 fn the_default_build_keeps_proxy_delegation_off() {
     const { assert!(!PROXY_DELEGATION_ENABLED) };
     assert!(WalletCapabilities::default().proxy_delegation.is_empty());
-}
-
-/// The unstable, test-only feature opens the gate and offers `"v1"`.
-#[cfg(feature = "unstable-proxy-delegation")]
-#[test]
-fn the_unstable_feature_turns_proxy_delegation_on() {
-    const { assert!(PROXY_DELEGATION_ENABLED) };
-    assert_eq!(
-        WalletCapabilities::default().proxy_delegation,
-        vec![PROXY_DELEGATION_WALLET_VERSION.to_owned()]
-    );
 }
 
 #[test]

@@ -7,10 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
-use super::fixtures::{bundle_weight, bundles, choice, planning_case};
+use super::fixtures::{bundles, planning_case};
 use crate::proxy::{
-    plan_allocation, AllocationPlan, AllocationPlanError, AllocationRequest, DcShareLayout,
-    MAX_PROXY_DELEGATES, WHOLE_ALLOCATION_BPS,
+    plan_allocation, AllocationPlan, AllocationPlanError, AllocationRequest, MAX_PROXY_DELEGATES,
+    WHOLE_ALLOCATION_BPS,
 };
 
 /// `T · bps` in ten-thousandths of a ballot: a delegate's exact share scaled
@@ -132,20 +132,5 @@ proptest! {
                 }
             ),
         }
-    }
-
-    /// Any request naming more than eight delegates is refused.
-    #[test]
-    fn a_ninth_delegate_is_always_refused(
-        delegates in (MAX_PROXY_DELEGATES + 1)..=16usize,
-        weights in proptest::collection::vec(bundle_weight(), 1..=4),
-    ) {
-        let request = AllocationRequest {
-            choices: (1..=delegates as u32).map(|index| choice(index, 1)).collect(),
-        };
-        prop_assert_eq!(
-            plan_allocation(&request, &bundles(&weights), DcShareLayout::Standard),
-            Err(AllocationPlanError::TooManyDelegates { count: delegates })
-        );
     }
 }

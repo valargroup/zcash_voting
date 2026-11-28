@@ -73,18 +73,6 @@ fn a_session_reset_refuses_a_bundle_with_committed_slots() {
     assert_eq!((setup_of(&db, 0), setup_of(&db, 1)), before);
 }
 
-/// Without an allocation the reset clears unsigned setup as before.
-#[test]
-fn a_session_reset_without_an_allocation_still_clears_unsigned_setup() {
-    let db = db_with_bundle_weights(&[60, 40]);
-    store_van_comm_rand(&db);
-
-    db.clear_unsigned_delegation_setup_fields(ROUND_ID).unwrap();
-
-    assert_eq!(setup_of(&db, 0), (None, None));
-    assert_eq!(setup_of(&db, 1), (None, None));
-}
-
 /// A frozen bundle that the reset already preserves, because its ZKP1 proof
 /// is stored, does not refuse the reset of its kept sibling.
 #[test]

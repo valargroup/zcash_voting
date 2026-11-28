@@ -8,12 +8,10 @@ use super::{
     *,
 };
 use crate::{
+    chain_submission::tests::scripted_chain::sign_attempt,
     proxy::{
-        batch::{sign_batch_attempt, AttemptSigningRequest, ProvedProxyDc},
-        tests::submission_fixtures::{
-            proved_batch, FixtureAnchor, ProvedBatchFixture, CHAIN_ID, HOTKEY_SECRET, NETWORK,
-            ROUND_ID, WALLET_ID,
-        },
+        batch::ProvedProxyDc,
+        tests::submission_fixtures::{proved_batch, FixtureAnchor, NETWORK, ROUND_ID, WALLET_ID},
         DcShareLayout,
     },
     storage::VotingDb,
@@ -96,26 +94,6 @@ fn proxy_batch_generation_binds_every_dc_field_and_the_registration() {
     }
 }
 
-/// Signs bundle 0's attempt of the fixture batch at `chain_height`.
-fn sign(fixture: &ProvedBatchFixture, chain_height: u64) -> [u8; 32] {
-    sign_batch_attempt(
-        &fixture.db,
-        AttemptSigningRequest {
-            round_id: ROUND_ID,
-            bundle_index: 0,
-            hotkey_seed: &HOTKEY_SECRET,
-            network: NETWORK,
-            chain_id: CHAIN_ID,
-            registration_signature: Some(fixture.registration_signature),
-            chain_height,
-            stored_attempt_expired: false,
-        },
-    )
-    .unwrap()
-    .attempt
-    .batch_digest
-}
-
 fn fixture_identity(batch_digest: [u8; 32]) -> ChainSubmissionIdentity {
     ChainSubmissionIdentity::new(
         WALLET_ID,
@@ -134,7 +112,7 @@ fn derive(db: &VotingDb, batch_digest: [u8; 32]) -> Result<DerivedChainSubmissio
 #[test]
 fn derivation_rebuilds_the_signed_batch_its_layout_and_its_facts() {
     let fixture = proved_batch(FixtureAnchor::Registration);
-    let digest = sign(&fixture, 1_000);
+    let digest = sign_attempt(&fixture, 1_000, false);
 
     let derived = derive(&fixture.db, digest).unwrap();
 
@@ -182,10 +160,10 @@ fn derivation_rebuilds_the_signed_batch_its_layout_and_its_facts() {
 #[test]
 fn re_signing_keeps_the_generation_and_changes_only_the_request() {
     let fixture = proved_batch(FixtureAnchor::Registration);
-    let digest = sign(&fixture, 1_000);
+    let digest = sign_attempt(&fixture, 1_000, false);
     let first = derive(&fixture.db, digest).unwrap();
 
-    assert_eq!(sign(&fixture, 1_500), digest);
+    assert_eq!(sign_attempt(&fixture, 1_500, false), digest);
     let second = derive(&fixture.db, digest).unwrap();
 
     assert_eq!(
@@ -198,7 +176,7 @@ fn re_signing_keeps_the_generation_and_changes_only_the_request() {
 #[test]
 fn a_chain_anchored_batch_binds_no_registration_and_probes_no_split_off() {
     let fixture = proved_batch(FixtureAnchor::Chain);
-    let digest = sign(&fixture, 1_000);
+    let digest = sign_attempt(&fixture, 1_000, false);
 
     let derived = derive(&fixture.db, digest).unwrap();
 
@@ -213,7 +191,7 @@ fn a_chain_anchored_batch_binds_no_registration_and_probes_no_split_off() {
 #[test]
 fn derivation_refuses_another_batch_and_a_forged_signature() {
     let fixture = proved_batch(FixtureAnchor::Registration);
-    let digest = sign(&fixture, 1_000);
+    let digest = sign_attempt(&fixture, 1_000, false);
 
     let mut other = digest;
     other[0] ^= 1;

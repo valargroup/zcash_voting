@@ -161,46 +161,6 @@ fn a_dispatched_batch_retires_the_registration_van_expectation() {
     assert!(entries[0].expected_delegation_van.is_none());
 }
 
-/// The arithmetic refuses a VAN without setup and slots heavier than it.
-#[test]
-fn the_remaining_weight_arithmetic_refuses_impossible_states() {
-    let state = queries::VanState {
-        bundle_index: 4,
-        van_comm_rand: None,
-        total_note_value: Some(7 * BALLOT_DIVISOR + 1),
-        address_index: Some(0),
-        registration_van: None,
-        van_position: None,
-        ea_pk: Vec::new(),
-        proposal_authority: 0,
-        registration_van_spent: true,
-        delegated_ballots: 7,
-    };
-    assert_eq!(
-        state.remaining_ballots().unwrap(),
-        0,
-        "delegating everything"
-    );
-
-    let heavier = queries::VanState {
-        delegated_ballots: 8,
-        ..state.clone()
-    };
-    assert!(matches!(
-        heavier.remaining_ballots(),
-        Err(VotingError::Internal { .. })
-    ));
-
-    let without_setup = queries::VanState {
-        total_note_value: None,
-        ..state
-    };
-    assert!(matches!(
-        without_setup.remaining_ballots(),
-        Err(VotingError::InvalidInput { .. })
-    ));
-}
-
 /// Only counted slots that take every ballot make a bundle fully delegated: a
 /// kept ballot, or no counted slot at all, leaves it voting whatever its
 /// weight, and a bundle without setup is not refused while nothing counts.

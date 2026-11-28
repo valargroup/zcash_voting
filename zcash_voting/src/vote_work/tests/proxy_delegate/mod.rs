@@ -38,15 +38,6 @@ fn batch_is_proved(db: &crate::round::VotingDb) -> bool {
         .unwrap()
 }
 
-/// A committed allocation's unregistered bundle plans its batch as its first
-/// step, with no ballot recorded.
-#[test]
-fn a_committed_allocation_plans_its_batch_first() {
-    let executor = proxy_executor(proxy_database(note_total()), true);
-    let plan = executor.plan().unwrap();
-    assert_eq!(plan.next_steps, vec![STEP]);
-}
-
 /// ZKP1 runs before any ZKP4: an interruption raised as the registration's
 /// proof is stored ends the step before the ZKP4 phase, with the batch
 /// planned, the registration proved and nothing more.

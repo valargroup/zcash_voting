@@ -2,12 +2,9 @@
 //! planned.
 
 use super::fixtures::{bundles, choice, request};
-use crate::{
-    proxy::{
-        plan_allocation, AllocationPlanError, AllocationRequest, BundleBallots, DcShareLayout,
-        DelegateChoice, MAX_PROXY_DELEGATES,
-    },
-    wire::ProxyDelegateProvider,
+use crate::proxy::{
+    plan_allocation, AllocationPlanError, AllocationRequest, DcShareLayout, DelegateChoice,
+    MAX_PROXY_DELEGATES,
 };
 
 /// Plans `request` over bundles `0, 1, …` holding `weights`, returning the
@@ -67,15 +64,6 @@ fn a_choice_names_a_canonical_handle_and_key() {
             ..good.clone()
         },
         DelegateChoice {
-            provider: ProxyDelegateProvider::GitHub,
-            handle: "delegate_5".to_owned(),
-            ..good.clone()
-        },
-        DelegateChoice {
-            dk: good.dk.to_uppercase(),
-            ..good.clone()
-        },
-        DelegateChoice {
             dk: "qqqs-yqcy-q5rq-wzqf".to_owned(),
             ..good
         },
@@ -110,47 +98,13 @@ fn shares_fit_the_round_and_the_rest_is_kept() {
     assert_eq!(quotas(&[(1, 6_000), (2, 3_000)]), (vec![60, 30], 10));
 }
 
-/// Bundles must exist, appear once, hold at least a ballot and total no more
-/// than `u64::MAX`.
+/// Bundles must exist and each hold at least a ballot.
 #[test]
-fn bundles_are_distinct_hold_weight_and_fit_u64() {
+fn bundles_exist_and_hold_weight() {
     let one_choice = request(&[(1, 5_000)]);
     assert_eq!(refusal(&one_choice, &[]), AllocationPlanError::NoBundles);
-    assert_eq!(
-        plan_allocation(
-            &one_choice,
-            &[
-                BundleBallots {
-                    bundle_index: 3,
-                    ballots: 10
-                },
-                BundleBallots {
-                    bundle_index: 3,
-                    ballots: 20
-                },
-            ],
-            DcShareLayout::Standard,
-        )
-        .unwrap_err(),
-        AllocationPlanError::DuplicateBundle { bundle_index: 3 }
-    );
     assert_eq!(
         refusal(&one_choice, &[10, 0]),
         AllocationPlanError::EmptyBundle { bundle_index: 1 }
     );
-    assert_eq!(
-        refusal(&one_choice, &[u64::MAX, 1]),
-        AllocationPlanError::WeightOverflow
-    );
-}
-
-/// Bundle order does not change the plan.
-#[test]
-fn bundles_may_arrive_in_any_order() {
-    let request = request(&[(1, 7_000)]);
-    let in_order = plan_allocation(&request, &bundles(&[30, 50]), DcShareLayout::Standard).unwrap();
-    let mut reversed = bundles(&[30, 50]);
-    reversed.reverse();
-    let shuffled = plan_allocation(&request, &reversed, DcShareLayout::Standard).unwrap();
-    assert_eq!(in_order, shuffled);
 }

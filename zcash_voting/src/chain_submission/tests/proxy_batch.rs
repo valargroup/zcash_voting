@@ -12,12 +12,8 @@ use crate::{
         ChainSubmissionConfirmationSource, ChainSubmissionControl, ChainSubmissionDiagnosticKind,
         ChainSubmissionFailure, ChainSubmissionPending, ChainTransportError,
     },
-    proxy::{
-        batch::{sign_batch_attempt, AttemptSigningRequest},
-        tests::submission_fixtures::{
-            proved_batch, FixtureAnchor, ProvedBatchFixture, CHAIN_ID, HOTKEY_SECRET, NETWORK,
-            ROUND_ID, WALLET_ID,
-        },
+    proxy::tests::submission_fixtures::{
+        proved_batch, FixtureAnchor, ProvedBatchFixture, CHAIN_ID, NETWORK, ROUND_ID, WALLET_ID,
     },
     storage::{queries, VotingDb},
 };
@@ -28,25 +24,6 @@ fn signed(anchor: FixtureAnchor) -> (ProvedBatchFixture, [u8; 32]) {
     let fixture = proved_batch(anchor);
     let digest = sign_attempt(&fixture, SIGNED_AT, false);
     (fixture, digest)
-}
-
-fn sign_attempt(fixture: &ProvedBatchFixture, chain_height: u64, expired: bool) -> [u8; 32] {
-    sign_batch_attempt(
-        &fixture.db,
-        AttemptSigningRequest {
-            round_id: ROUND_ID,
-            bundle_index: 0,
-            hotkey_seed: &HOTKEY_SECRET,
-            network: NETWORK,
-            chain_id: CHAIN_ID,
-            registration_signature: Some(fixture.registration_signature),
-            chain_height,
-            stored_attempt_expired: expired,
-        },
-    )
-    .unwrap()
-    .attempt
-    .batch_digest
 }
 
 fn client(

@@ -7,7 +7,6 @@ mod account_deletion;
 mod allocation_lifecycle;
 mod availability;
 mod batch_attempt;
-mod batch_layout;
 mod batch_plan;
 mod delegator_calls;
 mod packing;

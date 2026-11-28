@@ -15,7 +15,12 @@ use crate::{
         ChainHttpRequest, ChainHttpResponse, ChainTransport, ChainTransportError,
         ChainTransportFuture,
     },
-    proxy::tests::submission_fixtures::{ProvedBatchFixture, REGISTRATION_POSITION, ROUND_ID},
+    proxy::{
+        batch::{sign_batch_attempt, AttemptSigningRequest},
+        tests::submission_fixtures::{
+            ProvedBatchFixture, CHAIN_ID, HOTKEY_SECRET, NETWORK, REGISTRATION_POSITION, ROUND_ID,
+        },
+    },
     storage::VotingDb,
 };
 
@@ -23,6 +28,31 @@ use crate::{
 pub(crate) const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 /// The height the fixture attempt is signed at.
 pub(crate) const SIGNED_AT: u64 = 1_000;
+
+/// Signs bundle 0's attempt of the fixture batch at `chain_height`, and
+/// returns its batch digest.
+pub(crate) fn sign_attempt(
+    fixture: &ProvedBatchFixture,
+    chain_height: u64,
+    expired: bool,
+) -> [u8; 32] {
+    sign_batch_attempt(
+        &fixture.db,
+        AttemptSigningRequest {
+            round_id: ROUND_ID,
+            bundle_index: 0,
+            hotkey_seed: &HOTKEY_SECRET,
+            network: NETWORK,
+            chain_id: CHAIN_ID,
+            registration_signature: Some(fixture.registration_signature),
+            chain_height,
+            stored_attempt_expired: expired,
+        },
+    )
+    .unwrap()
+    .attempt
+    .batch_digest
+}
 
 /// One scripted answer.
 pub(crate) type Reply = Result<ChainHttpResponse, ChainTransportError>;

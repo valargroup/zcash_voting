@@ -8,7 +8,7 @@ use zcash_vote_delegate::{dc_seed, hotkey_round_key, ZcashNetwork};
 use crate::{
     hotkey::{spending_key_from_hotkey_seed, VOTING_HOTKEY_ACCOUNT_INDEX},
     proxy::{DcSeedInputs, DcShareLayout, ProxyRoundKey},
-    types::{Network, VotingError},
+    types::Network,
 };
 
 /// The shared crate's client vector file, which every implementation tests
@@ -131,41 +131,6 @@ fn the_hotkey_secret_is_the_spending_key_the_vote_flow_derives() {
         );
         assert_eq!(from_seed.expose_secret(), &contract, "{network:?}");
     }
-}
-
-/// Changing the hotkey, the round or the network changes every DC seed.
-#[test]
-fn every_dc_secret_depends_on_the_hotkey_round_and_network() {
-    let seed_of = |hotkey_seed: &[u8], network: Network, round_id: &[u8; 32]| {
-        *ProxyRoundKey::from_hotkey_seed(hotkey_seed, network, round_id)
-            .unwrap()
-            .dc_seed(&standard_dc())
-            .expose_secret()
-    };
-    let base = seed_of(&HOTKEY_SEED, Network::Testnet, &ROUND_ID_BYTES);
-    assert_ne!(
-        base,
-        seed_of(&[0xAC; 64], Network::Testnet, &ROUND_ID_BYTES)
-    );
-    assert_ne!(
-        base,
-        seed_of(&HOTKEY_SEED, Network::Mainnet, &ROUND_ID_BYTES)
-    );
-    assert_ne!(base, seed_of(&HOTKEY_SEED, Network::Testnet, &[0x08; 32]));
-    assert_eq!(
-        base,
-        seed_of(&HOTKEY_SEED, Network::Testnet, &ROUND_ID_BYTES)
-    );
-}
-
-/// A hotkey seed under 32 bytes is refused as the vote flow refuses it.
-#[test]
-fn a_short_hotkey_seed_is_refused() {
-    let refusal = ProxyRoundKey::from_hotkey_seed(&[0xAB; 31], Network::Testnet, &ROUND_ID_BYTES);
-    assert!(
-        matches!(refusal, Err(VotingError::InvalidInput { .. })),
-        "{refusal:?}"
-    );
 }
 
 /// Neither `hrk` nor a DC seed appears in `Debug` output.

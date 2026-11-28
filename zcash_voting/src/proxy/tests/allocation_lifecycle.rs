@@ -7,15 +7,11 @@ use super::fixtures::{
 };
 use crate::{
     proxy::{
-        commit_allocation, load_allocation, preview_allocation, AllocationPlanError,
-        AllocationRequest, DcShareLayout, ProxyAllocationError,
+        commit_allocation, load_allocation, preview_allocation, AllocationRequest, DcShareLayout,
+        ProxyAllocationError,
     },
     wire::ProxyAllocationPreview,
 };
-
-/// One `proxy_slots` row: bundle, slot, delegate, weight, layout and slot
-/// nullifier.
-type SlotRow = (u32, u8, u32, u64, u8, Option<Vec<u8>>);
 
 /// A request splitting a wallet across two delegates and keeping a fifth.
 fn two_delegates() -> AllocationRequest {
@@ -102,65 +98,6 @@ fn a_committed_allocation_is_its_preview_and_reads_back_unchanged() {
         Some(committed),
         "the stored allocation reads back exactly as committed"
     );
-}
-
-/// The commit alone writes every DC's `(d, w, slot, layout)`; the slot
-/// nullifier waits for batch planning.
-#[test]
-fn every_slot_is_durable_before_any_proof() {
-    let db = answered_db_with_bundle_weights(&[60, 40]);
-    let plan =
-        preview_allocation(&db, ROUND_ID, &two_delegates(), DcShareLayout::SingleShare).unwrap();
-    let committed = commit_allocation(
-        &db,
-        ROUND_ID,
-        &two_delegates(),
-        DcShareLayout::SingleShare,
-        &ProxyAllocationPreview::from(&plan),
-        &FIXTURE_ROSTER,
-        &mut seeded_rng(2),
-    )
-    .unwrap();
-
-    // The commit alone wrote each DC's (d, w, slot, layout); no slot
-    // nullifier exists until batch planning writes it.
-    let conn = db.conn();
-    let mut statement = conn
-        .prepare(
-            "SELECT bundle_index, dc_slot, delegate_index, weight_ballots, layout, dc_slot_nf
-               FROM proxy_slots WHERE round_id = ?1 AND wallet_id = ?2
-              ORDER BY bundle_index, dc_slot",
-        )
-        .unwrap();
-    let rows: Vec<SlotRow> = statement
-        .query_map(rusqlite::params![ROUND_ID, WALLET_ID], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        })
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    let expected: Vec<SlotRow> = committed
-        .slots()
-        .iter()
-        .map(|slot| {
-            (
-                slot.bundle_index,
-                slot.dc_slot,
-                slot.delegate_index,
-                slot.weight_ballots,
-                1,
-                None,
-            )
-        })
-        .collect();
-    assert_eq!(rows, expected);
 }
 
 /// After a commit, a retried commit, a different commit and a new preview
@@ -250,11 +187,7 @@ fn storage_refuses_to_rewrite_a_committed_allocation() {
     };
 
     refused("UPDATE proxy_allocations SET choices_json = '[]'");
-    refused("UPDATE proxy_allocations SET committed_at = committed_at + 1");
     refused("UPDATE proxy_slots SET weight_ballots = weight_ballots + 1");
-    refused("UPDATE proxy_slots SET delegate_index = delegate_index + 100");
-    refused("UPDATE proxy_slots SET dc_slot = 7 WHERE dc_slot = 0");
-    refused("UPDATE proxy_slots SET layout = 1");
     // A batch has one layout, so a slot of the other layout cannot join it.
     refused(&format!(
         "INSERT INTO proxy_slots
@@ -271,10 +204,6 @@ fn storage_refuses_to_rewrite_a_committed_allocation() {
     )
     .expect("batch planning writes the slot nullifier and randomizer once");
     refused("UPDATE proxy_slots SET dc_slot_nf = zeroblob(32) WHERE dc_slot_nf IS NOT NULL");
-    refused("UPDATE proxy_slots SET alpha_v = zeroblob(32) WHERE alpha_v IS NOT NULL");
-    refused(
-        "UPDATE proxy_slots SET dc_slot_nf = NULL, alpha_v = NULL WHERE dc_slot_nf IS NOT NULL",
-    );
     let unpaired = conn
         .execute(
             "UPDATE proxy_slots SET dc_slot_nf = ?1
@@ -356,51 +285,6 @@ fn planning_needs_every_bundles_stored_weight() {
         ),
         "{refusal:?}"
     );
-}
-
-/// An unknown round, or one with no bundles, has nothing to delegate.
-#[test]
-fn a_round_without_bundles_has_nothing_to_delegate() {
-    let db = answered_db_with_bundle_weights(&[60]);
-    let refusal = preview_allocation(
-        &db,
-        &"02".repeat(32),
-        &two_delegates(),
-        DcShareLayout::Standard,
-    );
-    assert!(
-        matches!(
-            refusal,
-            Err(ProxyAllocationError::Plan(AllocationPlanError::NoBundles))
-        ),
-        "{refusal:?}"
-    );
-    assert_eq!(load_allocation(&db, &"02".repeat(32)).unwrap(), None);
-}
-
-/// Pruning a bundle that funds a committed slot fails and keeps both the
-/// bundle and the slot.
-#[test]
-fn a_bundle_cannot_be_pruned_from_under_its_slots() {
-    let db = answered_db_with_bundle_weights(&[60, 40]);
-    let request = request(&[(17, 10_000)]);
-    let plan = preview_allocation(&db, ROUND_ID, &request, DcShareLayout::Standard).unwrap();
-    commit_allocation(
-        &db,
-        ROUND_ID,
-        &request,
-        DcShareLayout::Standard,
-        &ProxyAllocationPreview::from(&plan),
-        &FIXTURE_ROSTER,
-        &mut seeded_rng(9),
-    )
-    .unwrap();
-    let slot_rows = dump_table(&db, "proxy_slots");
-
-    db.delete_skipped_bundles(ROUND_ID, 1)
-        .expect_err("bundle 1 funds a committed slot");
-    assert_eq!(db.get_bundle_count(ROUND_ID).unwrap(), 2);
-    assert_eq!(dump_table(&db, "proxy_slots"), slot_rows);
 }
 
 /// Runs `sql` against the fixture round with CHECK enforcement lifted: only

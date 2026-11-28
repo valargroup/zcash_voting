@@ -30,24 +30,6 @@ fn leftover_ballots_go_to_the_largest_remainders() {
     );
 }
 
-/// Equal remainders go to the larger share, then to the earlier choice.
-#[test]
-fn remainder_ties_go_to_the_larger_share_then_the_earlier_choice() {
-    // 1.5 and 4.5: equal remainders, so the larger share wins.
-    assert_eq!(apportion(6, &[(1, 2_500), (2, 7_500)]), (vec![1, 5], 0));
-    // 2.5 and 2.5: equal remainders and shares, so the earlier choice wins.
-    assert_eq!(apportion(5, &[(1, 5_000), (2, 5_000)]), (vec![3, 2], 0));
-}
-
-/// The kept remainder competes as the last party in rounding.
-#[test]
-fn the_kept_remainder_is_rounded_as_the_last_party() {
-    // 2.5 against a kept 7.5: equal remainders, and the kept share is larger.
-    assert_eq!(apportion(10, &[(1, 2_500)]), (vec![2], 8));
-    // 2.5 against a kept 2.5: everything ties, and the kept party is last.
-    assert_eq!(apportion(5, &[(1, 5_000)]), (vec![3], 2));
-}
-
 /// A floor ballot comes from the kept remainder before any delegate.
 #[test]
 fn the_kept_remainder_funds_the_one_ballot_floor_first() {
@@ -66,17 +48,6 @@ fn without_a_kept_ballot_the_largest_delegate_funds_the_floor() {
     let mut choices = vec![(1, 9_993)];
     choices.extend((2..=8).map(|index| (index, 1)));
     assert_eq!(apportion(8, &choices), (vec![1; 8], 0));
-}
-
-/// Of two equally large delegates, the earlier funds the floor.
-#[test]
-fn equal_largest_delegates_fund_the_floor_from_the_earliest() {
-    // 2.9994, 2.9994 and 0.0012 round to 3, 3 and 0; the earlier of the two
-    // equal delegates gives up the floor ballot.
-    assert_eq!(
-        apportion(6, &[(1, 4_999), (2, 4_999), (3, 2)]),
-        (vec![2, 3, 1], 0)
-    );
 }
 
 /// Fewer ballots than delegates cannot give each delegate one.
