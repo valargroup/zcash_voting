@@ -5,8 +5,10 @@
 //! zcash-vote-delegate v1 zvdk1…
 //! ```
 //!
-//! A post matches when its text after [`normalize_marker_whitespace`] equals
-//! this form exactly, case included.
+//! A post matches when its text, trimmed and with each inner whitespace run
+//! collapsed to one space, equals this form exactly, case included.
+//! Whitespace is Unicode `White_Space`, as Rust's `char::is_whitespace` and
+//! Go's `unicode.IsSpace` both use.
 
 use std::fmt;
 
@@ -59,10 +61,9 @@ impl DelegateMarker {
     /// Parses a post's whole text. Succeeds exactly when the normalized text
     /// equals [`Self::to_text`] of the result.
     pub fn parse(post_text: &str) -> Result<Self, MarkerError> {
-        let normalized = normalize_marker_whitespace(post_text);
-        let words: Vec<&str> = normalized.split(' ').collect();
+        let words: Vec<&str> = post_text.split_whitespace().collect();
         let key = match words.as_slice() {
-            [prefix, ..] if *prefix != MARKER_PREFIX => return Err(MarkerError::NotAMarker),
+            _ if words.first() != Some(&MARKER_PREFIX) => return Err(MarkerError::NotAMarker),
             [_, version, ..] if *version != MARKER_VERSION => {
                 return Err(MarkerError::UnsupportedVersion)
             }
@@ -72,11 +73,4 @@ impl DelegateMarker {
         let dk = DelegateKey::decode(key).map_err(MarkerError::InvalidKey)?;
         Ok(Self { dk })
     }
-}
-
-/// Trims whitespace and collapses each inner run to one space. Whitespace is
-/// Unicode `White_Space`, as Rust's `char::is_whitespace` and Go's
-/// `unicode.IsSpace` both use.
-pub fn normalize_marker_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

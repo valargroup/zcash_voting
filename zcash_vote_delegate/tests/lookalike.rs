@@ -1,7 +1,11 @@
 //! The optimal-string-alignment check (§11.7). The vectors pin the fold and
 //! the verdict of each pair.
 
-use zcash_vote_delegate::{are_lookalikes, fold_handle, osa_distance};
+#[path = "vectors/osa.rs"]
+mod osa;
+
+use osa::osa_distance;
+use zcash_vote_delegate::{are_lookalikes, fold_handle};
 
 /// Every string over `alphabet` of length at most `max_len`.
 fn strings(alphabet: &[char], max_len: usize) -> Vec<String> {

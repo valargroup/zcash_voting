@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use super::RegistryError;
 
-/// The URL lists of `extensions.proxy_delegation_v1`.
+/// The URL lists of `extensions.proxy_delegation_v1`. An absent list reads
+/// as empty.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProxyServiceUrls {
     /// The verifier API the delegate app registers through.
     pub verifier_api_urls: Vec<String>,
@@ -31,11 +33,7 @@ pub fn proxy_service_urls(
         })?;
     Ok(document
         .extensions
-        .and_then(|extensions| extensions.proxy_delegation_v1)
-        .map(|wire| ProxyServiceUrls {
-            verifier_api_urls: wire.verifier_api_urls,
-            proof_rpc_urls: wire.proof_rpc_urls,
-        }))
+        .and_then(|extensions| extensions.proxy_delegation_v1))
 }
 
 /// The parts of a dynamic config document this module reads.
@@ -49,14 +47,5 @@ struct DynamicConfigExtensions {
 #[derive(Deserialize)]
 struct ExtensionsWire {
     #[serde(default)]
-    proxy_delegation_v1: Option<ProxyDelegationWire>,
-}
-
-/// `extensions.proxy_delegation_v1`.
-#[derive(Deserialize)]
-struct ProxyDelegationWire {
-    #[serde(default)]
-    verifier_api_urls: Vec<String>,
-    #[serde(default)]
-    proof_rpc_urls: Vec<String>,
+    proxy_delegation_v1: Option<ProxyServiceUrls>,
 }

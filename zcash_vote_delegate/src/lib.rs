@@ -4,8 +4,8 @@
 //! The crate is pure. It encodes, hashes, parses and checks, and never touches
 //! the network, storage or a proving system. By contract section:
 //!
-//! - Digests (§0, §4): [`DigestPreimage`], [`proxy_batch_sighash`] (D1),
-//!   [`proxy_batch_digest`] and the registry digests such as [`register_digest`].
+//! - Digests (§0, §4): [`proxy_batch_sighash`] (D1), [`proxy_batch_digest`]
+//!   and the registry digests such as [`register_digest`].
 //! - Canonical handles and proof ids (§2.5): [`is_canonical_handle`] and
 //!   [`is_canonical_proof_id`].
 //! - Chain state (§3): the store keys and [`ProxyDelegateEntry`].
@@ -28,7 +28,6 @@ mod digest_encoding;
 mod digests;
 mod ed25519_rule;
 mod handle;
-mod json_document;
 mod lookalike;
 mod marker;
 mod store_keys;
@@ -41,7 +40,8 @@ pub use delegate_key::{
     DelegateFingerprint, DelegateKey, DelegateKeyDecodeError, DelegateSigningKey,
     FingerprintParseError, DELEGATE_KEY_HRP, DELEGATE_SECRET_HRP,
 };
-pub use digest_encoding::{DigestError, DigestPreimage};
+pub use digest_encoding::DigestError;
+use digest_encoding::DigestPreimage;
 pub use digests::{
     attest_digest, ballot_digest, proxy_batch_digest, proxy_batch_sighash, register_digest,
     retire_digest, AttestationWindow, DelegateBallotFields, DelegateRegisterFields,
@@ -52,10 +52,8 @@ pub use digests::{
 };
 pub use ed25519_rule::{validate_ed25519_key, verify_zip215, Ed25519KeyError, SignatureError};
 pub use handle::{is_canonical_handle, is_canonical_proof_id, normalize_handle};
-pub use lookalike::{are_lookalikes, fold_handle, osa_distance};
-pub use marker::{
-    normalize_marker_whitespace, DelegateMarker, MarkerError, MARKER_PREFIX, MARKER_VERSION,
-};
+pub use lookalike::{are_lookalikes, fold_handle};
+pub use marker::{DelegateMarker, MarkerError, MARKER_PREFIX, MARKER_VERSION};
 pub use store_keys::{
     delegate_ballot_store_key, delegate_entry_store_key, delegate_handle_store_key,
     pool_share_count_store_key, used_delegate_key_store_key, DELEGATE_BALLOT_PREFIX,

@@ -9,20 +9,18 @@ use crate::{DigestError, DigestPreimage};
 
 /// The identity provider whose account a delegate registers with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
 pub enum IdentityProvider {
     /// X, identified by its handle. Wire code 1.
-    X,
+    X = 1,
     /// GitHub, identified by the gist owner's login. Wire code 2.
-    GitHub,
+    GitHub = 2,
 }
 
 impl IdentityProvider {
     /// The provider's wire code: 1 for X, 2 for GitHub.
     pub const fn code(self) -> u32 {
-        match self {
-            Self::X => 1,
-            Self::GitHub => 2,
-        }
+        self as u32
     }
 
     /// The provider for a wire code, or `None` for any code other than 1 or 2.
@@ -110,7 +108,7 @@ pub fn retire_digest(
 ) -> Result<[u8; 32], DigestError> {
     let mut preimage = DigestPreimage::new(DELEGATE_RETIRE_DOMAIN, chain_id)?;
     preimage.write_u32_as_32(retirement.delegate_index);
-    preimage.write32(&retirement.dk)?;
+    preimage.write32(&retirement.dk);
     Ok(preimage.finish())
 }
 
@@ -121,7 +119,7 @@ pub fn ballot_digest(
     ballot: &DelegateBallotFields,
 ) -> Result<[u8; 32], DigestError> {
     let mut preimage = DigestPreimage::new(DELEGATE_BALLOT_DOMAIN, chain_id)?;
-    preimage.write32(&ballot.vote_round_id)?;
+    preimage.write32(&ballot.vote_round_id);
     preimage.write_u32_as_32(ballot.delegate_index);
     preimage.write_count(ballot.options.len())?;
     for option in &ballot.options {
@@ -135,7 +133,7 @@ fn write_registration(
     preimage: &mut DigestPreimage,
     registration: &DelegateRegisterFields<'_>,
 ) -> Result<(), DigestError> {
-    preimage.write32(&registration.dk)?;
+    preimage.write32(&registration.dk);
     preimage.write_u32_as_32(registration.provider.code());
     preimage.write_lp8(registration.handle.as_bytes())?;
     preimage.write_lp8(registration.proof_id.as_bytes())

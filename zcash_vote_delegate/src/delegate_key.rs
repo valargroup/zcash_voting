@@ -213,12 +213,6 @@ impl DelegateFingerprint {
         }
         Ok(Self(bits))
     }
-
-    /// The canonical display with the entry index, such as
-    /// `#17 · qqqs-yqcy-q5rq-wzqf`.
-    pub fn display_with_index(&self, delegate_index: u32) -> String {
-        format!("#{delegate_index} \u{b7} {self}")
-    }
 }
 
 impl fmt::Display for DelegateFingerprint {

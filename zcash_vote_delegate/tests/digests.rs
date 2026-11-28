@@ -4,7 +4,7 @@
 use zcash_vote_delegate::{
     ballot_digest, proxy_batch_digest, proxy_batch_sighash, register_digest, retire_digest,
     DelegateBallotFields, DelegateRegisterFields, DelegateRetireFields, DigestError,
-    DigestPreimage, IdentityProvider, ProxyDelegationActionFields, ProxyDelegationBatchFields,
+    IdentityProvider, ProxyDelegationActionFields, ProxyDelegationBatchFields,
 };
 
 const CHAIN_ID: &str = "zvote-1";
@@ -42,10 +42,6 @@ fn registration() -> DelegateRegisterFields<'static> {
 fn every_digest_rejects_an_overlong_chain_id() {
     let chain_id = "z".repeat(256);
     let overflow = Err(DigestError::LengthPrefixOverflow { actual: 256 });
-    assert_eq!(
-        DigestPreimage::new("D", &chain_id).map(|preimage| preimage.finish()),
-        overflow
-    );
     assert_eq!(
         proxy_batch_sighash(&chain_id, &batch_with_registration()),
         overflow

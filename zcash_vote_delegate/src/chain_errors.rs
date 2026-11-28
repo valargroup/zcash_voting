@@ -8,55 +8,56 @@ pub const VOTE_CODESPACE: &str = "vote";
 /// A registered `vote` error a proxy delegation path can return. The
 /// contract §6 table says how a client handles each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
 pub enum ProxyChainError {
     /// 2: a nullifier is already spent.
-    DuplicateNullifier,
+    DuplicateNullifier = 2,
     /// 3: the round does not exist.
-    RoundNotFound,
+    RoundNotFound = 3,
     /// 4: the round is not active, or its voting window has closed.
-    RoundNotActive,
+    RoundNotActive = 4,
     /// 5: a zero-knowledge proof does not verify.
-    InvalidProof,
+    InvalidProof = 5,
     /// 6: a RedPallas or Ed25519 signature does not verify.
-    InvalidSignature,
+    InvalidSignature = 6,
     /// 7: the commitment-tree anchor height has no root.
-    InvalidAnchorHeight,
+    InvalidAnchorHeight = 7,
     /// 9: a message field fails `ValidateBasic`.
-    InvalidField,
+    InvalidField = 9,
     /// 11: the commitment tree cannot take the batch's leaves.
-    CommitmentTreeFull,
+    CommitmentTreeFull = 11,
     /// 51: coordinators have paused new DC batches.
-    ProxyDelegationPaused,
+    ProxyDelegationPaused = 51,
     /// 52: the batch reached its `expiry_height` without landing.
-    ProxyBatchExpired,
+    ProxyBatchExpired = 52,
     /// 53: no delegate entry has this index.
-    DelegateNotFound,
+    DelegateNotFound = 53,
     /// 54: the delegate is suspended.
-    DelegateSuspended,
+    DelegateSuspended = 54,
     /// 55: the delegate is retired.
-    DelegateRetired,
+    DelegateRetired = 55,
     /// 57: the delegate already has a ballot in this round.
-    DelegateBallotExists,
+    DelegateBallotExists = 57,
     /// 58: the ballot has the wrong option count or an option out of range.
-    InvalidBallot,
+    InvalidBallot = 58,
     /// 59: the params verifier set is empty, so registration is closed.
-    RegistrationClosed,
+    RegistrationClosed = 59,
     /// 60: the registry has reached `max_delegates`.
-    RegistryFull,
+    RegistryFull = 60,
     /// 61: the delegate key was registered before.
-    DelegateKeyReused,
+    DelegateKeyReused = 61,
     /// 62: the handle already has a live entry.
-    HandleTaken,
+    HandleTaken = 62,
     /// 64: an attestation's verifier, window or signature is invalid.
-    InvalidAttestation,
+    InvalidAttestation = 64,
     /// 65: too few distinct verifiers attested.
-    InsufficientAttestations,
+    InsufficientAttestations = 65,
     /// 66: a delegate or verifier key fails the Ed25519 key rule.
-    InvalidDelegateKey,
+    InvalidDelegateKey = 66,
     /// 68: the params payload is invalid.
-    InvalidProxyParams,
+    InvalidProxyParams = 68,
     /// 69: the round is not a proxy round, or proxy delegation is off.
-    ProxyDelegationDisabled,
+    ProxyDelegationDisabled = 69,
 }
 
 impl ProxyChainError {
@@ -90,32 +91,7 @@ impl ProxyChainError {
 
     /// The registered ABCI code in [`VOTE_CODESPACE`].
     pub const fn code(self) -> u32 {
-        match self {
-            Self::DuplicateNullifier => 2,
-            Self::RoundNotFound => 3,
-            Self::RoundNotActive => 4,
-            Self::InvalidProof => 5,
-            Self::InvalidSignature => 6,
-            Self::InvalidAnchorHeight => 7,
-            Self::InvalidField => 9,
-            Self::CommitmentTreeFull => 11,
-            Self::ProxyDelegationPaused => 51,
-            Self::ProxyBatchExpired => 52,
-            Self::DelegateNotFound => 53,
-            Self::DelegateSuspended => 54,
-            Self::DelegateRetired => 55,
-            Self::DelegateBallotExists => 57,
-            Self::InvalidBallot => 58,
-            Self::RegistrationClosed => 59,
-            Self::RegistryFull => 60,
-            Self::DelegateKeyReused => 61,
-            Self::HandleTaken => 62,
-            Self::InvalidAttestation => 64,
-            Self::InsufficientAttestations => 65,
-            Self::InvalidDelegateKey => 66,
-            Self::InvalidProxyParams => 68,
-            Self::ProxyDelegationDisabled => 69,
-        }
+        self as u32
     }
 
     /// The Go identifier vote-sdk registers it under.

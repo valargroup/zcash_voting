@@ -13,23 +13,22 @@
 //! Only proven entries are trusted. The cache can at most change what is
 //! shown, never what a commit accepts.
 
-pub(in crate::proxy) mod encoding;
 mod listing;
 mod pre_proving;
 mod proofs;
-mod proven_entry;
 mod registry_cache;
 mod service_urls;
 mod view;
 mod wallet_list;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use thiserror::Error;
 
 pub use pre_proving::{check_delegates, confirm_proof_requests, ConfirmContext, ConfirmedDelegate};
 pub use proofs::{
-    ProvenRecord, ProvenValue, RegistryProofRequest, MAX_REGISTRY_ENTRY_BYTES, REGISTRY_PROOF_STORE,
+    DelegateEntryError, ProvenDelegateEntry, ProvenRecord, ProvenValue, RegistryProofRequest,
+    MAX_REGISTRY_ENTRY_BYTES, REGISTRY_PROOF_STORE,
 };
-pub use proven_entry::{DelegateEntryError, ProvenDelegateEntry};
 pub use registry_cache::{
     parse_registry_page, registry_page_path, RegistryCache, RegistryPage, REGISTRY_PAGE_LIMIT,
 };
@@ -49,6 +48,18 @@ pub enum RegistryError {
         /// What is wrong.
         message: String,
     },
+}
+
+/// Exactly `N` bytes from canonical base64. See [`base64_bytes`].
+pub(in crate::proxy) fn base64_array<const N: usize>(text: &str) -> Option<[u8; N]> {
+    base64_bytes(text)?.try_into().ok()
+}
+
+/// Bytes from padded standard base64 with zero padding bits, as Go's
+/// `encoding/json` writes (contract §0). The engine rejects any other
+/// encoding, so equal bytes have one accepted text.
+pub(in crate::proxy) fn base64_bytes(text: &str) -> Option<Vec<u8>> {
+    BASE64.decode(text).ok()
 }
 
 #[cfg(test)]

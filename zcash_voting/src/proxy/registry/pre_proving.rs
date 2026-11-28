@@ -5,8 +5,7 @@ use zcash_vote_delegate::{DelegateStatus, ProxyDelegateEntry, VerifiedWalletList
 
 use super::{
     listing::{identity_provider, listing},
-    proofs::proven_value,
-    DelegateEntryError, ProvenDelegateEntry, ProvenRecord, RegistryProofRequest,
+    DelegateEntryError, ProvenDelegateEntry, ProvenRecord, ProvenValue, RegistryProofRequest,
 };
 use crate::wire::{
     DelegateCheck, ProxyAllocationRequest, ProxyDelegateChoice, ProxyDelegateListing,
@@ -68,7 +67,10 @@ pub fn check_delegates(
         .choices
         .iter()
         .map(|choice| {
-            let proof = proven_value(proven, choice.delegate_index);
+            let proof = proven
+                .iter()
+                .find(|record| record.request.delegate_index == choice.delegate_index)
+                .map_or(&ProvenValue::Unavailable, |record| &record.value);
             let (check, entry) = match ProvenDelegateEntry::from_proof(choice.delegate_index, proof)
             {
                 Ok(Some(entry)) => (verdict(choice, entry.entry()), Some(entry)),

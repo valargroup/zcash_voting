@@ -18,42 +18,37 @@ const DC_SEED_PERSONALIZATION: &[u8; 16] = b"ZVoteProxySeed01";
 
 /// The Zcash network a round hotkey belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum ZcashNetwork {
     /// Mainnet, `net_u8 = 0`.
-    Mainnet,
+    Mainnet = 0,
     /// Testnet, `net_u8 = 1`.
-    Testnet,
+    Testnet = 1,
     /// Regtest, `net_u8 = 2`.
-    Regtest,
+    Regtest = 2,
 }
 
 impl ZcashNetwork {
     /// The network byte, matching zcash_voting's `network_rank`.
     pub const fn net_u8(self) -> u8 {
-        match self {
-            Self::Mainnet => 0,
-            Self::Testnet => 1,
-            Self::Regtest => 2,
-        }
+        self as u8
     }
 }
 
 /// How a DC's weight is split into helper shares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum DcShareLayout {
     /// 16 shares on the standard schedule, `layout_u8 = 0`.
-    Standard,
+    Standard = 0,
     /// One share holding the whole weight (last-moment window), `layout_u8 = 1`.
-    SingleShare,
+    SingleShare = 1,
 }
 
 impl DcShareLayout {
     /// The layout byte bound into `dc_seed`.
     pub const fn layout_u8(self) -> u8 {
-        match self {
-            Self::Standard => 0,
-            Self::SingleShare => 1,
-        }
+        self as u8
     }
 }
 

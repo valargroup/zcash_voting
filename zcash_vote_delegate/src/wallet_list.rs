@@ -4,16 +4,15 @@
 //! Every member except `signatures` is signed, so unknown members are refused.
 //! The caller keeps the newest verified version per wallet and chain.
 
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
-use serde::Deserialize;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use serde::{de, Deserialize, Deserializer};
 use unicode_normalization::is_nfc;
 
 use crate::{
-    delegate_key::decode_key_string,
-    is_canonical_handle,
-    json_document::{decode_canonical_base64, document_format, present_string},
-    verify_zip215, DelegateStatus, IdentityProvider, ProxyDelegateEntry,
+    delegate_key::decode_key_string, is_canonical_handle, verify_zip215, DelegateStatus,
+    IdentityProvider, ProxyDelegateEntry,
 };
 
 /// The wallet list's `format`.
@@ -100,37 +99,10 @@ impl WalletList {
     /// Checks the field rules and builds `WalletListPayloadV1`, the bytes every
     /// signature covers: the domain, then each field raw or little-endian in
     /// list order, the key as its 32 bytes, and absent statements and pictures
-    /// empty. Fails on the first field rule broken, row by row.
+    /// empty. Each field is checked just before it is written, which is the
+    /// contract's table order, so the error is the first rule broken, row by
+    /// row.
     pub fn payload(&self) -> Result<Vec<u8>, WalletListError> {
-        self.check_fields()?;
-        let mut payload = WALLET_LIST_DOMAIN.to_vec();
-        push_lp8(&mut payload, self.wallet_id.as_bytes());
-        push_lp8(&mut payload, self.chain_id.as_bytes());
-        payload.extend_from_slice(&self.version.to_le_bytes());
-        payload.extend_from_slice(&self.issued_at.to_le_bytes());
-        push_count16(&mut payload, self.reserved_names.len());
-        for name in &self.reserved_names {
-            push_lp8(&mut payload, name.as_bytes());
-        }
-        push_count16(&mut payload, self.delegates.len());
-        for row in &self.delegates {
-            payload.extend_from_slice(&row.index.to_le_bytes());
-            payload.extend_from_slice(&row.provider.to_le_bytes());
-            push_lp8(&mut payload, row.handle.as_bytes());
-            let dk = decode_key_string(&row.dk).expect("check_fields accepted every key");
-            payload.extend_from_slice(&dk);
-            push_lp8(&mut payload, row.name.as_bytes());
-            push_lp16(
-                &mut payload,
-                row.statement.as_deref().unwrap_or_default().as_bytes(),
-            );
-            push_lp16(&mut payload, row.picture.as_deref().unwrap_or_default());
-        }
-        Ok(payload)
-    }
-
-    /// The field rules, in the contract's table order and row by row.
-    fn check_fields(&self) -> Result<(), WalletListError> {
         if !is_wallet_id(&self.wallet_id) {
             return Err(WalletListError::InvalidWalletId);
         }
@@ -146,6 +118,12 @@ impl WalletList {
         if self.reserved_names.len() > MAX_RESERVED_NAMES {
             return Err(WalletListError::TooManyReservedNames);
         }
+        let mut payload = WALLET_LIST_DOMAIN.to_vec();
+        push_lp8(&mut payload, self.wallet_id.as_bytes());
+        push_lp8(&mut payload, self.chain_id.as_bytes());
+        payload.extend_from_slice(&self.version.to_le_bytes());
+        payload.extend_from_slice(&self.issued_at.to_le_bytes());
+        push_count16(&mut payload, self.reserved_names.len());
         for (position, name) in self.reserved_names.iter().enumerate() {
             if !is_reserved_name(name) {
                 return Err(WalletListError::InvalidReservedName);
@@ -153,10 +131,12 @@ impl WalletList {
             if self.reserved_names[..position].contains(name) {
                 return Err(WalletListError::RepeatedReservedName);
             }
+            push_lp8(&mut payload, name.as_bytes());
         }
         if self.delegates.len() > MAX_WALLET_LIST_ROWS {
             return Err(WalletListError::TooManyDelegates);
         }
+        push_count16(&mut payload, self.delegates.len());
         let mut previous_index = 0;
         for row in &self.delegates {
             if row.index == 0 {
@@ -166,40 +146,40 @@ impl WalletList {
                 return Err(WalletListError::IndexNotAscending);
             }
             previous_index = row.index;
-            row.check_fields()?;
-        }
-        Ok(())
-    }
-}
-
-impl WalletListRow {
-    /// A row's rules after its index, in the contract's table order.
-    fn check_fields(&self) -> Result<(), WalletListError> {
-        let provider =
-            IdentityProvider::from_code(self.provider).ok_or(WalletListError::InvalidProvider)?;
-        if !is_canonical_handle(provider, &self.handle) {
-            return Err(WalletListError::InvalidHandle);
-        }
-        if decode_key_string(&self.dk).is_err() {
-            return Err(WalletListError::InvalidKey);
-        }
-        if !is_display_text(&self.name, MAX_LIST_NAME_CHARS, false) {
-            return Err(WalletListError::InvalidName);
-        }
-        if let Some(statement) = &self.statement {
-            if !is_display_text(statement, MAX_LIST_STATEMENT_CHARS, true) {
-                return Err(WalletListError::InvalidStatement);
+            let provider = IdentityProvider::from_code(row.provider)
+                .ok_or(WalletListError::InvalidProvider)?;
+            if !is_canonical_handle(provider, &row.handle) {
+                return Err(WalletListError::InvalidHandle);
             }
-        }
-        if let Some(picture) = &self.picture {
-            if picture.len() > MAX_LIST_PICTURE_BYTES {
-                return Err(WalletListError::PictureTooLarge);
+            let dk = decode_key_string(&row.dk).map_err(|_| WalletListError::InvalidKey)?;
+            if !is_display_text(&row.name, MAX_LIST_NAME_CHARS, false) {
+                return Err(WalletListError::InvalidName);
             }
-            if !is_webp_container(picture) {
-                return Err(WalletListError::InvalidPicture);
+            if let Some(statement) = &row.statement {
+                if !is_display_text(statement, MAX_LIST_STATEMENT_CHARS, true) {
+                    return Err(WalletListError::InvalidStatement);
+                }
             }
+            if let Some(picture) = &row.picture {
+                if picture.len() > MAX_LIST_PICTURE_BYTES {
+                    return Err(WalletListError::PictureTooLarge);
+                }
+                if !is_webp_container(picture) {
+                    return Err(WalletListError::InvalidPicture);
+                }
+            }
+            payload.extend_from_slice(&row.index.to_le_bytes());
+            payload.extend_from_slice(&row.provider.to_le_bytes());
+            push_lp8(&mut payload, row.handle.as_bytes());
+            payload.extend_from_slice(&dk);
+            push_lp8(&mut payload, row.name.as_bytes());
+            push_lp16(
+                &mut payload,
+                row.statement.as_deref().unwrap_or_default().as_bytes(),
+            );
+            push_lp16(&mut payload, row.picture.as_deref().unwrap_or_default());
         }
-        Ok(())
+        Ok(payload)
     }
 }
 
@@ -425,7 +405,9 @@ impl WalletListWire {
         self.signatures
             .iter()
             .map(|signature| {
-                let sig = decode_canonical_base64(&signature.sig)
+                let sig = STANDARD
+                    .decode(&signature.sig)
+                    .ok()
                     .and_then(|sig| <[u8; 64]>::try_from(sig).ok());
                 match sig {
                     Some(sig)
@@ -448,7 +430,11 @@ impl WalletListWire {
             .map(|row| {
                 let picture = row
                     .picture
-                    .map(|text| decode_canonical_base64(&text).ok_or(WalletListError::Malformed))
+                    .map(|text| {
+                        STANDARD
+                            .decode(&text)
+                            .map_err(|_| WalletListError::Malformed)
+                    })
                     .transpose()?;
                 Ok(WalletListRow {
                     index: row.index,
@@ -529,7 +515,8 @@ fn is_webp_container(picture: &[u8]) -> bool {
 
 /// Appends `lp8(bytes)`. The field rules keep the length below 256.
 fn push_lp8(payload: &mut Vec<u8>, bytes: &[u8]) {
-    payload.push(count_u8(bytes.len()));
+    let length = u8::try_from(bytes.len()).expect("the field rules bound every one-byte count");
+    payload.push(length);
     payload.extend_from_slice(bytes);
 }
 
@@ -545,7 +532,55 @@ fn push_count16(payload: &mut Vec<u8>, count: usize) {
     payload.extend_from_slice(&count.to_le_bytes());
 }
 
-/// A count the field rules keep below 256.
-fn count_u8(count: usize) -> u8 {
-    u8::try_from(count).expect("the field rules bound every one-byte count")
+/// A document's top-level `format`, read first so a later format is told
+/// apart from a malformed document. `None` when the top level is not a JSON
+/// object, `format` is not a string, or a key repeats (parsers disagree on
+/// which value wins).
+fn document_format(document: &[u8]) -> Option<String> {
+    match serde_json::from_slice::<TopLevel>(document) {
+        Ok(TopLevel(Some(serde_json::Value::String(format)))) => Some(format),
+        _ => None,
+    }
+}
+
+/// The top-level object's `format` member, if it has one.
+struct TopLevel(Option<serde_json::Value>);
+
+/// Visits the top-level object, refusing a repeated key.
+struct TopLevelVisitor;
+
+impl<'de> de::Visitor<'de> for TopLevelVisitor {
+    type Value = TopLevel;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<TopLevel, A::Error> {
+        let mut keys = BTreeSet::new();
+        let mut format = None;
+        while let Some(key) = map.next_key::<String>()? {
+            if !keys.insert(key.clone()) {
+                return Err(de::Error::custom(format!("repeated key {key:?}")));
+            }
+            if key == "format" {
+                format = Some(map.next_value()?);
+            } else {
+                map.next_value::<de::IgnoredAny>()?;
+            }
+        }
+        Ok(TopLevel(format))
+    }
+}
+
+impl<'de> Deserialize<'de> for TopLevel {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(TopLevelVisitor)
+    }
+}
+
+/// Deserializes an optional string member, refusing `null` so absence is the
+/// only way to omit it. Use with `#[serde(default)]`.
+fn present_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }

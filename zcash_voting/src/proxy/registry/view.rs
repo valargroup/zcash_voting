@@ -7,7 +7,7 @@ use zcash_vote_delegate::{
     VerifiedWalletList, WalletList,
 };
 
-use super::{encoding, listing::listing, RegistryCache};
+use super::{listing::listing, RegistryCache};
 use crate::wire::{DelegateLookup, ProxyDelegateBrowse, ProxyDelegateListing};
 
 /// Characters in an ungrouped fingerprint.
@@ -47,10 +47,9 @@ impl PasteQuery {
             return Some(Self::Key(dk));
         }
         let digits = text.strip_prefix('#').unwrap_or(text);
-        if let Some(index) = encoding::canonical_decimal(digits)
-            .and_then(|index| u32::try_from(index).ok())
-            .filter(|index| *index >= 1)
-        {
+        let canonical =
+            !digits.starts_with('0') && digits.bytes().all(|byte| byte.is_ascii_digit());
+        if let Some(index) = digits.parse::<u32>().ok().filter(|_| canonical) {
             return Some(Self::Index(index));
         }
         fingerprint_query(text).map(Self::Fingerprint)

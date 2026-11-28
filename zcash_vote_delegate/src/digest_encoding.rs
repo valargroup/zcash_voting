@@ -3,18 +3,13 @@
 //! A preimage is a raw ASCII domain (no length prefix, no NUL), then
 //! `lp8(chain_id)`, then fixed-width fields, hashed with unkeyed BLAKE2b-256.
 //! The helpers match vote-sdk's `x/vote/types/sighash.go`, except that
-//! [`DigestPreimage::write32`] rejects a wrong length instead of padding.
+//! [`DigestPreimage::write32`] takes exactly 32 bytes instead of padding.
 
 use std::fmt;
 
 /// A digest preimage could not be encoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DigestError {
-    /// A `write32` field was not exactly 32 bytes long.
-    FieldLength {
-        /// Length of the rejected field.
-        actual: usize,
-    },
     /// An `lp8` value, such as the chain id, is longer than 255 bytes.
     LengthPrefixOverflow {
         /// Length of the rejected value.
@@ -30,9 +25,6 @@ pub enum DigestError {
 impl fmt::Display for DigestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FieldLength { actual } => {
-                write!(f, "digest field must be exactly 32 bytes, got {actual}")
-            }
             Self::LengthPrefixOverflow { actual } => {
                 write!(
                     f,
@@ -51,7 +43,7 @@ impl std::error::Error for DigestError {}
 /// The canonical preimage of one digest, built field by field in the order
 /// the digest defines (see the module doc for the layout).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DigestPreimage {
+pub(crate) struct DigestPreimage {
     bytes: Vec<u8>,
 }
 
@@ -66,15 +58,9 @@ impl DigestPreimage {
         Ok(preimage)
     }
 
-    /// `write32`: appends `field`, which must be exactly 32 bytes.
-    pub fn write32(&mut self, field: &[u8]) -> Result<(), DigestError> {
-        if field.len() != 32 {
-            return Err(DigestError::FieldLength {
-                actual: field.len(),
-            });
-        }
+    /// `write32`: appends the 32-byte `field`.
+    pub fn write32(&mut self, field: &[u8; 32]) {
         self.bytes.extend_from_slice(field);
-        Ok(())
     }
 
     /// `writeU32As32`: `value` little-endian, zero-padded to 32 bytes.
@@ -112,11 +98,6 @@ impl DigestPreimage {
             u32::try_from(count).map_err(|_| DigestError::CountOverflow { actual: count })?;
         self.write_u32_as_32(count);
         Ok(())
-    }
-
-    /// The preimage bytes written so far.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
     }
 
     /// Hashes the preimage with unkeyed BLAKE2b-256.

@@ -16,24 +16,21 @@ const MAX_VARINT_BYTES: usize = 10;
 
 /// A registry entry's status. A live entry is active or suspended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
 pub enum DelegateStatus {
     /// The delegate can ballot. Wire code 0.
-    Active,
+    Active = 0,
     /// Suspended by coordinators: the delegate cannot ballot or retire. Wire
     /// code 1.
-    Suspended,
+    Suspended = 1,
     /// Retired by its own key or by coordinators, for good. Wire code 2.
-    Retired,
+    Retired = 2,
 }
 
 impl DelegateStatus {
     /// The status's wire code.
     pub const fn code(self) -> u32 {
-        match self {
-            Self::Active => 0,
-            Self::Suspended => 1,
-            Self::Retired => 2,
-        }
+        self as u32
     }
 
     /// The status for a wire code, or `None` for a code above 2.

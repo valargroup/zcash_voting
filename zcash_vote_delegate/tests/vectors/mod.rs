@@ -6,6 +6,7 @@
 
 pub mod cases;
 pub mod model;
+pub mod osa;
 
 use std::fmt::Debug;
 

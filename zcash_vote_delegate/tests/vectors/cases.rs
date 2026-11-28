@@ -7,18 +7,17 @@ use serde::Serialize;
 use zcash_vote_delegate::{
     are_lookalikes, attest_digest, ballot_digest, dc_seed, delegate_ballot_store_key,
     delegate_entry_store_key, delegate_handle_store_key, fold_handle, hotkey_round_key,
-    is_canonical_handle, is_canonical_proof_id, osa_distance, pool_share_count_store_key,
-    proxy_batch_digest, proxy_batch_sighash, register_digest, retire_digest,
-    used_delegate_key_store_key, validate_ed25519_key, verify_wallet_list, verify_zip215,
-    AttestationWindow, DcSeedInputs, DcShareLayout, DelegateBallotFields, DelegateKey,
-    DelegateMarker, DelegateRegisterFields, DelegateRetireFields, DelegateSigningKey,
-    IdentityProvider, PinnedListKey, ProxyChainError, ProxyDelegateEntry,
-    ProxyDelegationActionFields, ProxyDelegationBatchFields, WalletList, WalletListRow,
-    ZcashNetwork, NEXT_DELEGATE_INDEX_STORE_KEY, PROXY_DELEGATION_DOMAINS, PROXY_PARAMS_STORE_KEY,
-    VOTE_CODESPACE, WALLET_LIST_FORMAT,
+    is_canonical_handle, is_canonical_proof_id, pool_share_count_store_key, proxy_batch_digest,
+    proxy_batch_sighash, register_digest, retire_digest, used_delegate_key_store_key,
+    validate_ed25519_key, verify_wallet_list, verify_zip215, AttestationWindow, DcSeedInputs,
+    DcShareLayout, DelegateBallotFields, DelegateKey, DelegateMarker, DelegateRegisterFields,
+    DelegateRetireFields, DelegateSigningKey, IdentityProvider, PinnedListKey, ProxyChainError,
+    ProxyDelegateEntry, ProxyDelegationActionFields, ProxyDelegationBatchFields, WalletList,
+    WalletListRow, ZcashNetwork, NEXT_DELEGATE_INDEX_STORE_KEY, PROXY_DELEGATION_DOMAINS,
+    PROXY_PARAMS_STORE_KEY, VOTE_CODESPACE, WALLET_LIST_FORMAT,
 };
 
-use super::{bytes, decode_hex, error_name, hex32, hex_of, model::*};
+use super::{bytes, decode_hex, error_name, hex32, hex_of, model::*, osa::osa_distance};
 
 /// The file with every `expected` recomputed from its `inputs`, and the
 /// domain and error tables taken from the crate.
@@ -280,7 +279,7 @@ fn key_encoding(inputs: &KeyEncodingInputs) -> KeyEncodingExpected {
         zvdk: dk.encode(),
         zvdsk: signing_key.export().to_string(),
         fingerprint: dk.fingerprint().to_string(),
-        display: dk.fingerprint().display_with_index(inputs.delegate_index),
+        display: format!("#{} \u{b7} {}", inputs.delegate_index, dk.fingerprint()),
     }
 }
 

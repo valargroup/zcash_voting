@@ -2,14 +2,14 @@
 //! the whole registry. Fetching every entry hides which delegate the user
 //! looks at. The host chooses when to refresh and may persist its serde form.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zcash_vote_delegate::{
     DelegateFingerprint, DelegateKey, DelegateStatus, IdentityProvider, ProxyDelegateEntry,
 };
 
-use super::encoding;
+use super::{base64_array, base64_bytes};
 use crate::proxy::delegate::ChainReadError;
 
 /// The page size hosts ask for, and the largest `limit` the chain accepts.
@@ -88,8 +88,6 @@ pub fn parse_registry_page(
 pub struct RegistryCache {
     chain_id: String,
     entries: BTreeMap<u32, ProxyDelegateEntry>,
-    /// The entry holding each key.
-    entry_by_key: HashMap<DelegateKey, u32>,
 }
 
 impl RegistryCache {
@@ -98,7 +96,6 @@ impl RegistryCache {
         Self {
             chain_id: chain_id.into(),
             entries: BTreeMap::new(),
-            entry_by_key: HashMap::new(),
         }
     }
 
@@ -117,7 +114,7 @@ impl RegistryCache {
     /// Adds `page`'s entries, replacing cached entries with the same index.
     pub fn insert_page(&mut self, page: RegistryPage) {
         for entry in page.entries {
-            self.insert(entry);
+            self.entries.insert(entry.index, entry);
         }
     }
 
@@ -141,11 +138,9 @@ impl RegistryCache {
         self.entries.get(&index)
     }
 
-    /// The cached entry whose key is `dk`.
+    /// The first cached entry by index whose key is `dk`.
     pub fn entry_with_key(&self, dk: &DelegateKey) -> Option<&ProxyDelegateEntry> {
-        self.entry_by_key
-            .get(dk)
-            .and_then(|index| self.entries.get(index))
+        self.entries.values().find(|entry| entry.dk == *dk)
     }
 
     /// The first cached entry by index whose key has `fingerprint`.
@@ -167,15 +162,6 @@ impl RegistryCache {
         self.entries
             .values()
             .filter(move |entry| entry.status != DelegateStatus::Retired && entry.handle == handle)
-    }
-
-    /// Caches `entry`, dropping the key of the entry it replaces.
-    fn insert(&mut self, entry: ProxyDelegateEntry) {
-        if let Some(previous) = self.entries.remove(&entry.index) {
-            self.entry_by_key.remove(&previous.dk);
-        }
-        self.entry_by_key.insert(entry.dk, entry.index);
-        self.entries.insert(entry.index, entry);
     }
 }
 
@@ -201,13 +187,13 @@ impl<'de> Deserialize<'de> for RegistryCache {
         let stored = StoredCache::deserialize(deserializer)?;
         let mut cache = Self::new(stored.chain_id);
         for encoded in stored.entries {
-            let entry = encoding::base64_bytes(&encoded)
+            let entry = base64_bytes(&encoded)
                 .ok_or_else(|| "an entry is not canonical base64".to_owned())
                 .and_then(|bytes| {
                     ProxyDelegateEntry::decode(&bytes).map_err(|error| error.to_string())
                 })
                 .map_err(de::Error::custom)?;
-            cache.insert(entry);
+            cache.entries.insert(entry.index, entry);
         }
         Ok(cache)
     }
@@ -258,7 +244,7 @@ impl EntryWire {
         let invalid = |field: &str| format!("entry {index}'s {field} is invalid");
         let entry = ProxyDelegateEntry {
             index,
-            dk: encoding::base64_array::<32>(&self.dk)
+            dk: base64_array::<32>(&self.dk)
                 .and_then(|dk| DelegateKey::from_bytes(dk).ok())
                 .ok_or_else(|| invalid("dk"))?,
             provider: IdentityProvider::from_code(self.provider)

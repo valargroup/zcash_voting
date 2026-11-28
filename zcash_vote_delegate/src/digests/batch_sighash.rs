@@ -66,13 +66,13 @@ fn sighash_with_expiry(
     expiry_height: u64,
 ) -> Result<[u8; 32], DigestError> {
     let mut preimage = DigestPreimage::new(PROXY_DELEGATION_BATCH_SIGHASH_DOMAIN, chain_id)?;
-    preimage.write32(&batch.vote_round_id)?;
+    preimage.write32(&batch.vote_round_id);
     preimage.write_u64_as_32(batch.vote_comm_tree_anchor_height);
     preimage.write_u64_as_32(expiry_height);
     match &batch.registration_van_cmx {
         Some(van_cmx) => {
             preimage.write_u8(1);
-            preimage.write32(van_cmx)?;
+            preimage.write32(van_cmx);
         }
         None => preimage.write_u8(0),
     }
@@ -80,11 +80,11 @@ fn sighash_with_expiry(
     for (index, dc) in batch.dcs.iter().enumerate() {
         // `write_count` above already proved every index fits in a u32.
         preimage.write_u32_as_32(index as u32);
-        preimage.write32(&dc.r_vpk)?;
-        preimage.write32(&dc.van_nullifier)?;
-        preimage.write32(&dc.vote_authority_note_new)?;
-        preimage.write32(&dc.proxy_delegation_commitment)?;
-        preimage.write32(&dc.dc_slot_nullifier)?;
+        preimage.write32(&dc.r_vpk);
+        preimage.write32(&dc.van_nullifier);
+        preimage.write32(&dc.vote_authority_note_new);
+        preimage.write32(&dc.proxy_delegation_commitment);
+        preimage.write32(&dc.dc_slot_nullifier);
     }
     Ok(preimage.finish())
 }
