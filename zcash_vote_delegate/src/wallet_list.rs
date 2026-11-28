@@ -20,7 +20,7 @@ pub const WALLET_LIST_FORMAT: &str = "zcash-vote-wallet-list/v1";
 /// The 34-byte domain that starts every wallet list payload.
 pub const WALLET_LIST_DOMAIN: [u8; 34] = *b"zcash-shielded-vote:wallet-list:v1";
 /// The largest wallet list document, in bytes.
-pub const MAX_WALLET_LIST_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_WALLET_LIST_BYTES: usize = 1024 * 1024;
 /// The most rows one wallet list holds.
 pub const MAX_WALLET_LIST_ROWS: usize = 1_000;
 /// The most reserved names one wallet list holds.
